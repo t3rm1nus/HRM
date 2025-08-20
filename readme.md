@@ -146,6 +146,11 @@ Nivel 1: Ejecución + Gestión de Riesgo (segundos)
 HMR/
 │── docs/                # documentación
 │
+│── storage/                # modulo persistencia
+│   ├── csv_writer.py
+│   ├── sqlite_writer.py
+│   └── __init__.py
+│
 ├── core/                # utilidades globales
 │   ├── config/          # configs YAML/JSON
 │   ├── logging.py
@@ -175,11 +180,18 @@ HMR/
 │   ├── risk_controls.py
 │   └── __init__.py
 │
-├── l1_operational/      # Nivel operacional (OMS/EMS)
-│   ├── order_manager.py
-│   ├── execution_algos.py
-│   ├── realtime_risk.py
-│   └── __init__.py
+├── l1_operational/      # Nivel operacional (OMS/EMS) - LIMPIO Y DETERMINISTA
+│   ├── models.py        # Estructuras de datos tipadas (Signal, ExecutionReport, RiskAlert)
+│   ├── config.py        # Configuración centralizada de límites de riesgo
+│   ├── bus_adapter.py   # Interfaz con el bus de mensajes del sistema
+│   ├── order_manager.py # Orquesta validación → ejecución → reporte
+│   ├── risk_guard.py    # Valida límites de riesgo (sin modificar órdenes)
+│   ├── executor.py      # Ejecuta órdenes pre-validadas en el exchange
+│   ├── data_feed.py     # Obtiene datos de mercado y saldos
+│   ├── binance_client.py # Cliente de Binance (sandbox por defecto)
+│   ├── test_clean_l1.py # Pruebas de limpieza y determinismo
+│   ├── README.md        # Documentación específica de L1
+│   └── requirements.txt # Dependencias específicas de L1
 │
 ├── data/                # ingestión y almacenamiento
 │   ├── connectors/      # binance, dydx, etc.
@@ -200,7 +212,7 @@ HMR/
 │   └── __init__.py
 │
 ├── tests/               # unit & integration tests
-│
+│ └─ backtester.py
 └── main.py              # orquestador central
 ```
 
@@ -220,12 +232,81 @@ HMR/
 ## 9️⃣ Flujo de Mensajes entre Carpetas
 
 ```text
-l4_meta decide pesos de estrategias → manda mensaje strategy_update a comms
-l3_strategy recibe → aplica a universo + régimen → manda tactic_targets
-l2_tactic genera señales y sizing → manda execution_plan
-l1_operational recibe plan → manda orders a exchange vía data/connectors
-Feedback (fills, pnl_update, risk_alert) fluye de vuelta hacia arriba vía comms
+Todos los niveles trabajan sobre un **único `state`** en forma de diccionario
+Cada ciclo, el sistema mantiene y actualiza un state con:
+
+state = {
+  "mercado": {...},       # precios actuales
+  "estrategia": "...",    # estrategia activa (ej: agresiva/defensiva)
+  "portfolio": {...},     # asignación de capital (en unidades)
+  "universo": [...],      # activos disponibles
+  "exposicion": {...},    # % de exposición por activo
+  "senales": {...},       # señales tácticas
+  "ordenes": [...],       # órdenes ejecutadas en L1
+  "riesgo": {...},        # chequeo de riesgo
+  "deriva": False,        # drift detection
+  "ciclo_id": 1           # número de ciclo
+}
+
+Cada nivel actualiza su parte correspondiente del state.
+Esto asegura trazabilidad y facilita debugging/backtesting.
+
+---
+
+## 🔒 L1_operational: LIMPIO Y DETERMINISTA
+
+**L1 es el nivel de ejecución que SOLO ejecuta órdenes seguras, sin tomar decisiones estratégicas ni tácticas.**
+
+### 🚫 Lo que L1 NO hace:
+- ❌ **No modifica cantidades** de órdenes
+- ❌ **No ajusta precios** de órdenes  
+- ❌ **No toma decisiones** de timing de ejecución
+- ❌ **No actualiza portfolio** (responsabilidad de L2/L3)
+- ❌ **No actualiza datos** de mercado (responsabilidad de L2/L3)
+
+### ✅ Lo que L1 SÍ hace:
+- ✅ **Valida límites de riesgo** antes de ejecutar
+- ✅ **Ejecuta órdenes** pre-validadas en el exchange
+- ✅ **Genera reportes** de ejecución detallados
+- ✅ **Mantiene trazabilidad** completa de todas las operaciones
+
+### 🏗️ Nueva Arquitectura de L1:
 ```
+L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange
+                                    ↓
+                              Execution Report → Bus Adapter → L2/L3
+```
+
+### 🧪 Verificación de Limpieza:
+```bash
+cd l1_operational
+python test_clean_l1.py
+```
+
+Las pruebas verifican que L1 está completamente limpio y determinista.
+
+## 9️⃣ Logging y Telemetría
+
+Logging estructurado (JSON) → usando python-json-logger
+Telemetry interna (monitoring/telemetry.py):
+incr(metric_name) → contador
+gauge(metric_name, value) → métrica instantánea
+timing(metric_name, start_time) → latencia
+
+## 9️⃣ Dashboard en Consola
+
+Usamos rich para renderizar un mini-dashboard en cada ciclo
+
+## 9️⃣ Persistencia de histórico
+
+Cada ciclo se guarda en dos formatos:
+CSV (data/historico.csv) → todas las variables del estado global por ciclo
+SQLite (data/historico.db) → tabla ciclos con los mismos datos
+
+Esto permite:
+Exportar resultados para análisis en Pandas / Excel
+Reproducir backtests
+Consultar con SQL el rendimiento de la estrategia
 
 ---
 
