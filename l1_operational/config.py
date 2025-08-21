@@ -45,3 +45,6 @@ LOGGING_CONFIG = {
     "ENABLE_FILE_LOGGING": True,
     "LOG_FILE": "l1_operational.log",
 }
+
+# Umbrales IA
+TREND_THRESHOLD = 0.6

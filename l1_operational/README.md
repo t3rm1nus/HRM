@@ -57,6 +57,7 @@ Execution Report → Bus Adapter → L2/L3
 * `risk_guard.py` - Valida límites de riesgo y exposición
 * `executor.py` - Ejecuta órdenes en el exchange
 * `config.py` - Configuración centralizada de límites y parámetros
+* `trend_ai.py` - Filtro de tendencia `filter_signal(signal) -> bool` (umbral `TREND_THRESHOLD`)
 
 ---
 
@@ -122,6 +123,9 @@ PORTFOLIO_LIMITS = {
     "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,
     "MAX_DAILY_DRAWDOWN": 0.05,
 }
+
+# Umbral del filtro de tendencia (Trend AI)
+TREND_THRESHOLD = 0.6
 ```
 
 ---
@@ -145,6 +149,26 @@ Signal(
     metadata={"confidence": 0.9}
 )
 ```
+
+---
+
+## 🧠 Trend AI (Filtro opcional)
+
+Interfaz:
+
+```python
+from l1_operational.trend_ai import filter_signal
+
+ok = filter_signal({
+    "symbol": "BTC/USDT",
+    "timeframe": "5m",
+    "price": 50000.0,
+    "volume": 123.4,
+    "features": {"rsi_trend": 0.7, "macd_trend": 0.65, "price_slope": 0.6}
+})  # True si score >= TREND_THRESHOLD
+```
+
+Configurable vía `TREND_THRESHOLD` en `config.py`.
 
 Reporte de ejecución devuelto:
 
