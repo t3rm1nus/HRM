@@ -1,13 +1,25 @@
 # l1_operational/binance_client.py
+import os
 import ccxt
 
+# Lectura segura desde variables de entorno
+API_KEY = os.getenv('BINANCE_API_KEY', '')
+API_SECRET = os.getenv('BINANCE_API_SECRET', '')
+MODE = os.getenv('BINANCE_MODE', 'PAPER').upper()  # PAPER | LIVE
+
 exchange = ccxt.binance({
-    'apiKey': 'EfI5aIIX4TeKu9hUhcGLOSi0RkSROoRZPKx90zx17rxncuDbAJ1KOWqOkVE9Jkq6',
-    'secret': 'So7jYGP7jDm1XlOTA5jdxN99bYP9bw87Ajnr3cELgxoTO1rWn3ty3O99pklxlzO5',
+    'apiKey': API_KEY,
+    'secret': API_SECRET,
     'enableRateLimit': True,
     'options': {
         'defaultType': 'spot',
         'adjustForTimeDifference': True,
     },
 })
-exchange.set_sandbox_mode(True)  # habilita testnet
+
+# Modo por defecto: PAPER (sin claves reales). Cambiar a LIVE bajo tu responsabilidad.
+if MODE == 'PAPER':
+    try:
+        exchange.set_sandbox_mode(True)
+    except Exception:
+        pass

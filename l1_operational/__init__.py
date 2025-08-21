@@ -1,25 +1,21 @@
-# l1_operational/__init__.py
 """
 L1_operational - Nivel de ejecución de órdenes.
 Solo ejecuta órdenes seguras, sin tomar decisiones estratégicas ni tácticas.
 """
 
+import asyncio
+from loguru import logger
+from l1_operational.models import Signal, ExecutionReport
 from l1_operational.order_manager import order_manager
 from l1_operational.bus_adapter import bus_adapter
-from l1_operational.risk_guard import validate_order
-from l1_operational.executor import execute_order
-from l1_operational.data_feed import get_ticker, get_balance
-from l1_operational.models import Signal, ExecutionReport, RiskAlert
-from loguru import logger
 
-def procesar_l1(state: dict) -> dict:
+async def procesar_l1(state: dict) -> dict:
     """
-    Procesa las órdenes recibidas desde L2, las valida y ejecuta en Binance.
+    Procesa las órdenes recibidas desde L2, las valida y ejecuta.
     L1 solo ejecuta órdenes seguras, sin tomar decisiones estratégicas ni tácticas.
     """
     nuevas_ordenes = []
-    
-    # Procesar señales del bus (en un sistema real, esto vendría de L2/L3)
+
     for orden in state.get("ordenes", []):
         try:
             # Convertir orden del estado a señal
@@ -35,11 +31,10 @@ def procesar_l1(state: dict) -> dict:
                 risk=orden.get("risk", {}),
                 metadata=orden.get("metadata", {})
             )
-            
+
             # Procesar señal usando el gestor de órdenes
-            report = order_manager.handle_signal(signal)
-            
-            # Agregar resultado al estado
+            report: ExecutionReport = await order_manager.handle_signal(signal)
+
             nuevas_ordenes.append({
                 "id": report.client_order_id,
                 "status": report.status,
@@ -48,34 +43,38 @@ def procesar_l1(state: dict) -> dict:
                 "amount": signal.qty,
                 "price": signal.price,
                 "execution_report": {
-                    "filled_qty": report.filled_qty,
-                    "avg_price": report.avg_price,
-                    "fees": report.fees,
-                    "slippage_bps": report.slippage_bps,
-                    "latency_ms": report.latency_ms,
-                    "error_code": report.error_code,
-                    "error_msg": report.error_msg
+                    "filled_qty": getattr(report, "filled_qty", 0),
+                    "avg_price": getattr(report, "avg_price", 0),
+                    "fees": getattr(report, "fees", 0),
+                    "slippage_bps": getattr(report, "slippage_bps", 0),
+                    "latency_ms": getattr(report, "latency_ms", 0),
+                    "error_code": getattr(report, "error_code", None),
+                    "error_msg": getattr(report, "error_msg", None)
                 }
             })
-            
+
         except Exception as e:
             logger.error(f"Error procesando orden: {e}")
             nuevas_ordenes.append({
                 "id": f"error_{len(nuevas_ordenes)}",
                 "status": "error",
-                "error": str(e)
+                "error_code": "EXCEPTION",
+                "error_msg": str(e)
             })
 
-    # L1 no actualiza portfolio ni mercado - eso es responsabilidad de niveles superiores
     state["ordenes"] = nuevas_ordenes
-    
-    # Agregar métricas de L1 al estado
+
+    # Métricas de L1
+    active_orders = await order_manager.get_active_orders_count() if asyncio.iscoroutinefunction(order_manager.get_active_orders_count) else order_manager.get_active_orders_count()
+    pending_reports = await bus_adapter.get_pending_reports() if asyncio.iscoroutinefunction(bus_adapter.get_pending_reports) else bus_adapter.get_pending_reports()
+    pending_alerts = await bus_adapter.get_pending_alerts() if asyncio.iscoroutinefunction(bus_adapter.get_pending_alerts) else bus_adapter.get_pending_alerts()
+
     state["l1_metrics"] = {
-        "active_orders": order_manager.get_active_orders_count(),
-        "pending_reports": len(bus_adapter.get_pending_reports()),
-        "pending_alerts": len(bus_adapter.get_pending_alerts())
+        "active_orders": active_orders,
+        "pending_reports": len(pending_reports),
+        "pending_alerts": len(pending_alerts)
     }
-    
+
     return state
 
 def get_l1_status() -> dict:

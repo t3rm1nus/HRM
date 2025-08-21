@@ -314,6 +314,50 @@ Consultar con SQL el rendimiento de la estrategia
 
 ---
 
+## 📚 Dataset y Features (BTC/USDT)
+
+Generación de features en un solo módulo limpio: `data/loaders.py`.
+
+- Soporta BTC/USDT o BTC/USD siempre que el DataFrame tenga índice datetime y columna `close` (opcional `volume`).
+- Features incluidas:
+  - Precios: `delta_close`, `ema_10/20`, `sma_10/20`.
+  - Volumen: `vol_rel` relativo a media de N (por defecto 20).
+  - Momentum: `rsi`, `macd`, `macd_signal`, `macd_hist`.
+  - Multitimeframe: 1m + 5m (sufijos `_5m`), reindexado a timestamps de 1m.
+
+Uso básico para generar y exportar dataset train/test:
+
+```python
+import pandas as pd
+from data.loaders import prepare_btc_features
+
+# 1) Cargar velas 1m (de tu exchange o CSV)
+#    Requiere índice datetime y columna 'close'. 'volume' es opcional.
+df_1m = pd.read_csv(
+    "data/btc_1m.csv",
+    parse_dates=["timestamp"],
+    index_col="timestamp"
+)
+
+# 2) Generar features 1m + 5m y dividir temporalmente (80/20 por defecto)
+train, test = prepare_btc_features(df_1m, test_size=0.2)
+
+# 3) Guardar datasets
+train.to_csv("data/btc_features_train.csv")
+test.to_csv("data/btc_features_test.csv")
+```
+
+Notas:
+- Si tienes velas de 5m separadas, puedes pasarlas como segundo parámetro para evitar resampleo:
+```python
+from data.loaders import prepare_btc_features
+df_5m = pd.read_csv("data/btc_5m.csv", parse_dates=["timestamp"], index_col="timestamp")
+train, test = prepare_btc_features(df_1m, df_5m=df_5m, test_size=0.2)
+```
+- Si tu CSV trae `BTC_close`, `normalize_btc_columns` lo mapea a `close` automáticamente.
+
+---
+
 ✍️ **Autor:** Equipo de desarrollo HRM  
 📌 **Versión:** 1.0  
 📅 **Última actualización:** 2025  

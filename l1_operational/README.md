@@ -2,8 +2,7 @@
 
 ## 🎯 Objetivo
 
-L1 es el nivel de **ejecución y gestión de riesgo en tiempo real**, que combina **IA y reglas hard-coded** para garantizar que solo se ejecuten órdenes seguras.
-Recibe señales consolidadas de L2/L3 y las ejecuta de forma **determinista**, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución.
+L1 es el nivel de **ejecución y gestión de riesgo en tiempo real**, que combina **IA y reglas hard-coded** para garantizar que solo se ejecuten órdenes seguras. Recibe señales consolidadas de L2/L3 y las ejecuta de forma **determinista**, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución.
 
 ---
 
@@ -21,15 +20,15 @@ Recibe señales consolidadas de L2/L3 y las ejecuta de forma **determinista**, a
 
 ## ✅ Lo que L1 SÍ hace
 
-| ✅ Funcionalidad         | Descripción                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------- |
+| ✅ Funcionalidad         | Descripción                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
 | Hard-coded Safety Layer | Bloquea operaciones peligrosas, aplica stop-loss obligatorio y chequeos de liquidez/saldo |
-| Trend AI                | Evalúa probabilidad de movimientos del mercado y filtra señales de baja confianza |
-| Execution AI            | Optimiza fraccionamiento de órdenes, timing y reduce slippage                     |
-| Risk AI                 | Ajusta tamaño de trade y stops dinámicamente según volatilidad y exposición       |
-| Ejecución determinista  | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal |
-| Reportes y trazabilidad | Genera reportes detallados de todas las órdenes ejecutadas                        |
-| Gestión de errores      | Maneja errores de ejecución de forma robusta                                      |
+| Trend AI                | Evalúa probabilidad de movimientos del mercado y filtra señales de baja confianza         |
+| Execution AI            | Optimiza fraccionamiento de órdenes, timing y reduce slippage                             |
+| Risk AI                 | Ajusta tamaño de trade y stops dinámicamente según volatilidad y exposición               |
+| Ejecución determinista  | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal       |
+| Reportes y trazabilidad | Genera reportes detallados de todas las órdenes ejecutadas                                |
+| Gestión de errores      | Maneja errores de ejecución de forma robusta                                              |
 
 ---
 
@@ -241,3 +240,82 @@ L1 usa **Loguru** para logging estructurado:
 * Nivel WARNING para rechazos de órdenes
 * Nivel ERROR para fallos de ejecución
 * Logs incluyen contexto completo de cada operación
+
+---
+
+## 📚 Dataset y Features (BTC/USDT)
+
+Generación con:
+
+```bash
+python l1_operational/genera_dataset_modelo1.py --symbol BTC/USDT --output-dir data
+```
+
+Salida (CSV):
+
+* `data/btc_1m.csv` (OHLCV crudo)
+* `data/btc_features_train.csv` y `data/btc_features_test.csv` (con índice temporal)
+
+Indicadores incluidos (columnas principales):
+
+* trend\_sma\_fast, trend\_sma\_slow
+* trend\_ema\_fast, trend\_ema\_slow
+* trend\_adx, trend\_macd
+* momentum\_rsi, momentum\_stoch, momentum\_stoch\_signal
+* volume\_obv
+* volatility\_bbw, volatility\_atr
+
+Notas:
+
+* Descarga OHLCV real (endpoint público CCXT) y construye features 1m + 5m.
+* Objetivo fijo: \~200k filas de features finales.
+
+---
+
+## 🤖 Entrenamiento de Modelos (ligeros)
+
+Objetivo: clasificar probabilidad de movimiento BTC (up/down) en t+1.
+
+Comandos:
+
+```bash
+# Modelo 1: Logistic Regression
+python ml_training/train_logreg_modelo1.py
+
+# Modelo 2: Random Forest (L1, capa 2)
+python ml_training/train_rf_modelo2_l1.py
+
+# Modelo 3: LightGBM (requiere lightgbm instalado)
+python ml_training/train_lgbm_modelo1.py
+```
+
+Salida:
+
+* Modelos en `models/` y metadatos `.meta.json` (features usadas, umbral óptimo y métricas).
+* Modelo 1 guardado en `models/modelo1_logreg.pkl`
+
+Métricas reportadas:
+
+* Accuracy, F1, AUC. Se calcula además un umbral óptimo por F1 para reducir señales falsas.
+
+---
+
+## 📋 Lista de Features para Entrenamiento del Modelo 2 (L1)
+
+1. trend\_sma\_fast
+2. trend\_sma\_slow
+3. trend\_ema\_fast
+4. trend\_ema\_slow
+5. trend\_adx
+6. trend\_macd
+7. momentum\_rsi
+8. momentum\_stoch
+9. momentum\_stoch\_signal
+10. volume\_obv
+11. volatility\_bbw
+12. volatility\_atr
+13. price\_slope
+14. rsi\_trend
+15. macd\_trend
+
+> Estos features se usarán para entrenar el segundo modelo de la capa L1 y se integrarán en el flujo determinista junto con el modelo 1.

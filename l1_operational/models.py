@@ -28,16 +28,17 @@ class Signal:
 
 @dataclass
 class ExecutionReport:
-    client_order_id: str              # ID local de trazabilidad
-    exchange_order_id: Optional[str] = None  # ID asignado por el exchange
-    status: str = "pending"           # 'pending', 'filled', 'rejected', 'failed'
-    filled_qty: float = 0.0
-    avg_price: Optional[float] = None
-    fees: float = 0.0
-    slippage_bps: Optional[float] = None
-    latency_ms: Optional[float] = None
-    timestamp: float = field(default_factory=lambda: datetime.utcnow().timestamp())
-    message: Optional[str] = None     # Mensaje de error o información adicional
+    def __init__(self, client_order_id, status, filled_qty=0, avg_price=0.0, fees=0.0,
+                 slippage_bps=0, latency_ms=0, error_code=None, error_msg=None):
+        self.client_order_id = client_order_id
+        self.status = status
+        self.filled_qty = filled_qty
+        self.avg_price = avg_price
+        self.fees = fees
+        self.slippage_bps = slippage_bps
+        self.latency_ms = latency_ms
+        self.error_code = error_code
+        self.error_msg = error_msg
 
 
 @dataclass
