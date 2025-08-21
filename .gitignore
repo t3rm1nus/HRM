@@ -1,2 +1,4 @@
 ﻿data/
-models/
+models/data/historico.csv
+data/historico.db
+data/
