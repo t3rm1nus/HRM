@@ -4,6 +4,9 @@ Configuración centralizada de L1_operational.
 Contiene todos los límites de riesgo y parámetros de ejecución.
 """
 
+# Modo de operación
+OPERATION_MODE = "paper"  # "paper", "live", "development", "testing"
+
 # Límites de riesgo por operación
 RISK_LIMITS = {
     "MAX_ORDER_SIZE_BTC": 0.05,      # máximo BTC por orden
@@ -18,7 +21,7 @@ PORTFOLIO_LIMITS = {
     "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,  # máximo 20% del portafolio en BTC
     "MAX_PORTFOLIO_EXPOSURE_ETH": 0.15, # máximo 15% del portafolio en ETH
     "MAX_DAILY_DRAWDOWN": 0.05,         # máximo 5% de drawdown diario
-    "MIN_BALANCE_USDT": 20,             # umbral mínimo de capital
+    "MIN_ACCOUNT_BALANCE_USDT": 20,     # umbral mínimo de capital (fixed key name)
     "MAX_LEVERAGE": 1.0,                # sin apalancamiento
 }
 

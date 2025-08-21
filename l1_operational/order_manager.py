@@ -1,104 +1,113 @@
-import asyncio
-from core.logging import setup_logger
-from l1_operational.models import Signal, ExecutionReport
-from l1_operational.bus_adapter import bus_adapter
-from l1_operational.risk_guard import validate_order
-from l1_operational.trend_ai import filter_signal
-from l1_operational.executor import execute_order
+# l1_operational/order_manager.py
+"""Order Manager principal de L1"""
 
-logger = setup_logger()
+import logging
+import time
+from typing import Optional
+from .models import Signal, ExecutionReport, OrderIntent
+from .risk_guard import RiskGuard
+from .executor import Executor
 
+logger = logging.getLogger(__name__)
 
 class OrderManager:
     """
-    Gestor de órdenes L1.
+    Orquestador principal de L1
+    Coordina: Risk Guard -> Executor -> Reports
     """
+    
     def __init__(self):
-        self.active_orders = {}
-        logger.info("[OrderManager] Inicializado")
-
+        self.risk_guard = RiskGuard()
+        self.executor = Executor()
+        self.processed_signals = {}  # signal_id -> ExecutionReport
+        
     async def handle_signal(self, signal: Signal) -> ExecutionReport:
         """
-        Procesa una señal: Valida riesgo → Filtra con Trend AI → Ejecuta → Genera report.
+        Flujo principal de L1:
+        1. Validación de riesgo hard-coded
+        2. Ejecución determinista 
+        3. Reporte detallado
         """
-        try:
-            logger.info(f"[OrderManager] Iniciando flujo para señal {signal.signal_id}: {signal.side} {signal.qty} {signal.symbol} @ {signal.price}")
-
-            # 1. Validación Hard-coded (Risk Guard)
-            if not validate_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                amount=signal.qty,
-                price=signal.price,
-                stop_loss=signal.stop_loss  # Asumiendo que Signal tiene stop_loss
-            ):
-                logger.warning(f"[OrderManager] Señal {signal.signal_id} rechazada por validación de riesgo")
-                return ExecutionReport(
-                    client_order_id=signal.signal_id,
-                    status="rejected",
-                    error_code="RISK_VALIDATION_FAILED",
-                    error_msg="No pasó hard-coded safety layer"
-                )
-
-            # 2. Filtro Trend AI
-            if not filter_signal(signal.__dict__):  # Convertir a dict para trend_ai
-                logger.warning(f"[OrderManager] Señal {signal.signal_id} bloqueada por Trend AI")
-                return ExecutionReport(
-                    client_order_id=signal.signal_id,
-                    status="blocked",
-                    error_code="TREND_AI_BLOCK",
-                    error_msg="No superó umbral de tendencia"
-                )
-
-            # 3. Ejecución (simulada o real)
-            exec_result = await execute_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                amount=signal.qty,
-                price=signal.price,
-                order_type=signal.order_type
-            )
-            logger.info(f"[OrderManager] Ejecución completada para {signal.signal_id}: status={exec_result['status']}")
-
-            # Crear report basado en resultado
+        
+        logger.info(f"L1 processing signal: {signal.signal_id}")
+        start_time = time.time()
+        
+        # PASO 1: Validación de riesgo (NUNCA se omite)
+        validation_result = self.risk_guard.validate_signal(signal)
+        
+        if not validation_result.is_valid:
+            logger.warning(f"Signal {signal.signal_id} rejected by risk validation: {validation_result.reason}")
+            
             report = ExecutionReport(
-                client_order_id=exec_result["client_order_id"],
-                status=exec_result["status"],
-                filled_qty=exec_result.get("filled", 0),
-                avg_price=exec_result.get("avg_price", signal.price or 100),
-                fees=exec_result.get("fees", 0),
-                slippage_bps=exec_result.get("slippage_bps", 0),
-                latency_ms=exec_result.get("latency_ms", 5),
-                error_code=exec_result.get("error_code"),
-                error_msg=exec_result.get("message")
+                signal_id=signal.signal_id,
+                status="REJECTED_SAFETY",
+                reason=validation_result.reason,
+                timestamp=time.time()
             )
-
-            # Guardar en órdenes activas
-            self.active_orders[report.client_order_id] = report
-
-            # Publicar el reporte en el bus
-            if bus_adapter:
-                await bus_adapter.publish_report(report)
-                logger.info(f"[OrderManager] Reporte publicado en bus para orden {report.client_order_id}")
-            else:
-                logger.warning("[OrderManager] bus_adapter no inicializado, no se publica reporte")
-
+            
+            self.processed_signals[signal.signal_id] = report
             return report
-
-        except Exception as e:
-            logger.error(f"[OrderManager] Error en flujo de señal {signal.signal_id}: {e}")
-            return ExecutionReport(
-                client_order_id=signal.signal_id,
-                status="error",
-                error_code="EXCEPTION",
-                error_msg=str(e)
+        
+        # PASO 2: Ejecución determinista
+        try:
+            execution_result = await self.executor.execute_order(signal)
+            
+            # Actualizar posiciones en risk guard
+            qty_change = execution_result.filled_qty if signal.side == 'buy' else -execution_result.filled_qty
+            self.risk_guard.update_position(signal.symbol, qty_change)
+            
+            # PASO 3: Crear reporte de éxito
+            report = ExecutionReport(
+                signal_id=signal.signal_id,
+                status="EXECUTED",
+                executed_qty=execution_result.filled_qty,
+                executed_price=execution_result.avg_price,
+                fees=execution_result.fees,
+                latency_ms=execution_result.latency_ms,
+                timestamp=time.time()
             )
+            
+            processing_time = (time.time() - start_time) * 1000
+            logger.info(f"Signal {signal.signal_id} executed successfully in {processing_time:.2f}ms total")
+            
+        except Exception as e:
+            logger.error(f"Execution failed for signal {signal.signal_id}: {e}")
+            
+            report = ExecutionReport(
+                signal_id=signal.signal_id,
+                status="EXECUTION_ERROR",
+                reason=str(e),
+                timestamp=time.time()
+            )
+        
+        # Guardar reporte
+        self.processed_signals[signal.signal_id] = report
+        return report
+    
+    def get_execution_report(self, signal_id: str) -> Optional[ExecutionReport]:
+        """Obtiene reporte de ejecución por signal_id"""
+        return self.processed_signals.get(signal_id)
+    
+    def get_metrics(self) -> dict:
+        """Obtiene métricas consolidadas de L1"""
+        executor_metrics = self.executor.get_metrics()
+        
+        total_processed = len(self.processed_signals)
+        executed = len([r for r in self.processed_signals.values() if r.status == "EXECUTED"])
+        rejected_safety = len([r for r in self.processed_signals.values() if r.status == "REJECTED_SAFETY"])
+        errors = len([r for r in self.processed_signals.values() if r.status == "EXECUTION_ERROR"])
+        
+        return {
+            'total_signals_processed': total_processed,
+            'executed': executed,
+            'rejected_safety': rejected_safety,
+            'execution_errors': errors,
+            'success_rate': (executed / total_processed) if total_processed > 0 else 0.0,
+            'executor_metrics': executor_metrics,
+            'current_positions': self.risk_guard.current_positions.copy(),
+            'daily_pnl': self.risk_guard.daily_pnl,
+            'account_balance': self.risk_guard.account_balance
+        }
 
-    def get_active_orders_count(self) -> int:
-        count = len(self.active_orders)
-        logger.info(f"[OrderManager] Active orders count = {count}")
-        return count
-
-
-# Instancia global
+# Crear instancia global para uso en __init__.py
 order_manager = OrderManager()

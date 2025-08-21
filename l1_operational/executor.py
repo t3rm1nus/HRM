@@ -1,127 +1,153 @@
-"""
-Executor robusto L1 con:
-- Validación de liquidez/saldo
-- Manejo de errores, timeout, retry
-- Métricas centralizadas
-- Trazabilidad de client_order_id
-"""
+# l1_operational/executor.py
+"""Ejecutor de órdenes para L1"""
 
 import asyncio
-import ccxt
+import logging
 import time
-import uuid
-from loguru import logger
-from l1_operational.binance_client import exchange
-from l1_operational import metrics, portfolio
+from typing import Optional
+from .models import Signal, ExecutionResult, OrderIntent
+from .config import EXECUTION_CONFIG, OPERATION_MODE
 
-ORDER_TIMEOUT = 10
-MAX_RETRIES = 3
-BACKOFF_BASE = 2  # segundos
+logger = logging.getLogger(__name__)
 
-
-async def execute_order(
-    symbol: str,
-    side: str,
-    amount: float,
-    price: float = None,
-    order_type: str = "market"
-) -> dict:
-    client_order_id = str(uuid.uuid4())
-    logger.info(f"[Executor] Iniciando ejecución para {side} {amount} {symbol} @ {price or 'MARKET'} (client_id={client_order_id})")
-
-    # 1️⃣ Validación de saldo/liquidez
-    try:
-        available, quote_available = await portfolio.get_available_balance(symbol)
-        if side.lower() == "buy" and quote_available < amount * (price or 1):
-            metrics.increment("orders_rejected")
-            msg = f"Saldo insuficiente: {quote_available} para comprar {amount} {symbol}"
-            logger.warning(f"[Executor] {msg} (client_id={client_order_id})")
-            return {"status": "rejected", "message": msg, "client_order_id": client_order_id}
-
-        if side.lower() == "sell" and available < amount:
-            metrics.increment("orders_rejected")
-            msg = f"Saldo insuficiente: {available} para vender {amount} {symbol}"
-            logger.warning(f"[Executor] {msg} (client_id={client_order_id})")
-            return {"status": "rejected", "message": msg, "client_order_id": client_order_id}
-        logger.info(f"[Executor] Validación de saldo OK (available={available}, quote={quote_available})")
-
-    except Exception as e:
-        metrics.increment("orders_failed")
-        logger.error(f"[Executor] Error consultando saldo: {e} (client_id={client_order_id})")
-        return {"status": "error", "message": f"Error saldo: {e}", "client_order_id": client_order_id}
-
-    # 2️⃣ Intento de ejecución con retry
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            logger.info(
-                f"[Executor] Intento {attempt}/{MAX_RETRIES} → "
-                f"{order_type.upper()} {side} {amount} {symbol} @ {price or 'MARKET'} "
-                f"(client_id={client_order_id})"
-            )
-
-            def _place_order():
-                if order_type == "market":
-                    return exchange.create_market_order(
-                        symbol, side, amount, params={"clientOrderId": client_order_id}
-                    )
-                elif order_type == "limit":
-                    if price is None:
-                        raise ValueError("Las órdenes limit requieren un precio")
-                    return exchange.create_limit_order(
-                        symbol, side, amount, price, params={"clientOrderId": client_order_id}
-                    )
-                else:
-                    raise ValueError(f"Tipo de orden no soportado: {order_type}")
-
-            start_time = time.perf_counter()
-            order = await asyncio.wait_for(asyncio.to_thread(_place_order), timeout=ORDER_TIMEOUT)
-            latency_ms = (time.perf_counter() - start_time) * 1000
-
-            # 3️⃣ Métricas
-            metrics.increment("orders_success")
-            metrics.observe_latency(latency_ms)
-            await metrics.update_portfolio(symbol)
-            logger.info(f"[Executor] Métricas actualizadas: success++, latency={latency_ms:.2f}ms")
-
-            # Manejo de órdenes parciales
-            filled = float(order.get("filled", 0))
-            if filled < amount:
-                metrics.increment("orders_partial")
-                logger.warning(f"[Executor] Orden parcialmente llenada: {filled}/{amount} (client_id={client_order_id})")
-
-            logger.success(f"[Executor] Orden ejecutada OK (id={order.get('id')}, latency={latency_ms:.2f}ms)")
-            return {
-                "status": "success",
-                "order": order,
-                "latency_ms": latency_ms,
-                "filled": filled,
-                "client_order_id": client_order_id,
-                "metrics": metrics.snapshot(),
-            }
-
-        except asyncio.TimeoutError:
-            metrics.increment("orders_failed")
-            logger.error("[Executor] Timeout en ejecución")
-            return {"status": "error", "message": "Timeout ejecutando orden", "client_order_id": client_order_id}
-
-        except ccxt.NetworkError as e:
-            logger.warning(f"[Executor] NetworkError: {e} → reintentando")
-            await asyncio.sleep(BACKOFF_BASE ** attempt)
+class Executor:
+    """Ejecutor de órdenes con manejo de timeouts y retries"""
+    
+    def __init__(self):
+        self.order_counter = 0
+        self.execution_metrics = {
+            'total_orders': 0,
+            'successful_orders': 0,
+            'failed_orders': 0,
+            'avg_latency_ms': 0.0
+        }
+        
+    async def execute_order(self, signal: Signal) -> ExecutionResult:
+        """
+        Ejecuta una orden en el exchange de forma determinista
+        1 intento por señal, con timeout y retry configurables
+        """
+        self.order_counter += 1
+        order_id = f"L1_ORDER_{self.order_counter}_{int(time.time())}"
+        
+        logger.info(f"Executing order {order_id} for signal {signal.signal_id}")
+        
+        start_time = time.time()
+        
+        # Crear intent de orden
+        order_intent = OrderIntent(
+            signal_id=signal.signal_id,
+            symbol=signal.symbol,
+            side=signal.side,
+            qty=signal.qty,
+            order_type=signal.order_type,
+            price=signal.price,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit
+        )
+        
+        # Ejecutar con retries
+        for attempt in range(EXECUTION_CONFIG["MAX_RETRIES"]):
             try:
-                exchange.load_markets()
-            except Exception as recon_err:
-                logger.error(f"[Executor] Reconexión fallida: {recon_err}")
-
-        except ccxt.ExchangeError as e:
-            metrics.increment("orders_rejected")
-            logger.warning(f"[Executor] ExchangeError: {str(e)}")
-            return {"status": "rejected", "message": str(e), "client_order_id": client_order_id}
-
-        except Exception as e:
-            metrics.increment("orders_failed")
-            logger.exception(f"[Executor] Error inesperado: {e}")
-            return {"status": "error", "message": str(e), "client_order_id": client_order_id}
-
-    metrics.increment("orders_failed")
-    logger.error("[Executor] Max retries exceeded")
-    return {"status": "error", "message": "Max retries exceeded", "client_order_id": client_order_id}
+                result = await self._execute_with_exchange(order_id, order_intent)
+                
+                latency_ms = (time.time() - start_time) * 1000
+                result.latency_ms = latency_ms
+                
+                # Actualizar métricas
+                self._update_metrics(True, latency_ms)
+                
+                logger.info(f"Order {order_id} executed successfully in {latency_ms:.2f}ms")
+                return result
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Order {order_id} timeout on attempt {attempt + 1}")
+                if attempt < EXECUTION_CONFIG["MAX_RETRIES"] - 1:
+                    await asyncio.sleep(EXECUTION_CONFIG["RETRY_DELAY_SECONDS"])
+                    continue
+                else:
+                    raise
+                    
+            except Exception as e:
+                logger.error(f"Order {order_id} execution error on attempt {attempt + 1}: {e}")
+                if attempt < EXECUTION_CONFIG["MAX_RETRIES"] - 1:
+                    await asyncio.sleep(EXECUTION_CONFIG["RETRY_DELAY_SECONDS"])
+                    continue
+                else:
+                    raise
+        
+        # Si llegamos aquí, todos los intentos fallaron
+        self._update_metrics(False, (time.time() - start_time) * 1000)
+        raise Exception(f"Order {order_id} failed after {EXECUTION_CONFIG['MAX_RETRIES']} attempts")
+    
+    async def _execute_with_exchange(self, order_id: str, order_intent: OrderIntent) -> ExecutionResult:
+        """
+        Ejecuta la orden en el exchange (o simulación)
+        Incluye timeout y manejo de errores específicos del exchange
+        """
+        
+        if OPERATION_MODE == "PAPER":
+            # Modo simulación
+            return await self._simulate_execution(order_id, order_intent)
+        
+        elif OPERATION_MODE == "LIVE":
+            # Modo real (requiere implementación del cliente del exchange)
+            return await self._live_execution(order_id, order_intent)
+        
+        else:
+            raise ValueError(f"Unknown operation mode: {OPERATION_MODE}")
+    
+    async def _simulate_execution(self, order_id: str, order_intent: OrderIntent) -> ExecutionResult:
+        """Simulación de ejecución para testing"""
+        
+        # Simular latencia del exchange
+        await asyncio.sleep(0.05)  # 50ms simulado
+        
+        # Simular precio de ejecución con pequeño slippage
+        if order_intent.order_type == "market":
+            # Market order: simular slippage de 0.1%
+            base_price = order_intent.price or 50000  # Mock price
+            slippage_factor = 1.001 if order_intent.side == 'buy' else 0.999
+            execution_price = base_price * slippage_factor
+        else:
+            # Limit order: ejecutar al precio límite
+            execution_price = order_intent.price
+        
+        # Simular fees (0.1%)
+        fees = order_intent.qty * execution_price * 0.001
+        
+        return ExecutionResult(
+            order_id=order_id,
+            filled_qty=order_intent.qty,
+            avg_price=execution_price,
+            fees=fees,
+            latency_ms=0.0,  # Se calculará en el caller
+            status="FILLED"
+        )
+    
+    async def _live_execution(self, order_id: str, order_intent: OrderIntent) -> ExecutionResult:
+        """Ejecución real en exchange (placeholder)"""
+        # TODO: Implementar cliente real del exchange
+        raise NotImplementedError("Live execution not implemented yet")
+    
+    def _update_metrics(self, success: bool, latency_ms: float):
+        """Actualiza métricas de ejecución"""
+        self.execution_metrics['total_orders'] += 1
+        
+        if success:
+            self.execution_metrics['successful_orders'] += 1
+        else:
+            self.execution_metrics['failed_orders'] += 1
+        
+        # Actualizar latencia promedio (rolling average simple)
+        current_avg = self.execution_metrics['avg_latency_ms']
+        total = self.execution_metrics['total_orders']
+        self.execution_metrics['avg_latency_ms'] = (current_avg * (total - 1) + latency_ms) / total
+        
+        # Warning si latencia es alta
+        if latency_ms > EXECUTION_CONFIG["LATENCY_WARNING_MS"]:
+            logger.warning(f"High latency detected: {latency_ms:.2f}ms")
+    
+    def get_metrics(self) -> dict:
+        """Retorna métricas de ejecución"""
+        return self.execution_metrics.copy()
