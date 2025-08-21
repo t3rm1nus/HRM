@@ -24,6 +24,7 @@ class Signal:
     stop_loss: Optional[float] = None # Stop-loss obligatorio para validación de riesgo
     risk: Dict[str, Any] = field(default_factory=dict)  # Parámetros de riesgo, e.g., max_slippage_bps
     metadata: Dict[str, Any] = field(default_factory=dict)  # Info adicional, e.g., confianza, notas
+    features: Dict[str, Any] = field(default_factory=dict)  # Features para Trend AI (agregado para corrección)
 
 
 @dataclass

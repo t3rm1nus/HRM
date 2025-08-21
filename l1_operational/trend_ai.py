@@ -18,21 +18,24 @@ models = {}
 for name, path in [("RF", MODEL_RF_PATH), ("LGBM", MODEL_LGBM_PATH), ("LR", MODEL_LR_PATH)]:
     if os.path.exists(path):
         models[name] = joblib.load(path)
-        logger.info(f"[TrendAI] Modelo {name} cargado desde {path}")
+        logger.info(f"[TrendAI] Modelo {name} cargado exitosamente desde {path}")
     else:
         models[name] = None
-        logger.warning(f"[TrendAI] Modelo {name} NO encontrado en {path}")
+        logger.warning(f"[TrendAI] Modelo {name} NO encontrado en {path}. Usando fallback si es necesario.")
 
 # --- Función interna para fallback minimalista ---
 def _score_trend(signal: Dict[str, Any]) -> float:
     features = signal.get("features", {}) or {}
     if not features:
+        logger.warning("[TrendAI-Fallback] No features disponibles. Retornando score default 1.0")
         return 1.0
     rsi = features.get("rsi_trend", 0.5)
     macd = features.get("macd_trend", 0.5)
     slope = features.get("price_slope", 0.5)
     score = 0.4 * rsi + 0.4 * macd + 0.2 * slope
-    return float(max(0.0, min(1.0, score)))
+    score = float(max(0.0, min(1.0, score)))
+    logger.info(f"[TrendAI-Fallback] Calculado score: {score:.3f} (rsi={rsi}, macd={macd}, slope={slope})")
+    return score
 
 # --- Función para convertir features a vector ML ---
 def _extract_features(signal: dict):
@@ -48,6 +51,7 @@ def _extract_features(signal: dict):
         features.get("volatility_bbw", 0.0),
         # Añadir todas las demás features usadas en entrenamiento
     ]
+    logger.debug(f"[TrendAI] Features extraídas: {ordered}")
     return [ordered]  # sklearn espera 2D: [n_samples, n_features]
 
 # --- Guardar histórico ---
@@ -65,6 +69,7 @@ def _save_history(signal, probs, final_decision):
             probs.get("LR"),
             final_decision
         ])
+    logger.info(f"[TrendAI] Historia guardada para signal {signal.get('signal_id')}")
 
 # --- Función pública ---
 def filter_signal(signal: Dict[str, Any]) -> bool:
@@ -77,27 +82,23 @@ def filter_signal(signal: Dict[str, Any]) -> bool:
         X = _extract_features(signal)
 
         # --- Calcular probabilidad de cada modelo ---
-        if models.get("RF"):
-            probs["RF"] = float(models["RF"].predict_proba(X)[0][1])
-        else:
-            probs["RF"] = None
-
-        if models.get("LGBM"):
-            probs["LGBM"] = float(models["LGBM"].predict_proba(X)[0][1])
-        else:
-            probs["LGBM"] = None
-
-        if models.get("LR"):
-            probs["LR"] = float(models["LR"].predict_proba(X)[0][1])
-        else:
-            probs["LR"] = None
+        for name in ["RF", "LGBM", "LR"]:
+            if models.get(name):
+                probs[name] = float(models[name].predict_proba(X)[0][1])
+                logger.info(f"[TrendAI] Modelo {name} predijo prob: {probs[name]:.3f}")
+            else:
+                probs[name] = None
+                logger.warning(f"[TrendAI] Modelo {name} no disponible. Saltando.")
 
         # --- Ensemble ponderado ---
         weights = {"RF": 0.3, "LGBM": 0.5, "LR": 0.2}  # ajustar según desempeño
-        weighted_probs = [
-            (p * weights[name]) for name, p in probs.items() if p is not None
-        ]
-        decision_prob = sum(weighted_probs) / sum([weights[name] for name, p in probs.items() if p is not None])
+        valid_probs = {k: v for k, v in probs.items() if v is not None}
+        if not valid_probs:
+            raise ValueError("Ningún modelo disponible para ensemble.")
+        
+        weighted_sum = sum(p * weights[name] for name, p in valid_probs.items())
+        total_weight = sum(weights[name] for name in valid_probs)
+        decision_prob = weighted_sum / total_weight
         final_decision = decision_prob >= TREND_THRESHOLD
 
         logger.info(

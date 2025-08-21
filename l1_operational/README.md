@@ -1,4 +1,4 @@
-# L1\_operational - Nivel de Ejecución de Órdenes
+# L1\_Operational - Nivel de Ejecución de Órdenes
 
 ## 🎯 Objetivo
 
@@ -93,6 +93,30 @@ Execution Report → Bus Adapter → L2/L3
 
 ---
 
+## 🔄 Flujo Actualizado de L1 (Nueva Versión)
+
+```text
+[Señal L2/L3]
+      ↓
+[Hard-coded Safety Layer]
+      ↓
+[Modelo 1 - Logistic Regression] -> Feature 1
+      ↓
+[Modelo 2 - Random Forest]       -> Feature 2
+      ↓
+[Modelo 3 - LightGBM/Avanzado]   -> Feature 3
+      ↓
+[Decision Layer / Risk AI / Execution AI]
+      ↓
+Executor → Exchange
+      ↓
+Execution Report → Bus Adapter → L2/L3
+```
+
+> Ahora L1 integra múltiples modelos de IA en un flujo jerárquico antes de la ejecución, garantizando seguridad y robustez en decisiones.
+
+---
+
 ## 🧪 Pruebas
 
 ```bash
@@ -100,7 +124,7 @@ cd l1_operational
 python test_clean_l1.py
 ```
 
-Pruebas verifican:
+Verifican:
 
 * L1 no modifica señales estratégicas
 * Validación de riesgo correcta
@@ -123,64 +147,7 @@ PORTFOLIO_LIMITS = {
     "MAX_DAILY_DRAWDOWN": 0.05,
 }
 
-# Umbral del filtro de tendencia (Trend AI)
-TREND_THRESHOLD = 0.6
-```
-
----
-
-## 🔄 Integración con L2/L3
-
-Se espera que las señales tengan esta estructura:
-
-```python
-Signal(
-    signal_id="unique_id",
-    strategy_id="strategy_name",
-    timestamp=1234567890.0,
-    symbol="BTC/USDT",
-    side="buy",
-    qty=0.01,
-    order_type="market",
-    price=None,
-    stop_loss=49000.0,
-    risk={"max_slippage_bps": 50},
-    metadata={"confidence": 0.9}
-)
-```
-
----
-
-## 🧠 Trend AI (Filtro opcional)
-
-Interfaz:
-
-```python
-from l1_operational.trend_ai import filter_signal
-
-ok = filter_signal({
-    "symbol": "BTC/USDT",
-    "timeframe": "5m",
-    "price": 50000.0,
-    "volume": 123.4,
-    "features": {"rsi_trend": 0.7, "macd_trend": 0.65, "price_slope": 0.6}
-})  # True si score >= TREND_THRESHOLD
-```
-
-Configurable vía `TREND_THRESHOLD` en `config.py`.
-
-Reporte de ejecución devuelto:
-
-```python
-ExecutionReport(
-    client_order_id="L1_1234567890_1_abc12345",
-    status="filled",
-    filled_qty=0.01,
-    avg_price=50000.0,
-    fees=0.1,
-    slippage_bps=5,
-    latency_ms=150.5
-)
+TREND_THRESHOLD = 0.6  # Umbral del filtro de tendencia
 ```
 
 ---
@@ -191,7 +158,7 @@ ExecutionReport(
 import asyncio
 from comms.message_bus import MessageBus
 from l1_operational.bus_adapter import BusAdapterAsync
-from l1_operational.order_manager import OrderManager, bus_adapter
+from l1_operational.order_manager import OrderManager
 from l1_operational.models import Signal
 
 bus = MessageBus()
@@ -234,8 +201,6 @@ asyncio.run(main())
 
 ## 🔍 Logging
 
-L1 usa **Loguru** para logging estructurado:
-
 * Nivel INFO para operaciones normales
 * Nivel WARNING para rechazos de órdenes
 * Nivel ERROR para fallos de ejecución
@@ -243,40 +208,7 @@ L1 usa **Loguru** para logging estructurado:
 
 ---
 
-## 📚 Dataset y Features (BTC/USDT)
-
-Generación con:
-
-```bash
-python l1_operational/genera_dataset_modelo1.py --symbol BTC/USDT --output-dir data
-```
-
-Salida (CSV):
-
-* `data/btc_1m.csv` (OHLCV crudo)
-* `data/btc_features_train.csv` y `data/btc_features_test.csv` (con índice temporal)
-
-Indicadores incluidos (columnas principales):
-
-* trend\_sma\_fast, trend\_sma\_slow
-* trend\_ema\_fast, trend\_ema\_slow
-* trend\_adx, trend\_macd
-* momentum\_rsi, momentum\_stoch, momentum\_stoch\_signal
-* volume\_obv
-* volatility\_bbw, volatility\_atr
-
-Notas:
-
-* Descarga OHLCV real (endpoint público CCXT) y construye features 1m + 5m.
-* Objetivo fijo: \~200k filas de features finales.
-
----
-
-## 🤖 Entrenamiento de Modelos (ligeros)
-
-Objetivo: clasificar probabilidad de movimiento BTC (up/down) en t+1.
-
-Comandos:
+## 🤖 Entrenamiento de Modelos
 
 ```bash
 # Modelo 1: Logistic Regression
@@ -285,37 +217,19 @@ python ml_training/train_logreg_modelo1.py
 # Modelo 2: Random Forest (L1, capa 2)
 python ml_training/train_rf_modelo2_l1.py
 
-# Modelo 3: LightGBM (requiere lightgbm instalado)
+# Modelo 3: LightGBM / Avanzado
 python ml_training/train_lgbm_modelo1.py
 ```
 
 Salida:
 
-* Modelos en `models/` y metadatos `.meta.json` (features usadas, umbral óptimo y métricas).
-* Modelo 1 guardado en `models/modelo1_logreg.pkl`
-
-Métricas reportadas:
-
-* Accuracy, F1, AUC. Se calcula además un umbral óptimo por F1 para reducir señales falsas.
+* Modelos en `models/` con metadatos `.meta.json`
+* Umbral óptimo por F1 para reducir falsas señales
 
 ---
 
-## 📋 Lista de Features para Entrenamiento del Modelo 2 (L1)
+## 🧠 Trend AI & Hard-coded Safety Layer
 
-1. trend\_sma\_fast
-2. trend\_sma\_slow
-3. trend\_ema\_fast
-4. trend\_ema\_slow
-5. trend\_adx
-6. trend\_macd
-7. momentum\_rsi
-8. momentum\_stoch
-9. momentum\_stoch\_signal
-10. volume\_obv
-11. volatility\_bbw
-12. volatility\_atr
-13. price\_slope
-14. rsi\_trend
-15. macd\_trend
-
-> Estos features se usarán para entrenar el segundo modelo de la capa L1 y se integrarán en el flujo determinista junto con el modelo 1.
+* Hard-coded Safety Layer: stop-loss, chequeos de liquidez, validación de tamaño, reglas deterministas.
+* Modelos Trend AI: Logistic Regression, Random Forest, LightGBM/Avanzado.
+* Flujo jerárquico garantiza robustez y seguridad antes de enviar órdenes al exchange.

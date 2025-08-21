@@ -27,6 +27,7 @@ async def execute_order(
     order_type: str = "market"
 ) -> dict:
     client_order_id = str(uuid.uuid4())
+    logger.info(f"[Executor] Iniciando ejecución para {side} {amount} {symbol} @ {price or 'MARKET'} (client_id={client_order_id})")
 
     # 1️⃣ Validación de saldo/liquidez
     try:
@@ -42,6 +43,7 @@ async def execute_order(
             msg = f"Saldo insuficiente: {available} para vender {amount} {symbol}"
             logger.warning(f"[Executor] {msg} (client_id={client_order_id})")
             return {"status": "rejected", "message": msg, "client_order_id": client_order_id}
+        logger.info(f"[Executor] Validación de saldo OK (available={available}, quote={quote_available})")
 
     except Exception as e:
         metrics.increment("orders_failed")
@@ -79,6 +81,7 @@ async def execute_order(
             metrics.increment("orders_success")
             metrics.observe_latency(latency_ms)
             await metrics.update_portfolio(symbol)
+            logger.info(f"[Executor] Métricas actualizadas: success++, latency={latency_ms:.2f}ms")
 
             # Manejo de órdenes parciales
             filled = float(order.get("filled", 0))
@@ -98,6 +101,7 @@ async def execute_order(
 
         except asyncio.TimeoutError:
             metrics.increment("orders_failed")
+            logger.error("[Executor] Timeout en ejecución")
             return {"status": "error", "message": "Timeout ejecutando orden", "client_order_id": client_order_id}
 
         except ccxt.NetworkError as e:
@@ -110,6 +114,7 @@ async def execute_order(
 
         except ccxt.ExchangeError as e:
             metrics.increment("orders_rejected")
+            logger.warning(f"[Executor] ExchangeError: {str(e)}")
             return {"status": "rejected", "message": str(e), "client_order_id": client_order_id}
 
         except Exception as e:
@@ -118,4 +123,5 @@ async def execute_order(
             return {"status": "error", "message": str(e), "client_order_id": client_order_id}
 
     metrics.increment("orders_failed")
+    logger.error("[Executor] Max retries exceeded")
     return {"status": "error", "message": "Max retries exceeded", "client_order_id": client_order_id}

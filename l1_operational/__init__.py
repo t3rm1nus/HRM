@@ -16,6 +16,8 @@ async def procesar_l1(state: dict) -> dict:
     """
     nuevas_ordenes = []
 
+    logger.info("[L1] Iniciando procesamiento de órdenes. Cantidad inicial: {}", len(state.get("ordenes", [])))
+
     for orden in state.get("ordenes", []):
         try:
             # Convertir orden del estado a señal
@@ -31,8 +33,9 @@ async def procesar_l1(state: dict) -> dict:
                 risk=orden.get("risk", {}),
                 metadata=orden.get("metadata", {})
             )
+            logger.info(f"[L1] Señal convertida: {signal.signal_id} - {signal.side} {signal.qty} {signal.symbol}")
 
-            # Procesar señal usando el gestor de órdenes
+            # Procesar señal usando el gestor de órdenes (ahora con validaciones integradas)
             report: ExecutionReport = await order_manager.handle_signal(signal)
 
             nuevas_ordenes.append({
@@ -52,9 +55,10 @@ async def procesar_l1(state: dict) -> dict:
                     "error_msg": getattr(report, "error_msg", None)
                 }
             })
+            logger.info(f"[L1] Reporte generado para {report.client_order_id}: status={report.status}")
 
         except Exception as e:
-            logger.error(f"Error procesando orden: {e}")
+            logger.error(f"[L1] Error procesando orden: {e}")
             nuevas_ordenes.append({
                 "id": f"error_{len(nuevas_ordenes)}",
                 "status": "error",
@@ -74,6 +78,7 @@ async def procesar_l1(state: dict) -> dict:
         "pending_reports": len(pending_reports),
         "pending_alerts": len(pending_alerts)
     }
+    logger.info(f"[L1] Métricas actualizadas: active_orders={active_orders}, pending_reports={len(pending_reports)}, pending_alerts={len(pending_alerts)}")
 
     return state
 
@@ -81,10 +86,12 @@ def get_l1_status() -> dict:
     """
     Retorna el estado actual de L1.
     """
-    return {
+    status = {
         "active_orders": order_manager.get_active_orders_count(),
         "pending_reports": len(bus_adapter.get_pending_reports()),
         "pending_alerts": len(bus_adapter.get_pending_alerts()),
         "risk_limits": "configurados",
         "execution_mode": "determinista"
     }
+    logger.info(f"[L1] Estado consultado: {status}")
+    return status
