@@ -43,11 +43,12 @@ def test_l1_no_takes_trading_decisions():
     )
     
     # L1 debe rechazar la orden, no ajustarla
-    report = order_manager.handle_signal(test_signal)
+    import asyncio
+    report = asyncio.run(order_manager.handle_signal(test_signal))
     
     print(f"   Señal original: {test_signal.qty} BTC")
     print(f"   Reporte: {report.status}")
-    print(f"   Error: {report.error_msg}")
+    print(f"   Error: {report.message}")
     
     # Verificar que L1 no modificó la señal original
     assert test_signal.qty == 0.1, "L1 no debe modificar la señal original"
@@ -76,7 +77,8 @@ def test_l1_only_validates_and_executes():
     
     # L1 debe procesar la señal sin modificarla
     original_qty = valid_signal.qty
-    report = order_manager.handle_signal(valid_signal)
+    import asyncio
+    report = asyncio.run(order_manager.handle_signal(valid_signal))
     
     print(f"   Señal original: {original_qty} BTC")
     print(f"   Señal después: {valid_signal.qty} BTC")
@@ -138,7 +140,8 @@ def test_l1_risk_validation():
     
     for test_case in test_cases:
         print(f"   Probando: {test_case['name']}")
-        report = order_manager.handle_signal(test_case['signal'])
+        import asyncio
+        report = asyncio.run(order_manager.handle_signal(test_case['signal']))
         print(f"     Resultado: {report.status}")
         
         # Verificar que L1 no modificó la señal
@@ -173,8 +176,9 @@ def test_l1_deterministic_behavior():
         order_type="market"
     )
     
-    report1 = order_manager.handle_signal(signal1)
-    report2 = order_manager.handle_signal(signal2)
+    import asyncio
+    report1 = asyncio.run(order_manager.handle_signal(signal1))
+    report2 = asyncio.run(order_manager.handle_signal(signal2))
     
     print(f"   Primera ejecución: {report1.status}")
     print(f"   Segunda ejecución: {report2.status}")

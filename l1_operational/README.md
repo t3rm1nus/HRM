@@ -1,106 +1,134 @@
-# L1_operational - Nivel de Ejecución de Órdenes
+# L1\_operational - Nivel de Ejecución de Órdenes
 
 ## 🎯 Objetivo
 
-L1 es el nivel de ejecución de órdenes que **SOLO ejecuta órdenes seguras, sin tomar decisiones estratégicas ni tácticas**. Recibe señales consolidadas de L2/L3 y las ejecuta de forma determinista.
+L1 es el nivel de **ejecución y gestión de riesgo en tiempo real**, que combina **IA y reglas hard-coded** para garantizar que solo se ejecuten órdenes seguras.
+Recibe señales consolidadas de L2/L3 y las ejecuta de forma **determinista**, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución.
+
+---
 
 ## 🚫 Lo que L1 NO hace
 
-- ❌ **No modifica cantidades** de órdenes
-- ❌ **No ajusta precios** de órdenes
-- ❌ **No toma decisiones** de timing de ejecución
-- ❌ **No actualiza portfolio** (responsabilidad de L2/L3)
-- ❌ **No actualiza datos** de mercado (responsabilidad de L2/L3)
-- ❌ **No implementa estrategias** de trading
-- ❌ **No calcula posiciones** o exposición
+| ❌ No hace                                                           |
+| ------------------------------------------------------------------- |
+| No decide estrategias de trading                                    |
+| No ajusta precios de señales estratégicas                           |
+| No toma decisiones tácticas fuera de seguridad y ejecución          |
+| No actualiza portafolio completo (responsabilidad de L2/L3)         |
+| No recolecta ni procesa datos de mercado (responsabilidad de L2/L3) |
+
+---
 
 ## ✅ Lo que L1 SÍ hace
 
-- ✅ **Valida límites de riesgo** antes de ejecutar
-- ✅ **Ejecuta órdenes** pre-validadas en el exchange
-- ✅ **Genera reportes** de ejecución detallados
-- ✅ **Mantiene trazabilidad** completa de todas las operaciones
-- ✅ **Aplica validaciones** de seguridad y compliance
-- ✅ **Gestiona errores** de ejecución de forma robusta
+| ✅ Funcionalidad         | Descripción                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| Hard-coded Safety Layer | Bloquea operaciones peligrosas, aplica stop-loss obligatorio y chequeos de liquidez/saldo |
+| Trend AI                | Evalúa probabilidad de movimientos del mercado y filtra señales de baja confianza |
+| Execution AI            | Optimiza fraccionamiento de órdenes, timing y reduce slippage                     |
+| Risk AI                 | Ajusta tamaño de trade y stops dinámicamente según volatilidad y exposición       |
+| Ejecución determinista  | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal |
+| Reportes y trazabilidad | Genera reportes detallados de todas las órdenes ejecutadas                        |
+| Gestión de errores      | Maneja errores de ejecución de forma robusta                                      |
+
+---
 
 ## 🏗️ Arquitectura
 
-```
-L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange
-                                    ↓
-                              Execution Report → Bus Adapter → L2/L3
+```text
+L2/L3 (Señales)
+      ↓
+  Bus Adapter
+      ↓
+Order Manager
+      ↓
+[Hard-coded Safety Layer + Trend AI + Execution AI + Risk AI]
+      ↓
+   Executor → Exchange
+      ↓
+Execution Report → Bus Adapter → L2/L3
 ```
 
 ### Componentes Principales
 
-1. **`models.py`** - Estructuras de datos (Signal, ExecutionReport, RiskAlert)
-2. **`bus_adapter.py`** - Interfaz con el bus de mensajes del sistema
-3. **`order_manager.py`** - Orquesta el proceso completo de ejecución
-4. **`risk_guard.py`** - Valida límites de riesgo (sin modificar órdenes)
-5. **`executor.py`** - Ejecuta órdenes en el exchange
-6. **`config.py`** - Configuración centralizada de límites y parámetros
+* `models.py` - Estructuras de datos (Signal, ExecutionReport, RiskAlert, OrderIntent)
+* `bus_adapter.py` - Interfaz asíncrona con el bus de mensajes del sistema (tópicos: `signals`, `reports`, `alerts`)
+* `order_manager.py` - Orquesta el flujo de ejecución y validaciones IA/hard-coded
+* `risk_guard.py` - Valida límites de riesgo y exposición
+* `executor.py` - Ejecuta órdenes en el exchange
+* `config.py` - Configuración centralizada de límites y parámetros
+
+---
 
 ## 🔒 Validaciones de Riesgo
 
 ### Por Operación
-- Tamaño mínimo/máximo por orden
-- Límites específicos por símbolo (BTC, ETH, etc.)
-- Validación de parámetros básicos
+
+* Stop-loss obligatorio (coherente con `side` y `price`)
+* Tamaño mínimo/máximo por orden (USDT) y por símbolo (BTC/ETH)
+* Límites por símbolo (BTC, ETH, etc.)
+* Validación de parámetros básicos
 
 ### Por Portafolio
-- Exposición máxima por activo
-- Drawdown diario máximo
-- Saldo mínimo requerido
+
+* Exposición máxima por activo
+* Drawdown diario máximo
+* Saldo mínimo requerido
 
 ### Por Ejecución
-- Validación de saldo disponible
-- Verificación de conexión al exchange
-- Timeout de órdenes
 
-## 📊 Flujo de Ejecución
+* Validación de saldo disponible
+* Verificación de conexión al exchange
+* Timeout de órdenes y reintentos exponenciales
+
+---
+
+## 📊 Flujo de Ejecución (Determinista)
 
 1. **Recepción de Señal** desde L2/L3 vía bus
-2. **Validación de Riesgo** (sin modificar la señal)
-3. **Creación de Orden** basada en la señal original
-4. **Ejecución** en el exchange
-5. **Generación de Reporte** con métricas completas
-6. **Publicación** del reporte vía bus
+2. **Validación Hard-coded** (stop-loss, tamaño, liquidez/saldo, exposición, drawdown)
+3. **Plan determinista**: se genera un `OrderIntent` 1:1 desde la `Signal`
+4. **Ejecución** mediante `executor.py` con timeout/retry y medición de latencia
+5. **Generación de `ExecutionReport`** y publicación en el bus (`reports`)
+
+---
 
 ## 🧪 Pruebas
-
-Ejecuta las pruebas para verificar que L1 está limpio:
 
 ```bash
 cd l1_operational
 python test_clean_l1.py
 ```
 
-Las pruebas verifican:
-- L1 no modifica señales
-- L1 solo valida y ejecuta
-- Comportamiento determinista
-- Validaciones de riesgo correctas
+Pruebas verifican:
+
+* L1 no modifica señales estratégicas
+* Validación de riesgo correcta
+* Ejecución determinista
+* Comportamiento consistente de las IA internas
+
+---
 
 ## ⚙️ Configuración
 
-Los límites de riesgo se configuran en `config.py`:
-
 ```python
 RISK_LIMITS = {
-    "MAX_ORDER_SIZE_BTC": 0.05,      # máximo BTC por orden
-    "MAX_ORDER_SIZE_USDT": 1000,     # máximo valor en USDT
-    "MIN_ORDER_SIZE_USDT": 10,       # mínimo valor en USDT
+    "MAX_ORDER_SIZE_BTC": 0.05,
+    "MAX_ORDER_SIZE_USDT": 1000,
+    "MIN_ORDER_SIZE_USDT": 10,
 }
 
 PORTFOLIO_LIMITS = {
-    "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,  # máximo 20% en BTC
-    "MAX_DAILY_DRAWDOWN": 0.05,         # máximo 5% DD diario
+    "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,
+    "MAX_DAILY_DRAWDOWN": 0.05,
 }
 ```
 
+---
+
 ## 🔄 Integración con L2/L3
 
-L1 espera señales con esta estructura:
+Se espera que las señales tengan esta estructura:
 
 ```python
 Signal(
@@ -111,13 +139,14 @@ Signal(
     side="buy",
     qty=0.01,
     order_type="market",
-    price=None,  # para órdenes market
+    price=None,
+    stop_loss=49000.0,
     risk={"max_slippage_bps": 50},
     metadata={"confidence": 0.9}
 )
 ```
 
-Y retorna reportes de ejecución:
+Reporte de ejecución devuelto:
 
 ```python
 ExecutionReport(
@@ -131,39 +160,60 @@ ExecutionReport(
 )
 ```
 
+---
+
 ## 🚀 Uso
 
 ```python
-from l1_operational import procesar_l1, get_l1_status
+import asyncio
+from comms.message_bus import MessageBus
+from l1_operational.bus_adapter import BusAdapterAsync
+from l1_operational.order_manager import OrderManager, bus_adapter
+from l1_operational.models import Signal
 
-# Procesar órdenes
-state = {"ordenes": [...]}
-new_state = procesar_l1(state)
+bus = MessageBus()
+bus_adapter = BusAdapterAsync(bus)
+om = OrderManager()
 
-# Verificar estado de L1
-status = get_l1_status()
-print(f"Órdenes activas: {status['active_orders']}")
+async def main():
+    # Publicar una señal de ejemplo
+    await bus.publish("signals", Signal(
+        signal_id="s1", strategy_id="stratA", timestamp=0,
+        symbol="BTC/USDT", side="buy", qty=0.01, order_type="market", stop_loss=49000.0
+    ).__dict__)
+
+    # Procesar loop
+    await asyncio.wait_for(om.handle_signal(await bus_adapter.consume_signal()), timeout=5)
+
+asyncio.run(main())
 ```
+
+---
 
 ## 📈 Métricas
 
-L1 proporciona métricas operativas:
-- Órdenes activas
-- Reportes pendientes
-- Alertas pendientes
-- Latencia de ejecución
-- Tasa de rechazo
+* Órdenes activas
+* Reportes pendientes
+* Alertas pendientes
+* Latencia de ejecución (histograma en memoria)
+* Tasa de rechazo / fallas / parciales
+* Snapshot de saldos por símbolo tras ejecución
+
+---
 
 ## 🎭 Modo de Operación
 
-- **PAPER**: Simulación sin ejecución real (por defecto)
-- **LIVE**: Ejecución real en el exchange
-- **REPLAY**: Reproducción de datos históricos
+* **PAPER**: Simulación sin ejecución real (por defecto)
+* **LIVE**: Ejecución real en el exchange
+* **REPLAY**: Reproducción de datos históricos
+
+---
 
 ## 🔍 Logging
 
-L1 usa Loguru para logging estructurado:
-- Nivel INFO para operaciones normales
-- Nivel WARNING para rechazos de órdenes
-- Nivel ERROR para fallos de ejecución
-- Logs incluyen contexto completo de cada operación
+L1 usa **Loguru** para logging estructurado:
+
+* Nivel INFO para operaciones normales
+* Nivel WARNING para rechazos de órdenes
+* Nivel ERROR para fallos de ejecución
+* Logs incluyen contexto completo de cada operación

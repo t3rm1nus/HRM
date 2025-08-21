@@ -77,13 +77,15 @@ Nivel 1: Ejecución + Gestión de Riesgo (segundos)
 ---
 
 ### 🔹 Nivel 1: Ejecución y Gestión de Riesgo (Segundos)
-**Rol:** Implementación en tiempo real  
 
-**Funciones principales:**
-- Selección de algoritmo de ejecución (TWAP, taker, iceberg)
-- Control de slippage y latencia
-- Circuit breakers y cancel-on-disconnect
-- Monitoreo de PnL y límites de exposición
+Rol: Implementación en tiempo real con capa de seguridad hard-coded y ejecución determinista
+
+Funciones principales:
+- Hard-coded Safety Layer: stop-loss obligatorio, límites de capital por trade, chequeos de liquidez/saldo, exposición y drawdown
+- Ejecución determinista: 1 intento de orden por señal (si no cumple reglas → rechazo automático)
+- Reportes y trazabilidad: `ExecutionReport` publicado en el bus
+- Manejo de errores: timeouts, reintentos, control de errores de red/exchange
+- Métricas: latencia, rechazos/fallas/parciales y snapshot de saldos tras ejecución
 
 ---
 
@@ -118,13 +120,11 @@ Nivel 1: Ejecución + Gestión de Riesgo (segundos)
 │  └──────────┘ └──────────┘ └─────────┘  │
 └─────────────┬───────────────────────────┘
               │ Señales de Trading (Minutos)
-┌─────────────▼───────────────────────────┐
-│          NIVEL OPERACIONAL              │
-│  ┌──────────┐ ┌──────────┐ ┌─────────┐  │
-│  │Order     │ │Execution │ │Real-time│  │
-│  │Management│ │Engine    │ │Monitor  │  │
-│  └──────────┘ └──────────┘ └─────────┘  │
-└─────────────────────────────────────────┘
+              │
+┌─────────────▼────────────── Nivel Operacional ───────────────┐
+│ Hard-coded Safety Layer + Order Manager (determinista)       │
+│ Executor determinista → Exchange                             │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -181,12 +181,12 @@ HMR/
 │   └── __init__.py
 │
 ├── l1_operational/      # Nivel operacional (OMS/EMS) - LIMPIO Y DETERMINISTA
-│   ├── models.py        # Estructuras de datos tipadas (Signal, ExecutionReport, RiskAlert)
+│   ├── models.py        # Estructuras (Signal, ExecutionReport, RiskAlert, OrderIntent)
 │   ├── config.py        # Configuración centralizada de límites de riesgo
-│   ├── bus_adapter.py   # Interfaz con el bus de mensajes del sistema
-│   ├── order_manager.py # Orquesta validación → ejecución → reporte
-│   ├── risk_guard.py    # Valida límites de riesgo (sin modificar órdenes)
-│   ├── executor.py      # Ejecuta órdenes pre-validadas en el exchange
+│   ├── bus_adapter.py   # Bus asíncrono (tópicos: signals, reports, alerts)
+│   ├── order_manager.py # Orquesta validación hard-coded → ejecución determinista → reporte
+│   ├── risk_guard.py    # Valida límites (stop-loss, capital, liquidez, exposición)
+│   ├── executor.py      # Ejecuta órdenes con timeouts/retry y métricas
 │   ├── data_feed.py     # Obtiene datos de mercado y saldos
 │   ├── binance_client.py # Cliente de Binance (sandbox por defecto)
 │   ├── test_clean_l1.py # Pruebas de limpieza y determinismo
@@ -251,6 +251,11 @@ state = {
 Cada nivel actualiza su parte correspondiente del state.
 Esto asegura trazabilidad y facilita debugging/backtesting.
 
+## 9️⃣ Flujo de Mensajes L1
+L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange
+                                    ↓
+                              Execution Report → Bus Adapter → L2/L3
+
 ---
 
 ## 🔒 L1_operational: LIMPIO Y DETERMINISTA
@@ -279,8 +284,7 @@ L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor �
 
 ### 🧪 Verificación de Limpieza:
 ```bash
-cd l1_operational
-python test_clean_l1.py
+python run_l1_tests.py
 ```
 
 Las pruebas verifican que L1 está completamente limpio y determinista.
