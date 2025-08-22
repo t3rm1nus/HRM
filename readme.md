@@ -1,32 +1,44 @@
-# 🚀 Sistema de Trading Cripto con Modelo de Razonamiento Jerárquico (HRM)
+# HRM — Hierarchical Reasoning Model para Trading Algorítmico
 
-## 1️⃣ Objetivo
-
-- Diseñar, construir y operar un sistema de trading cripto totalmente automatizado que use un **modelo de razonamiento jerárquico (HRM)** para orquestar:
-  - Investigación
-  - Generación de señales
-  - Gestión de riesgos
-  - Ejecución en exchanges centralizados (CEX) y descentralizados (DEX)
-- Desarrollar un sistema de trading adaptativo que opere en **múltiples timeframes**
-- Implementar **razonamiento jerárquico** para optimizar decisiones de inversión
-- Crear un **framework escalable** para diferentes estrategias
-- Minimizar riesgos mediante análisis **multi-nivel**
+> **Estado**: Activo · **Lenguaje**: Python · **Dominio**: Cripto/Trading · **Arquitectura**: Multi‑nivel (L4→L1)  
+> **Regla de oro**: *Si existe conflicto entre este README y los README de módulos, **prevalece el README del módulo**.*
 
 ---
 
-## 2️⃣ Beneficios Esperados
+## 🧭 TL;DR
 
-✔️ Mayor precisión en predicciones de mercado  
-✔️ Reducción de riesgos a través de **diversificación temporal**  
-✔️ Adaptabilidad automática a diferentes condiciones de mercado  
-✔️ Capacidad de razonamiento complejo sobre múltiples variables  
+HRM es un framework de **razonamiento jerárquico** para trading. Divide el problema en **4 niveles** que van desde la reflexión global (L4) hasta la ejecución determinista (L1).  
+El objetivo es **decidir qué, cuándo y cuánto** operar, **limitando riesgo** mediante reglas duras en L1 y **aprendiendo** en niveles superiores (L2–L4). Incluye **bus de mensajes**, **telemetría**, **persistencia histórica**, **dataset multitimeframe** y **tests**.
 
 ---
 
-## 3️⃣ Flujo General del Sistema
+## 1️⃣ Objetivo del proyecto
 
-```text
-Nivel 4: Meta-Razonamiento (horas/días)
+- Tomar decisiones de **trading razonadas y trazables** mediante una **jerarquía de agentes**.
+- Aprender **qué señales mantienen performance** bajo distintos regímenes de mercado y cómo combinar niveles.
+- Minimizar riesgos con **análisis multinivel** y **capa dura de seguridad** en ejecución.
+- Crear un **framework reutilizable** para diferentes estrategias y universos de activos.
+
+**Qué queremos aprender a nivel del sistema**:
+- Si el **razonamiento multietapa** mejora la estabilidad vs. un agente monolítico.
+- **Qué señales** funcionan en cada régimen y cómo **combinarlas** en L2/L3.
+- Cómo **distribuir peso/capital** entre modelos/estrategias y detectar **concept drift** en L4.
+
+---
+
+## 2️⃣ Beneficios esperados
+
+- Mayor **precisión** en predicciones (composición de señales).  
+- **Reducción de riesgos** vía diversificación temporal y capa L1.  
+- **Adaptabilidad** automática a distintos regímenes.  
+- Capacidad de **razonamiento complejo** multi‑variable.
+
+---
+
+## 3️⃣ Flujo general (visión de tiempos)
+
+```
+Nivel 4: Meta‑Razonamiento (horas/días)
         ↓
 Nivel 3: Análisis Estratégico (horas)
         ↓
@@ -37,61 +49,30 @@ Nivel 1: Ejecución + Gestión de Riesgo (segundos)
 
 ---
 
-## 4️⃣ Jerarquía del Sistema de Trading (HRM extendido)
+## 4️⃣ Jerarquía del sistema (HRM extendido)
 
-### 🔹 Nivel 4: Meta-Razonamiento (Horas/Días)
-**Rol:** Reflexión y adaptación del sistema completo  
+### Nivel 4 — Meta‑Razonamiento (horas/días)
+**Rol**: Reflexión y adaptación del sistema completo.  
+**Funciones**: evaluación de desempeño (Sharpe, drawdown), **concept drift**, **selección de modelos/estrategias**, **asignación de capital** y **ajustes globales**.  
+**Ejemplo**: si *mean reversion* pierde eficacia, **reduce su peso** y reasigna capital a *trend‑following*.
 
-**Funciones principales:**
-- Evaluar desempeño del HRM (Sharpe, drawdown, estabilidad por régimen)
-- Detectar *concept drift*
-- Ajustar parámetros globales (pesos, umbrales de riesgo, reglas)
-- Selección automática de modelos (meta-aprendizaje)
-- Gestión de capital y reequilibrio
+### Nivel 3 — Análisis Estratégico (horas)
+**Rol**: Planificación de alto nivel.  
+**Funciones**: **clasificación de régimen** (tendencia/rango/volatilidad), **selección de sub‑estrategias**, priorización de activos (BTC, ETH, alts líquidas), metas intradía (exposición, riesgo máximo).
 
-**Ejemplo:**  
-> La estrategia *mean reversion* pierde efectividad → el sistema reduce su peso y reasigna capital a *trend following*.
+### Nivel 2 — Táctica de Ejecución (minutos)
+**Rol**: Convertir las decisiones estratégicas en operaciones concretas.  
+**Funciones**: **composición de señales**, **position sizing** (vol‑targeting, Kelly fraccionado), **stops/targets dinámicos**, **ajustes por liquidez/volatilidad**.
 
----
-
-### 🔹 Nivel 3: Análisis Estratégico (Horas)
-**Rol:** Planificación de alto nivel  
-
-**Funciones principales:**
-- Clasificación de régimen de mercado (tendencia, rango, volatilidad)
-- Selección de sub-estrategias activas por régimen
-- Priorización de activos (BTC, ETH, alts líquidos)
-- Definición de metas intradía (exposición, riesgo máximo)
+### Nivel 1 — Ejecución y Riesgo (segundos)
+**Rol**: **Implementación determinista** con **capa dura de seguridad**.  
+**Funciones**: validación de **límites de riesgo**, envío de órdenes con **timeouts/retries**, **reportes** de ejecución y **métricas** (latencia, rechazos, parciales, snapshot de saldos).
 
 ---
 
-### 🔹 Nivel 2: Táctica de Ejecución (Minutos)
-**Rol:** Conversión de decisiones estratégicas en operaciones  
+## 5️⃣ Arquitectura (ASCII)
 
-**Funciones principales:**
-- Composición de señales tácticas
-- Cálculo de tamaño (vol-targeting, Kelly fraccionado)
-- Stops y targets dinámicos
-- Ajustes de posición según liquidez y volatilidad
-
----
-
-### 🔹 Nivel 1: Ejecución y Gestión de Riesgo (Segundos)
-
-Rol: Implementación en tiempo real con capa de seguridad hard-coded y ejecución determinista
-
-Funciones principales:
-- Hard-coded Safety Layer: stop-loss obligatorio, límites de capital por trade, chequeos de liquidez/saldo, exposición y drawdown
-- Ejecución determinista: 1 intento de orden por señal (si no cumple reglas → rechazo automático)
-- Reportes y trazabilidad: `ExecutionReport` publicado en el bus
-- Manejo de errores: timeouts, reintentos, control de errores de red/exchange
-- Métricas: latencia, rechazos/fallas/parciales y snapshot de saldos tras ejecución
-
----
-
-## 5️⃣ Arquitectura del Sistema
-
-```text
+```
 ┌─────────────────────────────────────────┐
 │        NIVEL META-RAZONAMIENTO          │
 │  ┌──────────────┐  ┌─────────────────┐  │
@@ -122,224 +103,195 @@ Funciones principales:
               │ Señales de Trading (Minutos)
               │
 ┌─────────────▼────────────── Nivel Operacional ───────────────┐
-│ Hard-coded Safety Layer + Order Manager (determinista)       │
+│ Hard‑coded Safety Layer + Order Manager (determinista)       │
 │ Executor determinista → Exchange                             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 6️⃣ Conexión entre Niveles
+## 6️⃣ Conexión entre niveles
 
 | Flujo | Descripción |
-|-------|-------------|
-| **Nivel 4 → Nivel 3** | El meta-razonamiento ajusta capital y parámetros globales |
-| **Nivel 3 → Nivel 2** | El análisis estratégico selecciona sub-estrategias y universo de activos |
-| **Nivel 2 → Nivel 1** | La táctica genera señales concretas (qty, stop, target) |
-| **Nivel 1 → Exchange** | El nivel operacional envía y gestiona órdenes en tiempo real |
+|---|---|
+| **L4 → L3** | Ajuste de capital y parámetros globales |
+| **L3 → L2** | Selección de sub‑estrategias y universo de activos |
+| **L2 → L1** | Señales concretas (qty, stop, target) |
+| **L1 → Exchange** | Envío/gestión de órdenes en tiempo real |
 
 ---
 
-## 7️⃣ Estructura de Carpetas
+## 7️⃣ Estructura de carpetas
 
-```text
-HMR/
-│── docs/                # documentación
+```
+HRM/
+│── docs/                 # documentación
 │
-│── storage/                # modulo persistencia
+│── storage/              # módulo de persistencia
 │   ├── csv_writer.py
 │   ├── sqlite_writer.py
 │   └── __init__.py
 │
-├── core/                # utilidades globales
-│   ├── config/          # configs YAML/JSON
+├── core/                 # utilidades globales
+│   ├── config/           # configs YAML/JSON
 │   ├── logging.py
 │   ├── scheduler.py
 │   └── utils.py
 │
-├── comms/               # comunicaciones y eventos
+├── comms/                # comunicaciones y eventos
 │   ├── message_bus.py
 │   ├── schemas.py
-│   └── adapters/        # conectores externos (Kafka, Redis, etc.)
+│   └── adapters/         # conectores externos (Kafka, Redis, etc.)
 │
-├── l4_meta/             # Meta-razonamiento (horas/días)
+├── l4_meta/              # meta-razonamiento (horas/días)
 │   ├── drift_detector.py
 │   ├── strategy_selector.py
 │   ├── portfolio_allocator.py
 │   └── __init__.py
 │
-├── l3_strategy/         # Nivel estratégico (intradiario)
+├── l3_strategy/          # nivel estratégico (intradía)
 │   ├── regime_classifier.py
 │   ├── universe_filter.py
 │   ├── exposure_manager.py
 │   └── __init__.py
 │
-├── l2_tactic/           # Nivel táctico (señales, sizing)
+├── l2_tactic/            # nivel táctico (señales, sizing)
 │   ├── signal_generator.py
 │   ├── position_sizer.py
 │   ├── risk_controls.py
 │   └── __init__.py
 │
-├── l1_operational/      # Nivel operacional (OMS/EMS) - LIMPIO Y DETERMINISTA
-│   ├── models.py        # Estructuras (Signal, ExecutionReport, RiskAlert, OrderIntent)
-│   ├── config.py        # Configuración centralizada de límites de riesgo
-│   ├── bus_adapter.py   # Bus asíncrono (tópicos: signals, reports, alerts)
-│   ├── order_manager.py # Orquesta validación hard-coded → ejecución determinista → reporte
-│   ├── risk_guard.py    # Valida límites (stop-loss, capital, liquidez, exposición)
-│   ├── executor.py      # Ejecuta órdenes con timeouts/retry y métricas
-│   ├── data_feed.py     # Obtiene datos de mercado y saldos
-│   ├── binance_client.py # Cliente de Binance (sandbox por defecto)
-│   ├── test_clean_l1.py # Pruebas de limpieza y determinismo
-│   ├── README.md        # Documentación específica de L1
-│   └── requirements.txt # Dependencias específicas de L1
+├── l1_operational/       # nivel operacional (OMS/EMS) - limpio y determinista
+│   ├── models.py         # Signal, ExecutionReport, RiskAlert, OrderIntent
+│   ├── config.py         # límites de riesgo centralizados
+│   ├── bus_adapter.py    # bus asíncrono (topics: signals, reports, alerts)
+│   ├── order_manager.py  # orquesta validación → ejecución → reporte
+│   ├── risk_guard.py     # stop-loss, capital, liquidez, exposición
+│   ├── executor.py       # timeouts/retry + métricas
+│   ├── data_feed.py      # datos de mercado y saldos
+│   ├── binance_client.py # cliente Binance (sandbox por defecto)
+│   ├── test_clean_l1.py  # pruebas de limpieza y determinismo
+│   ├── README.md         # doc específica de L1
+│   └── requirements.txt  # dependencias L1
 │
-├── data/                # ingestión y almacenamiento
-│   ├── connectors/      # binance, dydx, etc.
+├── data/                 # ingestión y almacenamiento
+│   ├── connectors/       # binance, dydx, etc.
 │   ├── loaders.py
-│   ├── storage/         # parquet/csv
+│   ├── storage/          # parquet/csv
 │   └── __init__.py
 │
-├── risk/                # librería transversal de riesgo
+├── risk/                 # librería transversal de riesgo
 │   ├── limits.py
 │   ├── var_es.py
 │   ├── drawdown.py
 │   └── __init__.py
 │
-├── monitoring/          # métricas y reporting
+├── monitoring/           # métricas y reporting
 │   ├── dashboards/
 │   ├── alerts.py
 │   ├── telemetry.py
 │   └── __init__.py
 │
-├── tests/               # unit & integration tests
-│ └─ backtester.py
-└── main.py              # orquestador central
+├── tests/                # unit & integration tests
+│   └── backtester.py
+└── main.py               # orquestador central
 ```
 
----
-
-## 8️⃣ Puntos fuertes de este diseño
-
-- Separación clara por niveles (`l4_meta/`, `l3_strategy/`, etc.) → cada capa se puede probar y mejorar de forma independiente.  
-- `comms/` centralizado → define cómo se pasan mensajes entre módulos (JSON/Protobuf, colas asyncio, etc.).  
-- `data/` desacoplado → cambiar de CEX a DEX no rompe los niveles.  
-- `risk/` transversal → tanto L2 (stops, sizing) como L1 (hard limits) usan la misma librería.  
-- `monitoring/` → logs, métricas en tiempo real, dashboards.  
-- `core/` → configuración, logging, utilidades comunes.  
+> **Nota:** Esta estructura resume el proyecto real y es suficiente para navegar y extender el código.
 
 ---
 
-## 9️⃣ Flujo de Mensajes entre Carpetas
+## 8️⃣ Flujo de mensajes y *state* global
 
-```text
-Todos los niveles trabajan sobre un **único `state`** en forma de diccionario
-Cada ciclo, el sistema mantiene y actualiza un state con:
+Cada ciclo del sistema trabaja sobre un **único `state`** (diccionario) y **cada nivel actualiza su sección**. Esto garantiza **trazabilidad** y facilita **debugging/backtesting**.
 
+```python
 state = {
-  "mercado": {...},       # precios actuales
-  "estrategia": "...",    # estrategia activa (ej: agresiva/defensiva)
-  "portfolio": {...},     # asignación de capital (en unidades)
-  "universo": [...],      # activos disponibles
-  "exposicion": {...},    # % de exposición por activo
-  "senales": {...},       # señales tácticas
-  "ordenes": [...],       # órdenes ejecutadas en L1
-  "riesgo": {...},        # chequeo de riesgo
-  "deriva": False,        # drift detection
-  "ciclo_id": 1           # número de ciclo
+    "mercado": {...},       # precios actuales
+    "estrategia": "...",    # estrategia activa (agresiva/defensiva)
+    "portfolio": {...},     # asignación de capital (unidades)
+    "universo": [...],      # activos disponibles
+    "exposicion": {...},    # % exposición por activo
+    "senales": {...},       # señales tácticas
+    "ordenes": [...],       # órdenes ejecutadas en L1
+    "riesgo": {...},        # chequeo de riesgo
+    "deriva": False,        # drift detection
+    "ciclo_id": 1           # número de ciclo
 }
+```
 
-Cada nivel actualiza su parte correspondiente del state.
-Esto asegura trazabilidad y facilita debugging/backtesting.
-
-## 9️⃣ Flujo de Mensajes L1
-L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange
-                                    ↓
-                              Execution Report → Bus Adapter → L2/L3
+**Flujo L1 (ejecución determinista):**  
+`L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange → Execution Report → Bus Adapter → L2/L3`
 
 ---
 
-## 🔒 L1_operational: LIMPIO Y DETERMINISTA
+## 9️⃣ L1_operational — “limpio y determinista”
 
-**L1 es el nivel de ejecución que SOLO ejecuta órdenes seguras, sin tomar decisiones estratégicas ni tácticas.**
+> **L1 SOLO ejecuta órdenes seguras.** No decide estrategia ni táctica.
 
-### 🚫 Lo que L1 NO hace:
-- ❌ **No modifica cantidades** de órdenes
-- ❌ **No ajusta precios** de órdenes  
-- ❌ **No toma decisiones** de timing de ejecución
-- ❌ **No actualiza portfolio** (responsabilidad de L2/L3)
-- ❌ **No actualiza datos** de mercado (responsabilidad de L2/L3)
+**Lo que L1 _no_ hace**
+- ❌ No modifica cantidades
+- ❌ No ajusta precios
+- ❌ No decide *timing*
+- ❌ No actualiza portfolio
+- ❌ No actualiza datos de mercado
 
-### ✅ Lo que L1 SÍ hace:
-- ✅ **Valida límites de riesgo** antes de ejecutar
-- ✅ **Ejecuta órdenes** pre-validadas en el exchange
-- ✅ **Genera reportes** de ejecución detallados
-- ✅ **Mantiene trazabilidad** completa de todas las operaciones
+**Lo que L1 _sí_ hace**
+- ✅ Valida **límites de riesgo** antes de ejecutar
+- ✅ **Ejecuta** órdenes pre‑validadas en el exchange
+- ✅ **Genera reportes** detallados de ejecución
+- ✅ Mantiene **trazabilidad completa**
 
-### 🏗️ Nueva Arquitectura de L1:
-```
-L2/L3 (Señales) → Bus Adapter → Order Manager → Risk Guard → Executor → Exchange
-                                    ↓
-                              Execution Report → Bus Adapter → L2/L3
-```
-
-### 🧪 Verificación de Limpieza:
+**Verificación de limpieza**
 ```bash
-python run_l1_tests.py
+python l1_operational/test_clean_l1.py
 ```
-
-Las pruebas verifican que L1 está completamente limpio y determinista.
-
-## 9️⃣ Logging y Telemetría
-
-Logging estructurado (JSON) → usando python-json-logger
-Telemetry interna (monitoring/telemetry.py):
-incr(metric_name) → contador
-gauge(metric_name, value) → métrica instantánea
-timing(metric_name, start_time) → latencia
-
-## 9️⃣ Dashboard en Consola
-
-Usamos rich para renderizar un mini-dashboard en cada ciclo
-
-## 9️⃣ Persistencia de histórico
-
-Cada ciclo se guarda en dos formatos:
-CSV (data/historico.csv) → todas las variables del estado global por ciclo
-SQLite (data/historico.db) → tabla ciclos con los mismos datos
-
-Esto permite:
-Exportar resultados para análisis en Pandas / Excel
-Reproducir backtests
-Consultar con SQL el rendimiento de la estrategia
 
 ---
 
-## 📚 Dataset y Features (BTC/USDT)
+## 🔌 Mensajería, logging y telemetría
 
-Generación de features en un solo módulo limpio: `data/loaders.py`.
+- **Mensajería**: `comms/` define **esquemas** y el **bus** (JSON/Protobuf; colas asyncio; adapters Kafka/Redis si se desea).
+- **Logging estructurado**: JSON (p. ej. `python-json-logger`).
+- **Telemetría (`monitoring/telemetry.py`)**:  
+  - `incr(name)` → contadores  
+  - `gauge(name, value)` → métricas instantáneas  
+  - `timing(name, start)` → latencias
 
-- Soporta BTC/USDT o BTC/USD siempre que el DataFrame tenga índice datetime y columna `close` (opcional `volume`).
-- Features incluidas:
-  - Precios: `delta_close`, `ema_10/20`, `sma_10/20`.
-  - Volumen: `vol_rel` relativo a media de N (por defecto 20).
-  - Momentum: `rsi`, `macd`, `macd_signal`, `macd_hist`.
-  - Multitimeframe: 1m + 5m (sufijos `_5m`), reindexado a timestamps de 1m.
+- **Dashboard en consola**: con `rich` para un mini‑panel por ciclo.
 
-Uso básico para generar y exportar dataset train/test:
+---
 
+## 🗃️ Persistencia de histórico
+
+Cada ciclo se guarda en:
+- **CSV**: `data/historico.csv` (todas las variables del `state`)
+- **SQLite**: `data/historico.db` (tabla `ciclos` con los mismos datos)
+
+Esto permite **exportar a Pandas/Excel**, **reproducir backtests** y **consultar con SQL**.
+
+---
+
+## 🧪 Dataset & features (BTC/USDT)
+
+Generador de *features* en `data/loaders.py` (limpio y autocontenido).  
+Soporta BTC/USDT o BTC/USD con **índice datetime** y columna **`close`** (opcional `volume`).
+
+**Features incluidas**
+- **Precio**: `delta_close`, `ema_10/20`, `sma_10/20`
+- **Volumen**: `vol_rel` vs. media *N* (20 por defecto)
+- **Momentum**: `rsi`, `macd`, `macd_signal`, `macd_hist`
+- **Multi‑timeframe**: 1m + 5m (sufijos `_5m`, reindex 1m)
+
+**Uso básico**
 ```python
 import pandas as pd
 from data.loaders import prepare_btc_features
 
-# 1) Cargar velas 1m (de tu exchange o CSV)
-#    Requiere índice datetime y columna 'close'. 'volume' es opcional.
-df_1m = pd.read_csv(
-    "data/btc_1m.csv",
-    parse_dates=["timestamp"],
-    index_col="timestamp"
-)
+# 1) Cargar velas 1m con índice datetime y columna 'close'
+df_1m = pd.read_csv("data/btc_1m.csv", parse_dates=["timestamp"], index_col="timestamp")
 
-# 2) Generar features 1m + 5m y dividir temporalmente (80/20 por defecto)
+# 2) Generar features 1m+5m y split temporal (80/20 por defecto)
 train, test = prepare_btc_features(df_1m, test_size=0.2)
 
 # 3) Guardar datasets
@@ -347,17 +299,77 @@ train.to_csv("data/btc_features_train.csv")
 test.to_csv("data/btc_features_test.csv")
 ```
 
-Notas:
-- Si tienes velas de 5m separadas, puedes pasarlas como segundo parámetro para evitar resampleo:
-```python
-from data.loaders import prepare_btc_features
-df_5m = pd.read_csv("data/btc_5m.csv", parse_dates=["timestamp"], index_col="timestamp")
-train, test = prepare_btc_features(df_1m, df_5m=df_5m, test_size=0.2)
-```
-- Si tu CSV trae `BTC_close`, `normalize_btc_columns` lo mapea a `close` automáticamente.
+> Si ya tienes velas 5m, puedes pasarlas como `df_5m` y evitar resampleo.  
+> Si tu CSV trae `BTC_close`, `normalize_btc_columns` lo mapea a `close` automáticamente.
 
 ---
 
-✍️ **Autor:** Equipo de desarrollo HRM  
-📌 **Versión:** 1.0  
-📅 **Última actualización:** 2025  
+## ⚙️ Puesta en marcha
+
+### Requisitos
+- Python 3.10+ recomendado
+- Cuenta de exchange (modo **sandbox** si es posible) si vas a **ejecutar** L1
+- Credenciales/API Keys (usa variables de entorno o `.env`)
+- `pip`, `venv` o `uv` (opcional)
+
+### Instalación rápida
+```bash
+# 1) Clonar
+git clone https://github.com/t3rm1nus/HRM.git
+cd HRM
+
+# 2) Entorno
+python -m venv .venv && source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
+
+# 3) Dependencias (L1)
+pip install -r l1_operational/requirements.txt
+
+# 4) (Opcional) Dependencias extra según conectores/adapters
+# pip install -r requirements.txt  # si existe en la raíz / módulos
+```
+
+### Ejecución (modo demo)
+```bash
+python main.py
+```
+Configura en `core/config/` y variables de entorno los parámetros de conexión y límites de riesgo.
+
+---
+
+## ✅ Buenas prácticas de riesgo (resumen)
+
+- **Hard limits** en L1: stop‑loss obligatorio, límites de capital por trade, exposición máxima, chequeos de liquidez/saldo y drawdown.
+- **Determinismo** en ejecución: una oportunidad de orden por señal; si no cumple reglas → **rechazo** y **reporte**.
+- **Separación de responsabilidades**: señal (L2/L3) ≠ ejecución (L1).
+- **Backtesting** con histórico persistido y *state* reproducible.
+
+---
+
+## 🧩 Tests e integración
+
+- **Pruebas de limpieza L1**: `l1_operational/test_clean_l1.py`
+- **Backtester** de extremo a extremo: `tests/backtester.py`
+- **Métricas/alertas**: `monitoring/`
+
+---
+
+## 📈 Roadmap (alto nivel)
+
+- [ ] Meta‑aprendizaje para **selección dinámica de estrategias** (L4)
+- [ ] Mejores **clasificadores de régimen** (L3)
+- [ ] **Ensamble multi‑señal** robusto (L2)
+- [ ] Integración multi‑exchange/DEX y **simulador de *slippage*** (L1)
+- [ ] Dashboards enriquecidos (web) y **alertas proactivas**
+
+---
+
+## 👥 Autoría y licencia
+
+- Autoría: **Equipo de desarrollo HRM**
+- Versión: **1.0**
+- Última actualización: **2025**
+- Licencia: ver archivo `LICENSE` si aplica
+
+---
+
+> **Envío a otras IA**: Este README está diseñado para ser **autosuficiente**. Describe jerarquía, arquitectura, flujos, estructura de código, dataset, telemetría, persistencia y puesta en marcha para que un agente externo pueda **comprender y operar** el proyecto sin consultar otros documentos.
