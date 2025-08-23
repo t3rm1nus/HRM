@@ -1,16 +1,18 @@
+# procesar_l4.py
 import logging
-from typing import Dict, Any
 
 logger = logging.getLogger("l4_meta")
 
-def procesar_l4(state: Dict[str, Any]) -> Dict[str, Any]:
+def procesar_l4(state: dict) -> dict:
     """
-    Procesa la capa meta (L4).
+    Procesa la capa Meta (L4) - Placeholder.
+    No modifica el portafolio.
     Args:
         state: Estado actual del sistema.
     Returns:
-        Estado actualizado.
+        Estado sin cambios.
     """
-    logger.info("🚀 Procesando capa L4 - Meta")
-    # Placeholder: No portfolio modification
+    logger.info("[L4] Procesando capa Meta (placeholder)")
+    logger.debug(f"[L4] Portfolio de entrada: {state['portfolio']}")
+    logger.debug(f"[L4] Portfolio de salida: {state['portfolio']}")
     return state

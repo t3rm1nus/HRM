@@ -1,4 +1,10 @@
-from .csv_writer import guardar_estado_csv
-from .sqlite_writer import guardar_estado_sqlite
+# storage/__init__.py
+import logging
 
-__all__ = ["guardar_estado_csv", "guardar_estado_sqlite"]
+logger = logging.getLogger("storage")
+
+def guardar_estado_csv(state: dict):
+    logger.debug("[STORAGE] Guardando estado en CSV (placeholder)")
+
+def guardar_estado_sqlite(state: dict):
+    logger.debug("[STORAGE] Guardando estado en SQLite (placeholder)")

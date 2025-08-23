@@ -8,16 +8,15 @@ class Telemetry:
         self.gauges = {}
         self.timings = []
 
-    def incr(self, name: str, val: int = 1):
-        self.counters[name] += val
+    def incr(self, metric: str):
+        pass
 
-    def gauge(self, name: str, val: float):
-        self.gauges[name] = val
+    def timing(self, metric: str, start_time: float):
+        pass
 
-    def timing(self, name: str, start_ts: float):
-        elapsed = time.time() - start_ts
-        self.timings.append((name, elapsed))
-
+    def gauge(self, metric: str, value: float):
+        pass
+    
     def snapshot(self):
         return {
             "counters": dict(self.counters),

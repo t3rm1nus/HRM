@@ -1,4 +1,4 @@
-# l3_strategy.py
+# procesar_l3.py
 import logging
 import time
 from typing import Dict, Any
@@ -8,12 +8,14 @@ logger = logging.getLogger("l3_strategy")
 def procesar_l3(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Procesa la capa estratégica (L3), convirtiendo señales tácticas en órdenes.
+    No modifica el portafolio.
     Args:
         state: Estado actual del sistema.
     Returns:
         Estado actualizado con órdenes.
     """
     logger.info("🚀 Procesando capa L3 - Estratégica")
+    logger.debug(f"[L3] Portfolio de entrada: {state['portfolio']}")
     ordenes = []
 
     # Obtener señales tácticas
@@ -39,7 +41,7 @@ def procesar_l3(state: Dict[str, Any]) -> Dict[str, Any]:
             # Crear orden
             orden = {
                 "id": f"order_{symbol}_{len(ordenes)}",
-                "symbol": symbol,
+                "symbol": signal["symbol"],
                 "side": signal["direction"],
                 "amount": amount,
                 "price": price,
@@ -58,8 +60,9 @@ def procesar_l3(state: Dict[str, Any]) -> Dict[str, Any]:
             ordenes.append(orden)
             logger.info(f"[L3] Generada orden para {symbol}: {signal['direction']} {amount} @ {price}")
         except Exception as e:
-            logger.error(f"[L3] Error procesando señal para {symbol}: {e}", exc_info=True)
+            logger.error(f"[L3] Error procesando señal para {symbol}: {str(e)}", exc_info=True)
 
     state["ordenes"] = ordenes
     logger.debug(f"[L3] Generadas {len(ordenes)} órdenes: {ordenes}")
+    logger.debug(f"[L3] Portfolio de salida: {state['portfolio']}")
     return state

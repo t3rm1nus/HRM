@@ -25,11 +25,11 @@ logger = setup_logger(level=logging.DEBUG)  # Nivel DEBUG para más detalles
 # --- Configuración global ---
 config_l2 = L2Config()
 
-def validate_portfolio(portfolio, valid_symbols):
+def validate_portfolio(portfolio, valid_symbols, stage: str):
     invalid = {symbol for symbol in portfolio if symbol not in valid_symbols}
     if invalid:
-        logger.error(f"Invalid symbols in portfolio before L1: {invalid}")
-        raise ValueError(f"Invalid symbols in portfolio before L1: {invalid}")
+        logger.error(f"Invalid symbols in portfolio at {stage}: {', '.join(invalid)}")
+        raise ValueError(f"Invalid symbols in portfolio at {stage}: {', '.join(invalid)}")
 
 async def tick(state_holder: dict):
     try:
@@ -46,8 +46,9 @@ async def tick(state_holder: dict):
         try:
             state = procesar_l4(state)
             logger.debug(f"[L4] Portfolio después de procesar_l4: {state['portfolio']}")
+            validate_portfolio(state["portfolio"], state["mercado"].keys(), "after L4")
         except Exception as e:
-            logger.error(f"[L4] Error en procesar_l4: {e}", exc_info=True)
+            logger.error(f"[L4] Error en procesar_l4: {str(e)}", exc_info=True)
             raise
 
         logger.info("[L3] Ejecutando capa Strategy...")
@@ -55,8 +56,9 @@ async def tick(state_holder: dict):
             state = procesar_l3(state)
             logger.debug(f"[L3] Portfolio después de procesar_l3: {state['portfolio']}")
             logger.debug(f"[L3] Órdenes generadas: {state.get('ordenes', [])}")
+            validate_portfolio(state["portfolio"], state["mercado"].keys(), "after L3")
         except Exception as e:
-            logger.error(f"[L3] Error en procesar_l3: {e}", exc_info=True)
+            logger.error(f"[L3] Error en procesar_l3: {str(e)}", exc_info=True)
             raise
 
         logger.info("[L2] Ejecutando capa Tactic...")
@@ -64,8 +66,9 @@ async def tick(state_holder: dict):
             state = procesar_l2(state, config_l2)
             logger.debug(f"[L2] Portfolio después de procesar_l2: {state['portfolio']}")
             logger.debug(f"[L2] Señales generadas: {state.get('senales', {}).get('signals', [])}")
+            validate_portfolio(state["portfolio"], state["mercado"].keys(), "after L2")
         except Exception as e:
-            logger.error(f"[L2] Error en procesar_l2: {e}", exc_info=True)
+            logger.error(f"[L2] Error en procesar_l2: {str(e)}", exc_info=True)
             raise
 
         # Validar state["portfolio"] antes de procesar_l1
@@ -74,8 +77,8 @@ async def tick(state_holder: dict):
         portfolio_symbols = set(state["portfolio"].keys())
         if not portfolio_symbols.issubset(valid_symbols):
             invalid_symbols = portfolio_symbols - valid_symbols
-            logger.error(f"Invalid symbols in portfolio before L1: {invalid_symbols}")
-            raise ValueError(f"Invalid symbols in portfolio before L1: {invalid_symbols}")
+            logger.error(f"Invalid symbols in portfolio before L1: {', '.join(invalid_symbols)}")
+            raise ValueError(f"Invalid symbols in portfolio before L1: {', '.join(invalid_symbols)}")
 
         logger.info("[L1] Ejecutando capa Operational...")
         try:
@@ -86,7 +89,7 @@ async def tick(state_holder: dict):
             logger.debug(f"[L1] Portfolio después de procesar_l1: {state['portfolio']}")
             logger.debug(f"[L1] Órdenes procesadas: {state.get('ordenes', [])}")
         except Exception as e:
-            logger.error(f"[L1] Error en procesar_l1: {e}", exc_info=True)
+            logger.error(f"[L1] Error en procesar_l1: {str(e)}", exc_info=True)
             raise
 
         # --- métricas ---
@@ -97,7 +100,7 @@ async def tick(state_holder: dict):
             portfolio_symbols = set(state["portfolio"].keys())
             if not portfolio_symbols.issubset(valid_symbols):
                 invalid_symbols = portfolio_symbols - valid_symbols
-                raise ValueError(f"Invalid symbols in portfolio: {invalid_symbols}")
+                raise ValueError(f"Invalid symbols in portfolio: {', '.join(invalid_symbols)}")
             
             valor_portfolio = sum(
                 qty * state["mercado"][a]["close"].iloc[-1] for a, qty in state["portfolio"].items()
@@ -105,7 +108,7 @@ async def tick(state_holder: dict):
             telemetry.gauge("valor_portfolio", valor_portfolio)
             logger.debug(f"[METRICS] Valor del portafolio: {valor_portfolio}")
         except Exception as e:
-            logger.error(f"Error calculating portfolio value: {e}", exc_info=True)
+            logger.error(f"Error calculating portfolio value: {str(e)}", exc_info=True)
             raise
 
         logger.info(
@@ -125,7 +128,7 @@ async def tick(state_holder: dict):
             logger.debug("[DASHBOARD] Renderizando estado actual")
             render_dashboard(state)
         except Exception as e:
-            logger.error(f"[DASHBOARD] Error en render_dashboard: {e}", exc_info=True)
+            logger.error(f"[DASHBOARD] Error en render_dashboard: {str(e)}", exc_info=True)
             raise
 
         # --- persistencia ---
@@ -135,13 +138,13 @@ async def tick(state_holder: dict):
             logger.debug("[STORAGE] Guardando estado en SQLite...")
             guardar_estado_sqlite(state)
         except Exception as e:
-            logger.error(f"[STORAGE] Error en almacenamiento: {e}", exc_info=True)
+            logger.error(f"[STORAGE] Error en almacenamiento: {str(e)}", exc_info=True)
             raise
 
         state_holder["state"] = state
 
     except Exception as e:
-        logger.error(f"[TICK] Error en ciclo {state['ciclo_id']}: {e}", exc_info=True)
+        logger.error(f"[TICK] Error en ciclo {state['ciclo_id']}: {str(e)}", exc_info=True)
         raise
 
 async def tick_wrapper(holder: dict):
@@ -186,21 +189,26 @@ async def main():
     }
 
     logger.info(f"[MAIN] Estado inicial de portfolio: {portfolio}")
+    logger.debug(f"[MAIN] Símbolos válidos: {valid_symbols}")
     logger.info("[MAIN] Iniciando loop principal con ciclo cada 10s...")
 
     for cycle in range(1, 2):  # Single cycle for testing
         logger.info(f"[TICK] Iniciando ciclo {cycle}")
+        logger.debug(f"[MAIN] Portfolio antes de L4: {state['portfolio']}")
         logger.info("[L4] Ejecutando capa Meta...")
         state = procesar_l4(state)
+        logger.debug(f"[MAIN] Portfolio después de L4: {state['portfolio']}")
+        validate_portfolio(state["portfolio"], valid_symbols, "main after L4")
+        
         logger.info("[L3] Ejecutando capa Strategy...")
         state = procesar_l3(state)
+        logger.debug(f"[MAIN] Portfolio después de L3: {state['portfolio']}")
+        validate_portfolio(state["portfolio"], valid_symbols, "main after L3")
+        
         logger.info("[L2] Ejecutando capa Tactic...")
-        
-        # Validate portfolio
-        validate_portfolio(portfolio, valid_symbols)
-        
-        # Process L2 with config_l2
         state = procesar_l2(state, config_l2)
+        logger.debug(f"[MAIN] Portfolio después de L2: {state['portfolio']}")
+        validate_portfolio(state["portfolio"], valid_symbols, "main after L2")
         
         logger.info("[VALIDATION] Validando state['portfolio'] antes de L1...")
         await tick({"state": state})  # Ejecutar tick para procesar L1 y posteriores
