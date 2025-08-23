@@ -1,61 +1,54 @@
-# bus_integration.py - L2 Tactical Bus Integration
+# bus_adapter.py - L2 Tactical Bus Adapter (adaptado para multiasset: BTC y ETH)
+# Nota: Renombrado de bus_integration.py para coincidir con la solicitud, y adaptado para manejar múltiples símbolos.
 
-"""
-bus_integration.py - L2 Tactical Bus Integration
-
-Integración de L2 con el MessageBus del sistema HRM:
-- Recepción de decisiones estratégicas de L3
-- Envío de señales tácticas a L1
-- Manejo de confirmaciones y reportes
-- Gestión de alertas de riesgo
-- Comunicación asíncrona entre niveles
-"""
+from __future__ import annotations
 
 import asyncio
 import logging
-import json
-from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
-# Imports del sistema HRM
+# HRM bus
 from comms.message_bus import MessageBus, Message
-from comms.schemas import MessageSchema
+from comms.schemas import MessageSchema  # (si tu sistema lo usa para validación)
 
-# Imports locales L2
+# L2 core
 from .models import (
-    TacticalSignal, PositionSize, MarketFeatures, RiskMetrics,
-    StrategicDecision, L2State
+    TacticalSignal,
+    PositionSize,
+    MarketFeatures,
+    RiskMetrics,
+    StrategicDecision,
+    L2State,
 )
-from .signal_generator import TacticalSignalGenerator
+from .signal_generator import SignalGenerator  # Adaptado: usa SignalGenerator multiasset
 from .position_sizer import PositionSizerManager
 from .risk_controls import RiskControlManager, RiskAlert
 from .config import L2Config
-
 
 logger = logging.getLogger(__name__)
 
 
 class MessageType(Enum):
-    """Tipos de mensajes L2"""
-    # Incoming (de L3)
+    # Incoming (L3 -> L2)
     STRATEGIC_DECISION = "l3.strategic_decision"
     MARKET_REGIME_UPDATE = "l3.market_regime_update"
     PORTFOLIO_ALLOCATION = "l3.portfolio_allocation"
     RISK_BUDGET_UPDATE = "l3.risk_budget_update"
-    
-    # Outgoing (a L1)
+
+    # Outgoing (L2 -> L1)
     TACTICAL_SIGNAL = "l2.tactical_signal"
     POSITION_SIZE_RECOMMENDATION = "l2.position_size"
     RISK_ALERT = "l2.risk_alert"
     STOP_LOSS_UPDATE = "l2.stop_loss_update"
-    
-    # Bidirectional
+
+    # Bidirectional (L1 <-> L2)
     EXECUTION_REPORT = "l1.execution_report"
     POSITION_UPDATE = "l1.position_update"
     MARKET_DATA_UPDATE = "data.market_update"
-    
+
     # Internal L2
     SIGNAL_GENERATED = "l2.signal_generated"
     RISK_CHECK_COMPLETED = "l2.risk_check_completed"
@@ -64,16 +57,14 @@ class MessageType(Enum):
 
 @dataclass
 class L2Message:
-    """Mensaje estándar para L2"""
     message_type: MessageType
     timestamp: datetime
     source: str = "l2_tactical"
     correlation_id: Optional[str] = None
     data: Dict[str, Any] = None
     metadata: Dict[str, Any] = None
-    
+
     def to_bus_message(self) -> Message:
-        """Convertir a formato MessageBus"""
         return Message(
             topic=self.message_type.value,
             payload={
@@ -81,632 +72,369 @@ class L2Message:
                 "source": self.source,
                 "correlation_id": self.correlation_id,
                 "data": self.data or {},
-                "metadata": self.metadata or {}
-            }
+                "metadata": self.metadata or {},
+            },
         )
-    
+
     @classmethod
-    def from_bus_message(cls, message: Message) -> 'L2Message':
-        """Crear desde Message del bus"""
-        payload = message.payload
+    def from_bus_message(cls, message: Message) -> "L2Message":
+        p = message.payload
         return cls(
             message_type=MessageType(message.topic),
-            timestamp=datetime.fromisoformat(payload["timestamp"]),
-            source=payload.get("source", "unknown"),
-            correlation_id=payload.get("correlation_id"),
-            data=payload.get("data", {}),
-            metadata=payload.get("metadata", {})
+            timestamp=datetime.fromisoformat(p["timestamp"]),
+            source=p.get("source", "unknown"),
+            correlation_id=p.get("correlation_id"),
+            data=p.get("data", {}),
+            metadata=p.get("metadata", {}),
         )
 
 
 class L2BusAdapter:
-    """Adaptador principal para comunicación con MessageBus"""
-    
+    """
+    Adaptador de integración del nivel L2 con el MessageBus:
+      - Recibe decisiones de L3, market updates y estado de posiciones de L1
+      - Genera señales tácticas, calcula sizing, evalúa riesgo y publica a L1
+      - Publica alertas y mensajes de estado/telemetría
+    Adaptado para multiasset: maneja múltiples símbolos en handlers y procesamiento.
+    """
+
     def __init__(
         self,
         message_bus: MessageBus,
         config: L2Config,
-        signal_generator: Optional[TacticalSignalGenerator] = None,
+        signal_generator: Optional[SignalGenerator] = None,
         position_sizer: Optional[PositionSizerManager] = None,
-        risk_manager: Optional[RiskControlManager] = None
+        risk_manager: Optional[RiskControlManager] = None,
     ):
         self.bus = message_bus
         self.config = config
-        
-        # Core L2 components
-        self.signal_generator = signal_generator or TacticalSignalGenerator(config)
+
+        self.signal_generator = signal_generator or SignalGenerator(config)  # Usa SignalGenerator multiasset
         self.position_sizer = position_sizer or PositionSizerManager(config)
         self.risk_manager = risk_manager or RiskControlManager(config)
-        
-        # State management
+
         self.l2_state = L2State()
         self.pending_decisions: Dict[str, StrategicDecision] = {}
-        self.active_correlations: Dict[str, str] = {}  # correlation_id -> original_message_id
-        
-        # Processing flags
+        self.active_correlations: Dict[str, str] = {}
+
         self.is_running = False
         self.processing_lock = asyncio.Lock()
-        
-        # Metrics and monitoring
+
         self.message_counts: Dict[str, int] = {}
-        self.processing_times: Dict[str, float] = {}
-        
-        logger.info("Initialized L2BusAdapter")
-    
+        self.processing_times: Dict[str, List[float]] = {}
+
+        logger.info("Initialized L2BusAdapter for multiasset")
+
+    # ---------- lifecycle ----------
+
     async def start(self):
-        """Iniciar el adaptador y suscribirse a topics"""
-        
         if self.is_running:
             logger.warning("L2BusAdapter already running")
             return
-        
         self.is_running = True
-        
-        # Subscribe to incoming topics
         await self._subscribe_to_topics()
-        
-        # Start background tasks
         asyncio.create_task(self._heartbeat_task())
         asyncio.create_task(self._cleanup_task())
-        
         logger.info("L2BusAdapter started successfully")
-    
+
     async def stop(self):
-        """Detener el adaptador"""
-        
         self.is_running = False
         logger.info("L2BusAdapter stopped")
-    
+
     async def _subscribe_to_topics(self):
-        """Suscribirse a topics relevantes"""
-        
-        # Topics de L3 (incoming)
-        await self.bus.subscribe(
-            MessageType.STRATEGIC_DECISION.value,
-            self._handle_strategic_decision
-        )
-        
-        await self.bus.subscribe(
-            MessageType.MARKET_REGIME_UPDATE.value,
-            self._handle_regime_update
-        )
-        
-        await self.bus.subscribe(
-            MessageType.PORTFOLIO_ALLOCATION.value,
-            self._handle_portfolio_allocation
-        )
-        
-        # Topics de L1 (bidirectional)
-        await self.bus.subscribe(
-            MessageType.EXECUTION_REPORT.value,
-            self._handle_execution_report
-        )
-        
-        await self.bus.subscribe(
-            MessageType.POSITION_UPDATE.value,
-            self._handle_position_update
-        )
-        
-        # Market data
-        await self.bus.subscribe(
-            MessageType.MARKET_DATA_UPDATE.value,
-            self._handle_market_data_update
-        )
-        
-        logger.info("Subscribed to all L2 topics")
-    
+        await self.bus.subscribe(MessageType.STRATEGIC_DECISION.value, self._handle_strategic_decision)
+        await self.bus.subscribe(MessageType.MARKET_REGIME_UPDATE.value, self._handle_regime_update)
+        await self.bus.subscribe(MessageType.PORTFOLIO_ALLOCATION.value, self._handle_portfolio_allocation)
+        await self.bus.subscribe(MessageType.EXECUTION_REPORT.value, self._handle_execution_report)
+        await self.bus.subscribe(MessageType.POSITION_UPDATE.value, self._handle_position_update)
+        await self.bus.subscribe(MessageType.MARKET_DATA_UPDATE.value, self._handle_market_data_update)
+        logger.info("Subscribed to L2 topics")
+
+    # ---------- handlers incoming (adaptados para multiasset) ----------
+
     async def _handle_strategic_decision(self, message: Message):
-        """Procesar decisión estratégica de L3"""
-        
-        start_time = datetime.now()
-        correlation_id = self._generate_correlation_id()
-        
+        start = datetime.utcnow()
+        corr_id = self._new_correlation_id()
         try:
-            # Convert message
-            l2_message = L2Message.from_bus_message(message)
-            self._update_message_counts(l2_message.message_type)
-            
-            # Extract strategic decision
-            decision_data = l2_message.data
-            strategic_decision = StrategicDecision(
-                regime=decision_data.get("regime", "neutral"),
-                target_exposure=decision_data.get("target_exposure", 0.5),
-                risk_appetite=decision_data.get("risk_appetite", "moderate"),
-                preferred_assets=decision_data.get("preferred_assets", ["BTC/USDT"]),
-                time_horizon=decision_data.get("time_horizon", "1h"),
-                metadata=decision_data.get("metadata", {})
+            l2msg = L2Message.from_bus_message(message)
+            self._bump_count(l2msg.message_type)
+            d = l2msg.data or {}
+            decision = StrategicDecision(
+                regime=d.get("regime", "neutral"),
+                target_exposure=d.get("target_exposure", 0.5),
+                risk_appetite=d.get("risk_appetite", "moderate"),
+                preferred_assets=d.get("preferred_assets", self.config.signals.universe),  # Usa universo multiasset
+                time_horizon=d.get("time_horizon", "1h"),
+                metadata=d.get("metadata", {}),
             )
-            
-            logger.info(
-                f"Received strategic decision: regime={strategic_decision.regime}, "
-                f"exposure={strategic_decision.target_exposure:.2f}"
-            )
-            
-            # Store decision for processing
-            self.pending_decisions[correlation_id] = strategic_decision
-            self.active_correlations[correlation_id] = l2_message.correlation_id or correlation_id
-            
-            # Process decision asynchronously
-            asyncio.create_task(self._process_strategic_decision(strategic_decision, correlation_id))
-            
+            logger.info(f"Strategic decision: regime={decision.regime} exposure={decision.target_exposure:.2f} assets={decision.preferred_assets}")
+            self.pending_decisions[corr_id] = decision
+            self.active_correlations[corr_id] = l2msg.correlation_id or corr_id
+            asyncio.create_task(self._process_strategic_decision(decision, corr_id))
         except Exception as e:
             logger.error(f"Error handling strategic decision: {e}")
-            await self._send_error_response(correlation_id, str(e))
-        
-        finally:
-            # Update processing time
-            processing_time = (datetime.now() - start_time).total_seconds()
-            self._update_processing_times("strategic_decision", processing_time)
-    
-    async def _process_strategic_decision(
-        self,
-        decision: StrategicDecision,
-        correlation_id: str
-    ):
-        """Procesar decisión estratégica y generar señales tácticas"""
-        
+            await self._send_error_response(corr_id, str(e))
+
+    async def _handle_regime_update(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            regime = l2msg.data.get("regime")
+            if regime:
+                self.l2_state.current_regime = regime
+                logger.info(f"Market regime updated to {regime}")
+                # Trigger re-generación de señales para todos los símbolos si es necesario
+                market_data = await self._get_multi_market_data()  # Nuevo: Obtiene data para todos
+                signals = self.signal_generator.generate_signals(market_data, {"regime": regime})
+                for sig in signals:
+                    mf = await self._get_market_features(sig.symbol)
+                    await self._process_tactical_signal(sig, mf, l2msg.correlation_id)
+        except Exception as e:
+            logger.error(f"Error handling regime update: {e}")
+
+    async def _handle_portfolio_allocation(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            allocations = l2msg.data.get("allocations", {})
+            self.l2_state.portfolio_allocations = allocations
+            logger.info(f"Portfolio allocations updated: {allocations}")
+            # Ajustar sizing basado en nuevas allocations para múltiples assets
+        except Exception as e:
+            logger.error(f"Error handling portfolio allocation: {e}")
+
+    async def _handle_execution_report(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            report = l2msg.data
+            symbol = report.get("symbol")
+            was_successful = report.get("status") == "filled"
+            self.signal_generator.update_signal_performance(symbol, "execution", was_successful)
+            logger.info(f"Execution report for {symbol}: {report.get('status')}")
+        except Exception as e:
+            logger.error(f"Error handling execution report: {e}")
+
+    async def _handle_position_update(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            position = l2msg.data
+            symbol = position.get("symbol")
+            self.l2_state.active_positions[symbol] = position
+            logger.info(f"Position update for {symbol}: {position.get('size')}")
+            # Re-evaluar riesgo para el asset
+            self.risk_manager.evaluate_position_risk(symbol, position)
+        except Exception as e:
+            logger.error(f"Error handling position update: {e}")
+
+    async def _handle_market_data_update(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            data = l2msg.data
+            symbol = data.get("symbol")
+            if symbol in self.config.signals.universe:
+                self.l2_state.market_data[symbol] = data  # Almacena por símbolo
+                logger.info(f"Market data update for {symbol}")
+                # Trigger generación de señales si hay decisión pendiente
+                for corr_id, decision in list(self.pending_decisions.items()):
+                    if symbol in decision.preferred_assets:
+                        await self._generate_signals_for_symbol(symbol, decision, corr_id)
+        except Exception as e:
+            logger.error(f"Error handling market data update: {e}")
+
+    # ---------- processing (adaptado para multiasset) ----------
+
+    async def _process_strategic_decision(self, decision: StrategicDecision, correlation_id: str):
         async with self.processing_lock:
             try:
-                # Update L2 state
-                self.l2_state.current_regime = decision.regime
-                self.l2_state.target_exposure = decision.target_exposure
-                self.l2_state.risk_appetite = decision.risk_appetite
-                
-                # Generate tactical signals for each preferred asset
-                for symbol in decision.preferred_assets:
-                    await self._generate_tactical_signal_for_asset(
-                        symbol, decision, correlation_id
-                    )
-                
-                # Send processing completion message
+                market_data = await self._get_multi_market_data()  # Nuevo: Data para todos los assets
+                signals = self.signal_generator.generate_signals(market_data, asdict(decision))
+                if not signals:
+                    logger.info("No signals generated from strategic decision")
+                    return
+
+                for sig in signals:
+                    mf = await self._get_market_features(sig.symbol)
+                    await self._process_tactical_signal(sig, mf, correlation_id)
+
                 await self._send_processing_complete(correlation_id)
-                
             except Exception as e:
-                logger.error(f"Error processing strategic decision {correlation_id}: {e}")
+                logger.error(f"Error processing strategic decision: {e}")
                 await self._send_error_response(correlation_id, str(e))
-            
             finally:
-                # Cleanup
                 self.pending_decisions.pop(correlation_id, None)
-    
-    async def _generate_tactical_signal_for_asset(
-        self,
-        symbol: str,
-        decision: StrategicDecision,
-        correlation_id: str
-    ):
-        """Generar señal táctica para un activo específico"""
-        
+
+    async def _generate_signals_for_symbol(self, symbol: str, decision: StrategicDecision, correlation_id: str):
         try:
-            # Get current market features
-            market_features = await self._get_market_features(symbol)
-            if not market_features:
-                logger.warning(f"No market features available for {symbol}")
+            market_data = self.l2_state.market_data.get(symbol)  # Usa data almacenada por símbolo
+            if not market_data:
+                logger.warning(f"No market data available for {symbol}")
                 return
-            
-            # Generate signal
-            signals = await self.signal_generator.generate_signals(
-                symbol=symbol,
-                market_features=market_features,
-                regime_context={
-                    "regime": decision.regime,
-                    "risk_appetite": decision.risk_appetite,
-                    "target_exposure": decision.target_exposure
-                }
-            )
-            
+
+            # Convertir a DataFrame si es necesario (asumiendo que market_data es dict o similar)
+            mf = pd.DataFrame(market_data)
+            signals = self.signal_generator.generate_signals({symbol: mf}, asdict(decision))
             if not signals:
                 logger.info(f"No signals generated for {symbol}")
                 return
-            
-            # Process each signal
-            for signal in signals:
-                await self._process_tactical_signal(signal, market_features, correlation_id)
-            
-        except Exception as e:
-            logger.error(f"Error generating signal for {symbol}: {e}")
-    
-    async def _process_tactical_signal(
-        self,
-        signal: TacticalSignal,
-        market_features: MarketFeatures,
-        correlation_id: str
-    ):
-        """Procesar una señal táctica completa (sizing + risk)"""
-        
+
+            for sig in signals:
+                mf_features = await self._get_market_features(symbol)
+                await self._process_tactical_signal(sig, mf_features, correlation_id)
+        except Exception:
+            logger.exception(f"Error generating signal for {symbol}")
+
+    async def _process_tactical_signal(self, signal: TacticalSignal, mf: MarketFeatures, correlation_id: str):
         try:
-            # Calculate position size
-            position_size = await self._calculate_position_size(signal, market_features)
-            if not position_size:
-                logger.info(f"Position sizing rejected for {signal.symbol}")
+            ps = await self._calculate_position_size(signal, mf)
+            if not ps:
+                logger.info(f"Sizing rejected for {signal.symbol}")
                 return
-            
-            # Risk evaluation
-            risk_metrics = await self._get_risk_metrics(signal.symbol)
+
             portfolio_state = self._get_current_portfolio_state()
-            
-            allow_trade, risk_alerts, adjusted_position = self.risk_manager.evaluate_pre_trade_risk(
+            allow, alerts, adjusted = self.risk_manager.evaluate_pre_trade_risk(
                 signal=signal,
-                position_size=position_size,
-                market_features=market_features,
-                portfolio_state=portfolio_state
+                position_size=ps,
+                market_features=mf,
+                portfolio_state=portfolio_state,
             )
-            
-            # Send risk alerts if any
-            for alert in risk_alerts:
-                await self._send_risk_alert(alert, correlation_id)
-            
-            if not allow_trade or not adjusted_position:
+
+            for a in alerts:
+                await self._send_risk_alert(a, correlation_id)
+
+            if not allow or not adjusted:
                 logger.warning(f"Trade blocked by risk controls for {signal.symbol}")
                 return
-            
-            # Send final tactical signal to L1
-            await self._send_tactical_signal(signal, adjusted_position, correlation_id)
-            
-        except Exception as e:
-            logger.error(f"Error processing tactical signal for {signal.symbol}: {e}")
-    
-    async def _send_tactical_signal(self, signal: TacticalSignal, position_size: PositionSize, correlation_id: str):
-        """Enviar señal táctica a L1"""
-        logger.info(f"Sending tactical signal for {signal.symbol}")
-        message = L2Message(
-            message_type=MessageType.TACTICAL_SIGNAL,
-            timestamp=datetime.now(),
-            correlation_id=correlation_id,
-            data={
-                "signal": asdict(signal),
-                "position_size": asdict(position_size)
-            }
+
+            # registrar seguimiento de riesgo
+            self.risk_manager.add_position(signal, adjusted, mf)
+            self.l2_state.active_signals[signal.symbol] = signal
+
+            # enviar a L1
+            await self._send_tactical_signal(signal, adjusted, correlation_id)
+        except Exception:
+            logger.exception(f"Error processing tactical signal for {signal.symbol}")
+
+    # ---------- helpers de negocio (adaptados) ----------
+
+    async def _calculate_position_size(self, signal: TacticalSignal, mf: MarketFeatures) -> Optional[PositionSize]:
+        ps = await self.position_sizer.calculate_position_size(
+            signal=signal,
+            market_features=mf,
+            portfolio_state=self._get_current_portfolio_state(),
         )
-        await self.bus.publish(message.to_bus_message())
-    
-    async def _send_risk_alert(self, alert: RiskAlert, correlation_id: str):
-        """Enviar alerta de riesgo"""
-        logger.info(f"Sending risk alert for {alert.symbol}")
-        message = L2Message(
-            message_type=MessageType.RISK_ALERT,
-            timestamp=datetime.now(),
-            correlation_id=correlation_id,
-            data=asdict(alert)
-        )
-        await self.bus.publish(message.to_bus_message())
-    
-    async def _handle_execution_report(self, message: Message):
-        """Manejar report de ejecución de L1"""
-        
-        try:
-            l2_message = L2Message.from_bus_message(message)
-            exec_data = l2_message.data
-            symbol = exec_data.get("symbol")
-            status = exec_data.get("status")
-            filled_size = exec_data.get("filled_size", 0)
-            
-            logger.info(f"Execution report for {symbol}: status={status}, filled={filled_size}")
-            
-            # Update position in risk manager
-            if status == "filled" and symbol in self.risk_manager.current_positions:
-                position = self.risk_manager.current_positions[symbol]
-                position.size = filled_size
-            
-        except Exception as e:
-            logger.error(f"Error handling execution report: {e}")
-    
-    async def _handle_position_update(self, message: Message):
-        """Manejar actualización de posición de L1"""
-        
-        try:
-            l2_message = L2Message.from_bus_message(message)
-            position_data = l2_message.data
-            
-            symbol = position_data.get("symbol")
-            current_size = position_data.get("current_size", 0)
-            avg_price = position_data.get("avg_price", 0)
-            unrealized_pnl = position_data.get("unrealized_pnl", 0)
-            
-            # Update risk manager with current position
-            if symbol in self.risk_manager.current_positions:
-                position = self.risk_manager.current_positions[symbol]
-                position.current_price = position_data.get("current_price", position.current_price)
-                position.unrealized_pnl = unrealized_pnl
-                position.unrealized_pnl_pct = unrealized_pnl / (avg_price * abs(current_size)) if current_size != 0 else 0
-                
-            # Check for position close
-            if current_size == 0 and symbol in self.risk_manager.current_positions:
-                self.risk_manager.remove_position(symbol)
-                self.l2_state.active_signals.pop(symbol, None)
-                logger.info(f"Position closed for {symbol}")
-                
-        except Exception as e:
-            logger.error(f"Error handling position update: {e}")
-    
-    async def _handle_market_data_update(self, message: Message):
-        """Manejar actualización de datos de mercado"""
-        
-        try:
-            l2_message = L2Message.from_bus_message(message)
-            market_data = l2_message.data
-            
-            # Monitor existing positions for risk alerts
-            if self.risk_manager.current_positions:
-                price_data = {
-                    symbol: data.get("price", 0) 
-                    for symbol, data in market_data.items()
-                }
-                
-                portfolio_value = market_data.get("portfolio_value", 100000)
-                
-                risk_alerts = self.risk_manager.monitor_existing_positions(
-                    price_data, portfolio_value
-                )
-                
-                # Send any triggered alerts
-                for alert in risk_alerts:
-                    await self._send_risk_alert(alert, self._generate_correlation_id())
-                    
-        except Exception as e:
-            logger.error(f"Error handling market data update: {e}")
-    
-    async def _handle_regime_update(self, message: Message):
-        """Manejar actualización de régimen de L3"""
-        
-        try:
-            l2_message = L2Message.from_bus_message(message)
-            regime_data = l2_message.data
-            
-            new_regime = regime_data.get("regime")
-            confidence = regime_data.get("confidence", 0.5)
-            
-            if new_regime and new_regime != self.l2_state.current_regime:
-                logger.info(f"Regime changed: {self.l2_state.current_regime} -> {new_regime}")
-                
-                self.l2_state.current_regime = new_regime
-                self.l2_state.regime_confidence = confidence
-                self.l2_state.last_regime_update = datetime.now()
-                
-                # Could trigger strategy rebalancing here
-                
-        except Exception as e:
-            logger.error(f"Error handling regime update: {e}")
-    
-    async def _handle_portfolio_allocation(self, message: Message):
-        """Manejar actualización de asignación de portfolio"""
-        
-        try:
-            l2_message = L2Message.from_bus_message(message)
-            allocation_data = l2_message.data
-            
-            new_target_exposure = allocation_data.get("target_exposure")
-            risk_budget = allocation_data.get("risk_budget")
-            
-            if new_target_exposure is not None:
-                self.l2_state.target_exposure = new_target_exposure
-                logger.info(f"Updated target exposure: {new_target_exposure:.2f}")
-            
-            if risk_budget is not None:
-                self.l2_state.risk_budget = risk_budget
-                logger.info(f"Updated risk budget: {risk_budget:.2f}")
-                
-        except Exception as e:
-            logger.error(f"Error handling portfolio allocation: {e}")
-    
-    # Helper methods
+        if ps:
+            await self._send_intermediate(MessageType.SIZING_COMPLETED, {"symbol": signal.symbol, "position_size": asdict(ps)})
+        return ps
+
     async def _get_market_features(self, symbol: str) -> Optional[MarketFeatures]:
-        """Obtener features de mercado para un símbolo"""
-        
-        # This would typically fetch from data layer
-        # For now, return dummy data
-        return MarketFeatures(
-            volatility=0.25,
-            volume_ratio=1.2,
-            price_momentum=0.05,
-            rsi=55.0,
-            macd_signal="bullish"
-        )
-    
-    async def _get_risk_metrics(self, symbol: str) -> RiskMetrics:
-        """Obtener métricas de riesgo para un símbolo"""
-        
-        # This would typically calculate from historical data
-        return RiskMetrics(
-            var_95=-0.025,
-            expected_shortfall=-0.035,
-            max_drawdown=0.12,
-            sharpe_ratio=1.8,
-            volatility=0.25
-        )
-    
+        # Aquí deberías integrar con tu data layer. Fallback simple, adaptado por símbolo:
+        if symbol == "BTC/USDT":
+            return MarketFeatures(volatility=0.25, volume_ratio=1.2, price_momentum=0.05, rsi=55.0, macd_signal="bullish")
+        elif symbol == "ETH/USDT":
+            return MarketFeatures(volatility=0.30, volume_ratio=1.5, price_momentum=0.07, rsi=60.0, macd_signal="bullish")
+        return None
+
+    async def _get_multi_market_data(self) -> Dict[str, pd.DataFrame]:
+        # Integrar con data layer para obtener data para todos los símbolos; fallback simple:
+        return {
+            "BTC/USDT": pd.DataFrame({"close": [50000.0]}),  # Ejemplo mínimo
+            "ETH/USDT": pd.DataFrame({"close": [3000.0]}),
+        }
+
     def _get_current_portfolio_state(self) -> Dict:
-        """Obtener estado actual del portfolio"""
-        
-        # This would typically come from portfolio manager
+        # Integrar con PortfolioManager; fallback simple, con exposición por asset:
         return {
             "total_capital": 100000.0,
             "available_capital": 80000.0,
             "daily_pnl": 150.0,
-            "portfolio_heat": 0.3
+            "portfolio_heat": 0.3,
+            "exposures": {"BTC/USDT": 0.18, "ETH/USDT": 0.12},
         }
-    
+
+    # ---------- publishing (sin cambios mayores) ----------
+
+    async def _send_tactical_signal(self, signal: TacticalSignal, ps: PositionSize, correlation_id: str):
+        logger.info(f"Publishing tactical signal {signal.symbol}")
+        msg = L2Message(
+            message_type=MessageType.TACTICAL_SIGNAL,
+            timestamp=datetime.utcnow(),
+            correlation_id=correlation_id,
+            data={"signal": signal.asdict(), "position_size": asdict(ps)},
+        )
+        await self.bus.publish(msg.to_bus_message())
+
+    async def _send_risk_alert(self, alert: RiskAlert, correlation_id: str):
+        logger.info(f"Publishing risk alert {alert.symbol} ({alert.alert_type.value})")
+        msg = L2Message(
+            message_type=MessageType.RISK_ALERT,
+            timestamp=datetime.utcnow(),
+            correlation_id=correlation_id,
+            data=asdict(alert),
+        )
+        await self.bus.publish(msg.to_bus_message())
+
     async def _send_processing_complete(self, correlation_id: str):
-        """Enviar mensaje de procesamiento completo"""
-        
-        message = L2Message(
+        msg = L2Message(
             message_type=MessageType.SIGNAL_GENERATED,
-            timestamp=datetime.now(),
+            timestamp=datetime.utcnow(),
             correlation_id=correlation_id,
             data={"status": "completed"},
-            metadata={"processing_time": datetime.now().isoformat()}
+            metadata={"processing_time": datetime.utcnow().isoformat()},
         )
-        
-        await self.bus.publish(message.to_bus_message())
-    
+        await self.bus.publish(msg.to_bus_message())
+
     async def _send_error_response(self, correlation_id: str, error_message: str):
-        """Enviar respuesta de error"""
-        
-        message = L2Message(
+        msg = L2Message(
             message_type=MessageType.SIGNAL_GENERATED,
-            timestamp=datetime.now(),
+            timestamp=datetime.utcnow(),
             correlation_id=correlation_id,
-            data={
-                "status": "error",
-                "error_message": error_message
-            },
-            metadata={"error_time": datetime.now().isoformat()}
+            data={"status": "error", "error_message": error_message},
+            metadata={"error_time": datetime.utcnow().isoformat()},
         )
-        
-        await self.bus.publish(message.to_bus_message())
-    
-    def _generate_correlation_id(self) -> str:
-        """Generar correlation ID único"""
-        return f"l2_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-    
-    def _update_message_counts(self, message_type: MessageType):
-        """Actualizar contadores de mensajes"""
-        key = message_type.value
-        self.message_counts[key] = self.message_counts.get(key, 0) + 1
-    
-    def _update_processing_times(self, operation: str, processing_time: float):
-        """Actualizar tiempos de procesamiento"""
-        if operation not in self.processing_times:
-            self.processing_times[operation] = []
-        
-        self.processing_times[operation].append(processing_time)
-        
-        # Keep only last 100 measurements
-        if len(self.processing_times[operation]) > 100:
-            self.processing_times[operation] = self.processing_times[operation][-100:]
-    
+        await self.bus.publish(msg.to_bus_message())
+
+    async def _send_intermediate(self, mtype: MessageType, data: Dict[str, Any]):
+        msg = L2Message(message_type=mtype, timestamp=datetime.utcnow(), data=data)
+        await self.bus.publish(msg.to_bus_message())
+
+    # ---------- background ----------
+
     async def _heartbeat_task(self):
-        """Task de heartbeat para monitoreo"""
-        
         while self.is_running:
             try:
-                heartbeat_msg = L2Message(
-                    message_type=MessageType.SIGNAL_GENERATED,  # Using as generic status
-                    timestamp=datetime.now(),
+                hb = L2Message(
+                    message_type=MessageType.SIGNAL_GENERATED,
+                    timestamp=datetime.utcnow(),
                     data={
                         "status": "healthy",
                         "active_signals": len(self.l2_state.active_signals),
                         "pending_decisions": len(self.pending_decisions),
-                        "message_counts": self.message_counts.copy()
+                        "message_counts": self.message_counts.copy(),
                     },
-                    metadata={"heartbeat": True}
+                    metadata={"heartbeat": True},
                 )
-                
-                await self.bus.publish(heartbeat_msg.to_bus_message())
-                
-                # Wait 30 seconds
-                await asyncio.sleep(30)
-                
-            except Exception as e:
-                logger.error(f"Error in heartbeat task: {e}")
-                await asyncio.sleep(30)
-    
+                await self.bus.publish(hb.to_bus_message())
+            except Exception:
+                logger.exception("Error in heartbeat")
+            await asyncio.sleep(30)
+
     async def _cleanup_task(self):
-        """Task de limpieza periódica"""
-        
         while self.is_running:
             try:
-                # Cleanup old correlations
-                now = datetime.now()
-                cutoff = now - timedelta(hours=1)
-                
-                # This would need timestamp tracking for correlations
-                # For now, just clean up old alerts
-                if hasattr(self.risk_manager, 'cleanup_old_alerts'):
-                    self.risk_manager.cleanup_old_alerts(max_age_hours=24)
-                
-                # Wait 10 minutes
-                await asyncio.sleep(600)
-                
-            except Exception as e:
-                logger.error(f"Error in cleanup task: {e}")
-                await asyncio.sleep(600)
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Obtener estado actual del adaptador"""
-        
-        avg_processing_times = {}
-        for operation, times in self.processing_times.items():
-            if times:
-                avg_processing_times[operation] = {
-                    "avg": sum(times) / len(times),
-                    "min": min(times),
-                    "max": max(times),
-                    "count": len(times)
-                }
-        
-        return {
-            "is_running": self.is_running,
-            "current_regime": self.l2_state.current_regime,
-            "target_exposure": self.l2_state.target_exposure,
-            "active_signals": len(self.l2_state.active_signals),
-            "pending_decisions": len(self.pending_decisions),
-            "message_counts": self.message_counts.copy(),
-            "avg_processing_times": avg_processing_times,
-            "last_signal_time": self.l2_state.last_signal_time.isoformat() if self.l2_state.last_signal_time else None,
-            "risk_summary": self.risk_manager.get_portfolio_risk_summary() if self.risk_manager else {}
-        }
+                # lugar para limpiar caches/estados si fuera necesario
+                pass
+            except Exception:
+                logger.exception("Error in cleanup")
+            await asyncio.sleep(60)
 
+    # ---------- metrics ----------
 
-# Factory function for easy initialization
-def create_l2_bus_adapter(
-    message_bus: MessageBus,
-    config_path: Optional[str] = None
-) -> L2BusAdapter:
-    """Factory para crear L2BusAdapter configurado"""
-    
-    # Load config
-    if config_path:
-        config = L2Config.from_file(config_path)
-    else:
-        config = L2Config.from_env()
-    
-    # Create adapter
-    adapter = L2BusAdapter(message_bus, config)
-    
-    return adapter
+    def _new_correlation_id(self) -> str:
+        return f"l2_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
 
+    def _bump_count(self, mt: MessageType):
+        k = mt.value
+        self.message_counts[k] = self.message_counts.get(k, 0) + 1
 
-# Example usage
-if __name__ == "__main__":
-    async def main():
-        # Create message bus (this would come from main system)
-        from comms.message_bus import MessageBus
-        
-        bus = MessageBus()
-        
-        # Create L2 adapter
-        adapter = create_l2_bus_adapter(bus)
-        
-        # Start adapter
-        await adapter.start()
-        
-        # Send test strategic decision
-        test_decision = L2Message(
-            message_type=MessageType.STRATEGIC_DECISION,
-            timestamp=datetime.now(),
-            data={
-                "regime": "trending",
-                "target_exposure": 0.7,
-                "risk_appetite": "aggressive",
-                "preferred_assets": ["BTC/USDT"],
-                "time_horizon": "4h"
-            }
-        )
-        
-        await bus.publish(test_decision.to_bus_message())
-        
-        # Wait a bit
-        await asyncio.sleep(5)
-        
-        # Check status
-        status = adapter.get_status()
-        print("L2 Adapter Status:")
-        for key, value in status.items():
-            print(f"  {key}: {value}")
-        
-        # Stop adapter
-        await adapter.stop()
-    
-    # Run example
-    asyncio.run(main())
+    def _bump_time(self, op: str, t: float):
+        self.processing_times.setdefault(op, []).append(t)
+        if len(self.processing_times[op]) > 100:
+            self.processing_times[op] = self.processing_times[op][-100:]

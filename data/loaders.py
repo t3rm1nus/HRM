@@ -93,6 +93,19 @@ def compute_volume_features(
         out["vol_rel"] = (vol / rolling_mean).replace([np.inf, -np.inf], np.nan).fillna(1.0)
     return out
 
+def normalize_eth_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normaliza nombres de columnas de ETH/USDT a [open, high, low, close, volume].
+    Similar a BTC pero para ETH.
+    """
+    mapping = {}
+    if "ETH_close" in df.columns and "close" not in df.columns:
+        mapping["ETH_close"] = "close"
+    # Mapear otras convenciones si existen
+    if mapping:
+        df = df.rename(columns=mapping)
+    return df
+
 
 def compute_rsi(df: pd.DataFrame, window: int = int(DEFAULT_FEATURE_CONFIG["rsi_window"])) -> pd.Series:
     close = df["close"].astype(float)

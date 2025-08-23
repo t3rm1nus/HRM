@@ -39,34 +39,30 @@ def procesar_l2(state: Dict[str, Any], config: L2Config) -> Dict[str, Any]:
             state["senales"] = {"signals": [], "timestamp": datetime.now(), "error": str(e)}
             return state
         
-        # 3. Extraer datos de mercado del state
+        # 3. Extraer datos de mercado del state (adaptado para multiasset: dict de DataFrames)
         logger.info("📊 Extrayendo datos de mercado del state...")
         market_data = _extract_market_data(state)
         
-        if market_data is None or market_data.empty:
+        if not market_data:
             logger.warning("⚠️ No hay datos de mercado disponibles")
             state["senales"] = {"signals": [], "timestamp": datetime.now(), "warning": "No market data"}
             return state
         
-        logger.info(f"📈 Datos de mercado extraídos: {len(market_data)} filas, columnas: {list(market_data.columns)}")
-        
-        # 4. Obtener símbolo objetivo (por defecto BTC/USDT)
-        symbol = state.get("universo", ["BTCUSDT"])[0] if state.get("universo") else "BTCUSDT"
-        logger.info(f"🎯 Símbolo objetivo: {symbol}")
+        symbols = list(market_data.keys())
+        logger.info(f"📈 Datos de mercado extraídos para símbolos: {symbols}")
         
         # 5. Contexto de régimen desde L3 (si está disponible)
         regime_context = _extract_regime_context(state)
         logger.info(f"🧠 Contexto de régimen: {regime_context}")
         
-        # 6. Generar señales tácticas
+        # 6. Generar señales tácticas (para todos los símbolos)
         logger.info("🔍 Generando señales tácticas...")
         signals = signal_generator.generate_signals(
             market_data=market_data,
-            symbol=symbol,
             regime_context=regime_context
         )
         
-        logger.info(f"✅ Generadas {len(signals)} señales tácticas")
+        logger.info(f"✅ Generadas {len(signals)} señales tácticas para {len(symbols)} símbolos")
         
         # 7. Procesar y formatear señales para el state
         formatted_signals = []
@@ -95,7 +91,7 @@ def procesar_l2(state: Dict[str, Any], config: L2Config) -> Dict[str, Any]:
             "signals": formatted_signals,
             "timestamp": datetime.now().isoformat(),
             "count": len(formatted_signals),
-            "symbol": symbol,
+            "symbols": symbols,
             "regime_context": regime_context,
             "generator_info": signal_generator.get_model_info()
         }
@@ -115,64 +111,64 @@ def procesar_l2(state: Dict[str, Any], config: L2Config) -> Dict[str, Any]:
         return state
 
 
-def _extract_market_data(state: Dict[str, Any]) -> Optional[pd.DataFrame]:
+def _extract_market_data(state: Dict[str, Any]) -> Optional[Dict[str, pd.DataFrame]]:
     """
-    Extrae datos de mercado del state en formato DataFrame
+    Extrae datos de mercado del state (adaptado para multiasset: dict de DataFrames por símbolo)
     """
-    logger.debug("🔍 Extrayendo datos de mercado...")
+    market_data = state.get("mercado")
     
-    # Buscar datos en diferentes ubicaciones posibles del state
-    market_data = None
+    if isinstance(market_data, dict) and all(isinstance(v, pd.DataFrame) for v in market_data.values()):
+        logger.debug(f"✅ Datos multiasset encontrados: {list(market_data.keys())}")
+        return market_data
     
-    # Opción 1: datos directos en 'mercado'
-    if "mercado" in state:
-        logger.debug("📊 Encontrados datos en state['mercado']")
-        mercado = state["mercado"]
-        
-        if isinstance(mercado, pd.DataFrame):
-            market_data = mercado
-            logger.debug(f"✅ DataFrame directo: {len(market_data)} filas")
-        elif isinstance(mercado, dict):
-            # Intentar construir DataFrame desde dict
-            try:
-                market_data = pd.DataFrame(mercado)
-                logger.debug(f"✅ DataFrame desde dict: {len(market_data)} filas")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo convertir dict a DataFrame: {e}")
+    # Fallback si no es dict de DataFrames
+    logger.warning("⚠️ Formato de mercado no es dict de DataFrames, intentando convertir...")
     
-    # Opción 2: datos en formato de lista de velas
-    if market_data is None and "velas" in state:
+    if isinstance(market_data, dict):
+        try:
+            # Intentar convertir cada valor a DataFrame si no lo es
+            converted = {}
+            for symbol, data in market_data.items():
+                if not isinstance(data, pd.DataFrame):
+                    if isinstance(data, list):  # e.g., lista de velas
+                        columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                        df = pd.DataFrame(data, columns=columns[:len(data[0])])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df.set_index('timestamp', inplace=True)
+                        converted[symbol] = df
+                    elif isinstance(data, dict):  # e.g., dict simple
+                        df = pd.DataFrame([data])  # Wrap in list to create DataFrame
+                        converted[symbol] = df
+                    else:
+                        continue
+                else:
+                    converted[symbol] = data
+            if converted:
+                logger.debug(f"✅ Convertido a dict de DataFrames: {list(converted.keys())}")
+                return converted
+        except Exception as e:
+            logger.warning(f"⚠️ Error convirtiendo datos de mercado: {e}")
+    
+    # Opción alternativa: datos en formato de lista de velas (para compatibilidad)
+    if "velas" in state:
         logger.debug("📊 Encontrados datos en state['velas']")
         try:
             velas = state["velas"]
-            if isinstance(velas, list) and len(velas) > 0:
-                # Asumir formato [timestamp, open, high, low, close, volume]
+            if isinstance(velas, dict):  # Si ya es dict por símbolo
+                return {symbol: pd.DataFrame(v) for symbol, v in velas.items()}
+            elif isinstance(velas, list) and len(velas) > 0:
+                # Asumir single symbol, default a BTC/USDT
                 columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                market_data = pd.DataFrame(velas, columns=columns[:len(velas[0])])
-                market_data['timestamp'] = pd.to_datetime(market_data['timestamp'])
-                market_data.set_index('timestamp', inplace=True)
-                logger.debug(f"✅ DataFrame desde velas: {len(market_data)} filas")
+                df = pd.DataFrame(velas, columns=columns[:len(velas[0])])
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df.set_index('timestamp', inplace=True)
+                return {"BTC/USDT": df}
         except Exception as e:
             logger.warning(f"⚠️ Error procesando velas: {e}")
     
-    # Opción 3: generar datos mock para testing
-    if market_data is None:
-        logger.warning("⚠️ No se encontraron datos de mercado, generando datos mock")
-        market_data = _generate_mock_market_data()
-    
-    # Validar DataFrame
-    if market_data is not None:
-        logger.debug(f"📋 Validando datos: {len(market_data)} filas, columnas: {list(market_data.columns)}")
-        
-        # Asegurar que tenemos al menos la columna 'close'
-        if 'close' not in market_data.columns:
-            logger.warning("⚠️ No se encontró columna 'close', usando primera columna numérica")
-            numeric_cols = market_data.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0:
-                market_data['close'] = market_data[numeric_cols[0]]
-                logger.debug(f"✅ Usando '{numeric_cols[0]}' como 'close'")
-    
-    return market_data
+    # Generar datos mock si nada funciona
+    logger.warning("⚠️ No se encontraron datos de mercado, generando datos mock")
+    return _generate_mock_market_data()
 
 
 def _extract_regime_context(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,44 +210,48 @@ def _extract_regime_context(state: Dict[str, Any]) -> Dict[str, Any]:
     return regime_context
 
 
-def _generate_mock_market_data() -> pd.DataFrame:
+def _generate_mock_market_data() -> Dict[str, pd.DataFrame]:
     """
-    Genera datos de mercado mock para testing cuando no hay datos reales
+    Genera datos de mercado mock para testing cuando no hay datos reales (multiasset)
     """
     logger.warning("🎭 Generando datos mock para testing...")
     
     import numpy as np
     from datetime import datetime, timedelta
     
-    # Generar 100 velas de 1 minuto
+    # Generar 100 velas de 1 minuto para cada símbolo
     timestamps = [datetime.now() - timedelta(minutes=i) for i in range(100, 0, -1)]
     
-    # Precios simulados con random walk
-    np.random.seed(42)  # Para reproducibilidad
-    base_price = 50000.0  # BTC base price
-    price_changes = np.random.normal(0, 0.001, 100)  # 0.1% std deviation
-    prices = [base_price]
-    
-    for change in price_changes[:-1]:
-        prices.append(prices[-1] * (1 + change))
-    
-    # Construir OHLCV
-    data = []
-    for i, (ts, close) in enumerate(zip(timestamps, prices)):
-        open_price = prices[i-1] if i > 0 else close
-        high = max(open_price, close) * (1 + abs(np.random.normal(0, 0.0005)))
-        low = min(open_price, close) * (1 - abs(np.random.normal(0, 0.0005)))
-        volume = np.random.uniform(100, 1000)
+    mock_data = {}
+    for symbol, base_price in [("BTC/USDT", 50000.0), ("ETH/USDT", 3000.0)]:
+        np.random.seed(42)  # Para reproducibilidad
+        price_changes = np.random.normal(0, 0.001, 100)  # 0.1% std deviation
+        prices = [base_price]
         
-        data.append({
-            'open': open_price,
-            'high': high,
-            'low': low,
-            'close': close,
-            'volume': volume
-        })
+        for change in price_changes[:-1]:
+            prices.append(prices[-1] * (1 + change))
+        
+        # Construir OHLCV
+        data = []
+        for i, (ts, close) in enumerate(zip(timestamps, prices)):
+            open_price = prices[i-1] if i > 0 else close
+            high = max(open_price, close) * (1 + abs(np.random.normal(0, 0.0005)))
+            low = min(open_price, close) * (1 - abs(np.random.normal(0, 0.0005)))
+            volume = np.random.uniform(100, 1000)
+            
+            data.append({
+                'timestamp': ts,
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
+                'volume': volume
+            })
+        
+        df = pd.DataFrame(data)
+        df.set_index('timestamp', inplace=True)
+        mock_data[symbol] = df
     
-    market_data = pd.DataFrame(data, index=timestamps)
-    logger.debug(f"✅ Generados datos mock: {len(market_data)} velas")
+    logger.debug(f"✅ Generados datos mock para: {list(mock_data.keys())}")
     
-    return market_data
+    return mock_data

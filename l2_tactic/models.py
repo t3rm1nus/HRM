@@ -1,182 +1,162 @@
-"""
-Modelos de datos para L2_tactic
-===============================
-
-Define las estructuras de datos específicas del nivel táctico.
-"""
-import pandas as pd
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+# models.py - L2 Tactical data models
+from __future__ import annotations
 from enum import Enum
 
 
-class SignalDirection(Enum):
-    """Dirección de la señal de trading"""
-    LONG = "LONG"
-    SHORT = "SHORT"
-    NEUTRAL = "NEUTRAL"
-    CLOSE_LONG = "CLOSE_LONG"
-    CLOSE_SHORT = "CLOSE_SHORT"
 
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+
+class SignalDirection(Enum):
+    BUY = "buy"
+    SELL = "sell"
+    HOLD = "hold"
 
 class SignalSource(Enum):
-    """Fuente de la señal"""
-    AI_MODEL = "AI_MODEL"
-    TECHNICAL = "TECHNICAL"
-    PATTERN = "PATTERN"
-    COMPOSITE = "COMPOSITE",
-    AGGREGATED = "aggregated"
-
-
+    AI = "ai_model"
+    TECHNICAL = "technical"
+    PATTERN = "pattern"
+    COMPOSITE = "composite"
+# ---------------------------
+# Señal táctica (output L2)
+# ---------------------------
 @dataclass
 class TacticalSignal:
-    """
-    Señal de trading generada por L2
-    
-    Attributes:
-        symbol: Símbolo del activo (ej: "BTCUSDT")
-        direction: Dirección de la operación
-        strength: Fuerza de la señal [0.0-1.0]
-        confidence: Confianza del modelo [0.0-1.0] 
-        price: Precio de referencia
-        timestamp: Momento de generación
-        source: Fuente de la señal
-        metadata: Información adicional específica de la fuente
-        expires_at: Cuándo expira la señal (opcional)
-    """
     symbol: str
-    direction: SignalDirection
-    strength: float
-    confidence: float
-    price: float
-    timestamp: datetime
-    source: SignalSource
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    expires_at: Optional[datetime] = None
-    
-    def __post_init__(self):
-        """Validaciones post-inicialización"""
-        if not 0.0 <= self.strength <= 1.0:
-            raise ValueError(f"Strength debe estar entre 0.0 y 1.0, got {self.strength}")
-        if not 0.0 <= self.confidence <= 1.0:
-            raise ValueError(f"Confidence debe estar entre 0.0 y 1.0, got {self.confidence}")
-        if self.price <= 0:
-            raise ValueError(f"Price debe ser positivo, got {self.price}")
-    
-    @property
-    def is_expired(self) -> bool:
-        """Verifica si la señal ha expirado"""
-        if self.expires_at is None:
-            return False
-        return pd.Timestamp.now(tz="UTC") > self.expires_at
-    
-    @property 
-    def effective_strength(self) -> float:
-        """Fuerza efectiva considerando confianza"""
-        return self.strength * self.confidence
+    side: str                     # "buy" | "sell"
+    strength: float               # 0..1
+    confidence: float             # 0..1 (calidad/convicción)
+    price: float                  # precio de referencia (close/last)
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    horizon: str = "1h"
+    source: str = "l2_tactical"
+    model_name: Optional[str] = None
+    features_used: Dict[str, float] = field(default_factory=dict)
+    reasoning: Optional[str] = None
+
+    # niveles sugeridos por el generador/AI (opcionales)
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+
+    def is_long(self) -> bool:
+        return self.side.lower() == "buy"
+
+    def asdict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["timestamp"] = self.timestamp.isoformat()
+        return d
 
 
+# ---------------------------------
+# Features de mercado (input L2)
+# ---------------------------------
+@dataclass
+class MarketFeatures:
+    volatility: Optional[float] = None           # vol anualizada (0.2 = 20%)
+    volume_ratio: Optional[float] = None         # vol actual / vol media
+    price_momentum: Optional[float] = None       # retorno acumulado de ventana corta
+    rsi: Optional[float] = None
+    macd_signal: Optional[str] = None            # "bullish"/"bearish"/"neutral"
+    atr: Optional[float] = None                  # Average True Range (en unidades de precio)
+    support: Optional[float] = None
+    resistance: Optional[float] = None
+    spread_bps: Optional[float] = None           # coste implícito
+    liquidity_score: Optional[float] = None      # 0..1
+
+
+# ---------------------------------
+# Tamaño de posición (sizing L2)
+# ---------------------------------
 @dataclass
 class PositionSize:
-    """
-    Resultado del cálculo de position sizing
-    
-    Attributes:
-        symbol: Símbolo del activo
-        quantity: Cantidad a operar (positiva para LONG, negativa para SHORT)
-        stop_loss: Precio de stop loss
-        take_profit: Precio de take profit (opcional)
-        max_loss_usd: Pérdida máxima esperada en USD
-        reasoning: Explicación del cálculo
-        kelly_fraction: Fracción de Kelly utilizada
-        risk_adjusted: Si fue ajustado por controles de riesgo
-    """
     symbol: str
-    quantity: float
-    stop_loss: float
-    take_profit: Optional[float]
-    max_loss_usd: float
-    reasoning: str
-    kelly_fraction: float = 0.0
-    risk_adjusted: bool = False
-    
-    def __post_init__(self):
-        """Validaciones post-inicialización"""
-        if self.quantity == 0:
-            raise ValueError("Quantity no puede ser cero")
-        if self.max_loss_usd < 0:
-            raise ValueError(f"Max loss debe ser positivo, got {self.max_loss_usd}")
+    side: str                        # "buy" | "sell"
+    price: float                     # precio de entrada estimado
+    size: float                      # cantidad de unidades (ej. BTC)
+    notional: float                  # tamaño nocional = size * price
+    risk_amount: float               # capital en riesgo (moneda base)
+    kelly_fraction: float            # fracción Kelly aplicada (0..1)
+    vol_target_leverage: float       # multiplicador de apalancamiento por vol-targeting
+    max_loss: float                  # pérdida máxima tolerada en este trade
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    leverage: Optional[float] = None
+    margin_required: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def asdict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
+# ---------------------------------
+# Métricas de riesgo (diagnóstico)
+# ---------------------------------
 @dataclass
 class RiskMetrics:
-    """
-    Métricas de riesgo para una operación
-    
-    Attributes:
-        symbol: Símbolo del activo
-        var_1d: Value at Risk 1 día (95%)
-        expected_vol: Volatilidad esperada (anualizada)
-        correlation_impact: Impacto por correlación con posiciones existentes
-        liquidity_score: Score de liquidez [0.0-1.0]
-        max_position_size: Tamaño máximo recomendado
-        risk_score: Score de riesgo total [0.0-1.0]
-    """
-    symbol: str
-    var_1d: float
-    expected_vol: float
-    correlation_impact: float
-    liquidity_score: float
-    max_position_size: float
-    risk_score: float
-    
-    def __post_init__(self):
-        """Validaciones post-inicialización"""
-        if not 0.0 <= self.liquidity_score <= 1.0:
-            raise ValueError(f"Liquidity score debe estar entre 0.0 y 1.0")
-        if not 0.0 <= self.risk_score <= 1.0:
-            raise ValueError(f"Risk score debe estar entre 0.0 y 1.0")
+    var_95: Optional[float] = None            # Value-at-Risk al 95% (en % o fracción)
+    expected_shortfall: Optional[float] = None
+    max_drawdown: Optional[float] = None      # máximo DD histórico (fracción)
+    sharpe_ratio: Optional[float] = None
+    volatility: Optional[float] = None        # vol anualizada
+    correlation_impact: Optional[float] = None
+    beta: Optional[float] = None
+    liquidity_score: Optional[float] = None
 
 
-@dataclass  
+# ---------------------------------
+# Decisiones de L3 que condicionan L2
+# ---------------------------------
+@dataclass
+class StrategicDecision:
+    regime: str = "neutral"                    # bull/bear/range/neutral...
+    target_exposure: float = 0.5               # 0..1
+    risk_appetite: str = "moderate"            # "conservative" | "moderate" | "aggressive"
+    preferred_assets: List[str] = field(default_factory=lambda: ["BTC/USDT"])
+    time_horizon: str = "1h"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------
+# Estado interno de L2 para integración
+# ---------------------------------
+@dataclass
 class L2State:
-    """
-    Estado interno del módulo L2
-    
-    Maintains cache of recent signals, risk metrics, and performance stats
-    """
-    active_signals: List[TacticalSignal] = field(default_factory=list)
-    recent_positions: List[PositionSize] = field(default_factory=list)
-    risk_cache: Dict[str, RiskMetrics] = field(default_factory=dict)
-    performance_metrics: Dict[str, float] = field(default_factory=dict)
+    """Estado del módulo L2_tactic"""
+    signals: List[TacticalSignal] = field(default_factory=list)
+    metrics: Dict = field(default_factory=dict)
     last_update: Optional[datetime] = None
-    
+
     def add_signal(self, signal: TacticalSignal) -> None:
-        """Añade una nueva señal al estado"""
-        # Remover señales expiradas del mismo símbolo
-        self.active_signals = [
-            s for s in self.active_signals 
-            if not (s.symbol == signal.symbol and s.is_expired)
+        self.signals.append(signal)
+        self.last_update = datetime.utcnow()
+
+    def cleanup_expired(self, expiry_minutes: int = 15) -> None:
+        if not self.signals:
+            return
+        now = datetime.utcnow()
+        expiry = timedelta(minutes=expiry_minutes)
+        self.signals = [
+            s for s in self.signals
+            if (now - s.timestamp) < expiry
         ]
-        
-        # Añadir nueva señal
-        self.active_signals.append(signal)
-        self.last_update = pd.Timestamp.now(tz="UTC")
-    
-    def get_active_signals(self, symbol: Optional[str] = None) -> List[TacticalSignal]:
-        """Obtiene señales activas, opcionalmente filtradas por símbolo"""
-        signals = [s for s in self.active_signals if not s.is_expired]
-        
-        if symbol:
-            signals = [s for s in signals if s.symbol == symbol]
-            
-        return signals
-    
-    def cleanup_expired(self) -> None:
-        """Limpia señales y datos expirados"""
-        self.active_signals = [s for s in self.active_signals if not s.is_expired]
-        
-        # Mantener solo las últimas 100 posiciones para limitar memoria
-        if len(self.recent_positions) > 100:
-            self.recent_positions = self.recent_positions[-100:]
+
+    def clear(self) -> None:
+        self.signals.clear()
+        self.metrics.clear()
+        self.last_update = datetime.utcnow()
+
+    def update_metrics(self, new_metrics: Dict) -> None:
+        self.metrics.update(new_metrics)
+        self.last_update = datetime.utcnow()
+
+    def get_active_signals(self) -> List[TacticalSignal]:
+        return self.signals
+
+    @property
+    def active_signals(self) -> List[TacticalSignal]:
+        """Alias para compatibilidad con código existente"""
+        return self.get_active_signals()
+
+    def __len__(self) -> int:
+        return len(self.signals)
