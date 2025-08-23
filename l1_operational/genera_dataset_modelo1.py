@@ -103,7 +103,7 @@ def main():
     days = args.days if args.days is not None else int(math.ceil((TARGET_ROWS + WARMUP_ROWS) / rows_per_day))
     print(f"Objetivo fijo -> target_rows={TARGET_ROWS}, days={days}, timeframe={timeframe}")
 
-    now = datetime.now(timezone.utc)
+    now = pd.Timestamp.now(tz="UTC")
     since = now - timedelta(days=days)
     print(f"Descargando OHLCV real de {args.symbol} {timeframe} desde {since} hasta {now}...")
 

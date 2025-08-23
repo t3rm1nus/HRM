@@ -8,12 +8,18 @@ from monitoring.telemetry import telemetry
 from monitoring.dashboard import render_dashboard
 from storage import guardar_estado_csv, guardar_estado_sqlite
 
+from l2_tactic.procesar_l2 import procesar_l2
+from l2_tactic.config import L2Config
+from l2_tactic.signal_generator import SignalGenerator
+
 from l4_meta import procesar_l4
 from l3_strategy import procesar_l3
-from l2_tactic import procesar_l2
-from l1_operational import procesar_l1   # nuevo hook unificado L1
+from l1_operational import procesar_l1
 
 logger = setup_logger()
+
+# --- Configuración global ---
+config_l2 = L2Config()
 
 
 async def tick(state_holder: dict):
@@ -31,14 +37,12 @@ async def tick(state_holder: dict):
     state = procesar_l3(state)
 
     logger.info("[L2] Ejecutando capa Tactic...")
-    state = procesar_l2(state)
+    state = procesar_l2(state, config_l2)
 
     logger.info("[L1] Ejecutando capa Operational...")
     if asyncio.iscoroutinefunction(procesar_l1):
-        # Si es async, esperamos directamente
         state = await procesar_l1(state)
     else:
-        # Si es bloqueante, ejecutamos en un thread pool para no bloquear el event loop
         state = await asyncio.to_thread(procesar_l1, state)
 
     # --- métricas ---
@@ -53,8 +57,9 @@ async def tick(state_holder: dict):
             "ciclo_id": state["ciclo_id"],
             "valor_portfolio": valor_portfolio,
             "ordenes": len(state.get("ordenes", [])),
-            "senales": len(state.get("senales", {})),
+            "senales": len(state.get("senales", {}).get("signals", [])),
             "riesgo": state.get("riesgo"),
+            "deriva": state.get("deriva"),
         }
     )
 
@@ -70,6 +75,11 @@ async def tick(state_holder: dict):
     guardar_estado_sqlite(state)
 
     state_holder["state"] = state
+
+
+async def tick_wrapper(holder: dict):
+    """Wrapper sin argumentos extras para scheduler"""
+    await tick(holder)
 
 
 async def main():
@@ -91,9 +101,9 @@ async def main():
 
     holder = {"state": state}
     stop = asyncio.Event()
-    
+
     logger.info("[MAIN] Iniciando loop principal con ciclo cada 10s...")
-    task = asyncio.create_task(run_every(10.0, lambda: tick(holder), stop))
+    task = asyncio.create_task(run_every(10.0, lambda: tick_wrapper(holder), stop))
 
     try:
         await task
