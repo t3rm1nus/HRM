@@ -1,7 +1,5 @@
 HRM — Hierarchical Reasoning Model para Trading Algorítmico
-
-Estado: Activo · Lenguaje: Python · Dominio: Cripto/Trading · Arquitectura: Multi‑nivel (L4→L1)Regla de oro: Si existe conflicto entre este README y los README de módulos, prevalece el README del módulo.
-
+Estado: Activo · Lenguaje: Python · Dominio: Cripto/Trading · Arquitectura: Multi-nivel (L4→L1)Regla de oro: Si existe conflicto entre este README y los README de módulos, prevalece el README del módulo.
 
 🧭 TL;DR
 HRM es un framework de razonamiento jerárquico para trading algorítmico, diseñado para operar con múltiples activos (BTC, ETH). Divide el problema en 4 niveles, desde la reflexión global (L4) hasta la ejecución determinista con IA avanzada (L1).El objetivo es decidir qué, cuándo y cuánto operar, limitando riesgo mediante reglas hard-coded y modelos IA (Logistic Regression, Random Forest, LightGBM) en L1, con gestión de correlación BTC-ETH y métricas granulares por activo. Incluye bus de mensajes, telemetría, persistencia histórica, dataset multitimeframe y tests robustos.
@@ -25,28 +23,34 @@ Cómo distribuir peso/capital entre modelos/estrategias y detectar concept drift
 Mayor precisión en predicciones mediante composición de señales multiasset y modelos IA (Logistic Regression, Random Forest, LightGBM).
 Reducción de riesgos vía diversificación temporal, capa dura de seguridad en L1, y gestión de correlación BTC-ETH.
 Adaptabilidad automática a distintos regímenes de mercado para múltiples activos.
-Capacidad de razonamiento complejo multi‑variable con métricas granulares por activo.
+Capacidad de razonamiento complejo multi-variable con métricas granulares por activo.
 
 
 3️⃣ Flujo general (visión de tiempos)
-Nivel 4: Meta‑Razonamiento (horas/días)
-        ↓
+
+Nivel 4: Meta-Razonamiento (horas/días)
 Nivel 3: Análisis Estratégico (horas)
-        ↓
 Nivel 2: Táctica de Ejecución (minutos)
-        ↓
 Nivel 1: Ejecución + Gestión de Riesgo (segundos)
 
 
 4️⃣ Jerarquía del sistema (HRM extendido)
-Nivel 4 — Meta‑Razonamiento (horas/días)
-Rol: Reflexión y adaptación del sistema completo.Funciones: evaluación de desempeño (Sharpe, drawdown), concept drift, selección de modelos/estrategias, asignación de capital y ajustes globales.Ejemplo: si mean reversion pierde eficacia, reduce su peso y reasigna capital a trend‑following.
+Nivel 4 — Meta-Razonamiento (horas/días)
+Rol: Reflexión y adaptación del sistema completo.Funciones: Evaluación de desempeño (Sharpe, drawdown), concept drift, selección de modelos/estrategias, asignación de capital y ajustes globales.Ejemplo: Si mean reversion pierde eficacia, reduce su peso y reasigna capital a trend-following.
 Nivel 3 — Análisis Estratégico (horas)
-Rol: Planificación de alto nivel.Funciones: clasificación de régimen (tendencia/rango/volatilidad), selección de sub‑estrategias, priorización de activos (BTC, ETH, alts líquidas), metas intradía (exposición, riesgo máximo).
+Rol: Planificación de alto nivel.Funciones: Clasificación de régimen (tendencia/rango/volatilidad), selección de sub-estrategias, priorización de activos (BTC, ETH, alts líquidas), metas intradía (exposición, riesgo máximo).
 Nivel 2 — Táctica de Ejecución (minutos)
-Rol: Convertir las decisiones estratégicas en operaciones concretas.Funciones: composición de señales, position sizing (vol‑targeting, Kelly fraccionado), stops/targets dinámicos, ajustes por liquidez/volatilidad.
+Rol: Convertir las decisiones estratégicas en operaciones concretas.Funciones: Composición de señales, position sizing (vol-targeting, Kelly fraccionado), stops/targets dinámicos, ajustes por liquidez/volatilidad.
 Nivel 1 — Ejecución y Riesgo (segundos)
-Rol: Implementación determinista para múltiples activos (BTC, ETH) con capa dura de seguridad y modelos IA avanzados.Funciones: validación de límites de riesgo por símbolo, gestión de correlación BTC-ETH, ejecución optimizada con Logistic Regression, Random Forest, LightGBM, envío de órdenes con timeouts/retries, reportes detallados por activo, y métricas granulares (latencia, slippage, exposición, tasas de éxito por símbolo).
+Rol: Implementación determinista para múltiples activos (BTC, ETH) con capa dura de seguridad y modelos IA avanzados.Funciones: 
+
+Validación de límites de riesgo por símbolo (stop-loss, exposición, correlación BTC-ETH aplicada desde L2/L3).
+Filtrado de señales con modelos IA (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl) para confirmar tendencias.
+Ejecución optimizada con lógica determinista (fraccionamiento, timing, reducción de slippage).
+Envío de órdenes con timeouts/retries.
+Reportes detallados por activo (BTC/USDT, ETH/USDT).
+Métricas granulares (latencia, slippage, exposición, tasas de éxito por símbolo).
+
 
 5️⃣ Arquitectura (ASCII)
 ┌─────────────────────────────────────────┐
@@ -79,7 +83,7 @@ Rol: Implementación determinista para múltiples activos (BTC, ETH) con capa du
               │ Señales de Trading (Minutos)
               │
 ┌─────────────▼────────────── Nivel Operacional ───────────────┐
-│ Hard‑coded Safety Layer + Order Manager (determinista)       │
+│ Hard-coded Safety Layer + Order Manager (determinista)       │
 │ AI Models (LogReg, RF, LightGBM) + Multiasset Execution      │
 │ Executor determinista → Exchange                             │
 └──────────────────────────────────────────────────────────────┘
@@ -99,7 +103,7 @@ Ajuste de capital y parámetros globales
 
 
 L3 → L2
-Selección de sub‑estrategias y universo de activos (BTC, ETH)
+Selección de sub-estrategias y universo de activos (BTC, ETH)
 
 
 L2 → L1
@@ -158,7 +162,10 @@ HRM/
 │   ├── executor.py       # timeouts/retry + métricas por activo
 │   ├── data_feed.py      # datos de mercado y saldos
 │   ├── binance_client.py # cliente Binance (sandbox por defecto)
-│   ├── ai_models/        # modelos IA entrenados (LogReg, RF, LightGBM)
+│   ├── ai_models/        # modelos IA entrenados
+│   │   ├── modelo1_lr.pkl      # Logistic Regression (BTC/ETH)
+│   │   ├── modelo2_rf.pkl      # Random Forest (BTC/ETH)
+│   │   ├── modelo3_lgbm.pkl    # LightGBM (BTC/ETH)
 │   ├── test_clean_l1_multiasset.py  # pruebas de limpieza y determinismo multiasset
 │   ├── README.md         # doc específica de L1
 │   └── requirements.txt  # dependencias L1
@@ -185,9 +192,7 @@ HRM/
 │   └── backtester.py
 └── main.py               # orquestador central
 
-
 Nota: Esta estructura resume el proyecto real y es suficiente para navegar y extender el código.
-
 
 8️⃣ Flujo de mensajes y state global
 Cada ciclo del sistema trabaja sobre un único state (diccionario) y cada nivel actualiza su sección. Esto garantiza trazabilidad y facilita debugging/backtesting.
@@ -204,28 +209,26 @@ state = {
     "ciclo_id": 1           # número de ciclo
 }
 
-Flujo L1 (ejecución determinista):L2/L3 (Señales BTC/ETH) → Bus Adapter → Order Manager → Hard-coded Safety → AI Models (LogReg, RF, LightGBM) → Risk Guard → Executor → Exchange → Execution Report → Bus Adapter → L2/L3
+Flujo L1 (ejecución determinista):L2/L3 (Señales BTC/ETH) → Bus Adapter → Order Manager → Hard-coded Safety → AI Models (LogReg, RF, LightGBM) → Risk Rules → Executor → Exchange → Execution Report → Bus Adapter → L2/L3
 
 9️⃣ L1_operational — “limpio y determinista”
-
 L1 SOLO ejecuta órdenes seguras para múltiples activos (BTC, ETH). No decide estrategia ni táctica.
-
 Lo que L1 no hace
 
 ❌ No modifica cantidades ni precios de señales estratégicas
-❌ No decide timing fuera de optimización IA
+❌ No decide timing fuera de optimización determinista
 ❌ No actualiza portfolio completo (responsabilidad de L2/L3)
 ❌ No recolecta ni procesa datos de mercado (responsabilidad de L2/L3)
 
 Lo que L1 sí hace
 
-✅ Valida límites de riesgo por símbolo (stop-loss, exposición, correlación BTC-ETH)
-✅ Filtra señales con modelos IA (Logistic Regression, Random Forest, LightGBM) para confirmar tendencias
-✅ Ejecuta órdenes pre-validadas en el exchange con optimización de slippage
+✅ Valida límites de riesgo por símbolo (stop-loss, exposición, correlación BTC-ETH aplicada desde L2/L3)
+✅ Filtra señales con modelos IA (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl) para confirmar tendencias
+✅ Ejecuta órdenes pre-validadas en el exchange con optimización de slippage (simulada en modo PAPER)
 ✅ Genera reportes detallados por activo (BTC/USDT, ETH/USDT)
 ✅ Mantiene trazabilidad completa con métricas granulares (latencia, slippage, tasas de éxito)
 
-Verificación de limpieza
+Verificación de limpieza:
 python l1_operational/test_clean_l1_multiasset.py
 
 
@@ -239,8 +242,8 @@ gauge(name, value) → métricas instantáneas (exposición, correlación)
 timing(name, start) → latencias por ejecución
 
 
-Dashboard en consola: con rich para un mini‑panel por ciclo, mostrando métricas por activo.
 
+Dashboard en consola: Ejemplo de métricas consolidadas generadas por L1, visualizadas con rich por ciclo, mostrando métricas por activo (BTC/USDT, ETH/USDT). La visualización es manejada por componentes externos.
 
 🗃️ Persistencia de histórico
 Cada ciclo se guarda en:
@@ -251,16 +254,16 @@ SQLite: data/historico.db (tabla ciclos con los mismos datos)
 Esto permite exportar a Pandas/Excel, reproducir backtests y consultar con SQL.
 
 🧪 Dataset & features (BTC/USDT, ETH/USDT)
-Generador de features en data/loaders.py (limpio y autocontenido).“Soporta BTC/USDT y ETH/USDT (extensible a otros activos líquidos) con índice datetime y columna close.”
-Features incluidas
+Generador de features en data/loaders.py (limpio y autocontenido).Soporta: BTC/USDT y ETH/USDT (extensible a otros activos líquidos) con índice datetime y columna close.
+Features incluidas:
 
 Precio: delta_close, ema_10/20, sma_10/20
 Volumen: vol_rel vs. media N (20 por defecto)
 Momentum: rsi, macd, macd_signal, macd_hist
-Multi‑timeframe: 1m + 5m (sufijos _5m, reindex 1m)
+Multi-timeframe: 1m + 5m (sufijos _5m, reindex 1m)
 Cruzadas: ETH/BTC ratio, correlación rolling, divergencias
 
-Uso básico
+Uso básico:
 import pandas as pd
 from data.loaders import prepare_features
 
@@ -276,11 +279,11 @@ train_eth, test_eth = prepare_features(df_eth_1m, test_size=0.2, symbol="ETH")
 train_btc.to_csv("data/btc_features_train.csv")
 test_btc.to_csv("data/btc_features_test.csv")
 train_eth.to_csv("data/eth_features_train.csv")
-test_eth.to_csv("data/eth_features_test.csv")
+test_eth.to LGBTQ
 
+System: **to_csv("data/eth_features_test.csv")
 
-Si ya tienes velas 5m, puedes pasarlas como df_5m y evitar resampleo.Si tu CSV trae BTC_close o ETH_close, normalize_columns lo mapea a close automáticamente.
-
+Nota: Si ya tienes velas 5m, puedes pasarlas como df_5m y evitar resampleo. Si tu CSV trae BTC_close o ETH_close, normalize_columns lo mapea a close automáticamente.
 
 ⚙️ Puesta en marcha
 Requisitos
@@ -311,10 +314,17 @@ Configura en core/config/ y variables de entorno los parámetros de conexión y 
 
 ✅ Buenas prácticas de riesgo (resumen)
 
-Hard limits en L1: stop‑loss obligatorio, límites de capital por trade (BTC: 0.05 max, ETH: 2.0 max), exposición máxima (BTC: 20%, ETH: 15%), chequeos de liquidez/saldo, drawdown y correlación BTC-ETH.
-Determinismo en ejecución: una oportunidad de orden por señal; si no cumple reglas → rechazo y reporte.
-Separación de responsabilidades: señal (L2/L3) ≠ ejecución (L1).
-Backtesting con histórico persistido y state reproducible.
+Hard limits en L1: 
+Stop-loss obligatorio
+Límites de capital por trade (BTC: 0.05 max, ETH: 1.0 max)
+Exposición máxima (BTC: 20%, ETH: 15%)
+Chequeos de liquidez/saldo
+Drawdown y correlación BTC-ETH (calculada en L2/L3, aplicada en L1)
+
+
+Determinismo en ejecución: Una oportunidad de orden por señal; si no cumple reglas → rechazo y reporte.
+Separación de responsabilidades: Señal (L2/L3) ≠ ejecución (L1).
+Backtesting: Con histórico persistido y state reproducible.
 
 
 🧩 Tests e integración
@@ -326,11 +336,11 @@ Métricas/alertas: monitoring/ (métricas por símbolo y correlación)
 
 📈 Roadmap (alto nivel)
 
- Meta‑aprendizaje para selección dinámica de estrategias (L4)
- Mejores clasificadores de régimen (L3)
- Ensamble multi‑señal robusto (L2)
- Integración multi‑exchange/DEX y simulador de slippage (L1)
- Dashboards enriquecidos (web) y alertas proactivas con métricas por activo
+Meta-aprendizaje para selección dinámica de estrategias (L4)
+Mejores clasificadores de régimen (L3)
+Ensamble multi-señal robusto (L2)
+Integración multi-exchange/DEX y simulador de slippage (L1)
+Dashboards enriquecidos (web) y alertas proactivas con métricas por activo
 
 
 👥 Autoría y licencia
@@ -338,8 +348,7 @@ Métricas/alertas: monitoring/ (métricas por símbolo y correlación)
 Autoría: Equipo de desarrollo HRM
 Versión: 1.0
 Última actualización: 2025
-Licencia: ver archivo LICENSE si aplica
-
+Licencia: Ver archivo LICENSE si aplica
 
 
 Envío a otras IA: Este README está diseñado para ser autosuficiente. Describe jerarquía, arquitectura, flujos, estructura de código, dataset, telemetría, persistencia y puesta en marcha para que un agente externo pueda comprender y operar el proyecto sin consultar otros documentos.

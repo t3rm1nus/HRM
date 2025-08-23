@@ -1,135 +1,93 @@
-# l2_tactic/signal_composer.py
-
 import logging
-import numpy as np
+from typing import Dict, List, Any
 import pandas as pd
-from typing import List, Dict, Optional
-from .models import TacticalSignal, SignalSource, SignalDirection
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("l2_tactic.signal_composer")
 
 class SignalComposer:
     """
-    Compositor de señales tácticas.
-    Combina señales de IA, técnicas y patrones usando un sistema de pesos dinámicos.
+    Combina señales tácticas de múltiples fuentes (IA, técnicas, patrones).
     """
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.min_signal_strength = config.get("min_signal_strength", 0.5)
+        self.ai_model_weight = config.get("ai_model_weight", 0.5)
+        self.technical_weight = config.get("technical_weight", 0.3)
+        self.pattern_weight = config.get("pattern_weight", 0.2)
+        logger.info("SignalComposer initialized with config")
 
-    def __init__(self, config: Optional[Dict] = None):
-        self.config = config or {}
-        self.default_weights = {
-            "ai": 0.5,
-            "technical": 0.3,
-            "pattern": 0.2
-        }
-
-    def compose(self, signals: List[TacticalSignal], regime_context: Optional[Dict] = None) -> List[TacticalSignal]:
+    def compose(self, signals: List[Dict], market_data: pd.DataFrame) -> List[Dict]:
         """
-        Punto de entrada: combina señales aplicando pesos y resolviendo conflictos.
-        Siempre devuelve una lista, aunque no haya señales válidas.
+        Combina señales de diferentes fuentes en una lista final de señales.
+        Args:
+            signals: Lista de diccionarios de señales con 'symbol', 'direction', 'confidence'.
+            market_data: DataFrame con datos de mercado (OHLCV).
+        Returns:
+            Lista de señales combinadas.
         """
-        if not signals:
-            return []
-
+        logger.info("Composing signals")
         try:
-            logger.info("Composing signals")
-            weights = self._calculate_dynamic_weights(regime_context)
-
-            composite = self._create_composite_signal(signals, weights)
-
-            if composite is None:
-                logger.warning("No composite signal could be created")
+            if not signals:
+                logger.warning("No signals provided for composition")
                 return []
 
-            final = self._resolve_conflicts([composite])
-            logger.info(f"Generated {len(final)} final signals from {len(signals)} candidates")
-            return final
+            # Validar market_data
+            if market_data.empty:
+                logger.warning("Empty market data provided")
+                return signals  # Devolver señales sin combinar si no hay datos
+
+            # Agrupar señales por símbolo y dirección
+            grouped_signals = {}
+            for signal in signals:
+                symbol = signal["symbol"]
+                direction = signal["direction"]
+                key = (symbol, direction)
+                if key not in grouped_signals:
+                    grouped_signals[key] = []
+                grouped_signals[key].append(signal)
+
+            final_signals = []
+            for (symbol, direction), signal_group in grouped_signals.items():
+                # Calcular confianza ponderada
+                weighted_confidence = 0.0
+                total_weight = 0.0
+                source_counts = {"ai": 0, "technical": 0, "pattern": 0}
+
+                for signal in signal_group:
+                    confidence = signal["confidence"]
+                    source = signal.get("source", "unknown")
+                    if source == "ai":
+                        weight = self.ai_model_weight
+                        source_counts["ai"] += 1
+                    elif source == "technical":
+                        weight = self.technical_weight
+                        source_counts["technical"] += 1
+                    elif source == "pattern":
+                        weight = self.pattern_weight
+                        source_counts["pattern"] += 1
+                    else:
+                        weight = 0.1  # Peso por defecto para fuentes desconocidas
+                    weighted_confidence += confidence * weight
+                    total_weight += weight
+
+                if total_weight > 0:
+                    final_confidence = weighted_confidence / total_weight
+                else:
+                    final_confidence = max(s["confidence"] for s in signal_group)
+
+                # Filtrar por fuerza mínima
+                if final_confidence >= self.min_signal_strength:
+                    final_signals.append({
+                        "symbol": symbol,
+                        "direction": direction,
+                        "confidence": final_confidence,
+                        "source": "composite",
+                        "sources_used": source_counts
+                    })
+
+            logger.info(f"Composed {len(final_signals)} signals from {len(signals)} candidates")
+            return final_signals
+
         except Exception as e:
-            logger.error(f"Signal composition failed: {e}")
-            return []
-
-    def _create_composite_signal(self, signals: List[TacticalSignal], weights: Dict[str, float]) -> Optional[TacticalSignal]:
-        """
-        Crea una señal compuesta ponderando las señales según su origen.
-        """
-        if not signals:
-            return None
-
-        symbol = signals[0].symbol
-        timestamp = pd.Timestamp.now(tz="UTC")
-
-        # Agrupamos por source (no signal_type)
-        ai_signals = [s for s in signals if s.source == SignalSource.AI_MODEL]
-        tech_signals = [s for s in signals if s.source == SignalSource.TECHNICAL]
-        pattern_signals = [s for s in signals if s.source == SignalSource.PATTERN]
-
-        def avg_strength(sig_list: List[TacticalSignal]) -> float:
-            return np.mean([s.strength for s in sig_list]) if sig_list else 0.0
-
-        composite_strength = (
-            weights.get("ai", 0.5) * avg_strength(ai_signals)
-            + weights.get("technical", 0.3) * avg_strength(tech_signals)
-            + weights.get("pattern", 0.2) * avg_strength(pattern_signals)
-        )
-
-        if composite_strength == 0:
-            return None
-
-        # Dirección: LONG si positivo, SHORT si negativo
-        direction = SignalDirection.LONG if composite_strength > 0 else SignalDirection.SHORT
-        confidence = float(np.clip(abs(composite_strength), 0, 1))
-
-        last_price = None
-        for s in reversed(signals):
-            if s.price is not None:
-                last_price = s.price
-                break
-
-        return TacticalSignal(
-            symbol=symbol,
-            direction=direction,
-            strength=abs(composite_strength),
-            confidence=confidence,
-            price=last_price if last_price is not None else 0.0,  # ✅ evita None
-            timestamp=timestamp,
-            source=SignalSource.AGGREGATED,
-            metadata={"weights": weights, "method": "weighted_average"},
-            expires_at=timestamp + pd.Timedelta(minutes=5)  # ✅ mejor con expiración
-        )
-
-    def _calculate_dynamic_weights(self, regime_context: Optional[Dict]) -> Dict[str, float]:
-        """
-        Ajusta pesos según el contexto de régimen.
-        """
-        if not regime_context:
-            return self.default_weights
-
-        strategy = regime_context.get("strategy", "default")
-        weights = self.default_weights.copy()
-
-        if strategy == "estrategia_agresiva":
-            weights["ai"] = 0.6
-            weights["technical"] = 0.3
-            weights["pattern"] = 0.1
-        elif strategy == "estrategia_defensiva":
-            weights["ai"] = 0.3
-            weights["technical"] = 0.4
-            weights["pattern"] = 0.3
-
-        return weights
-
-    def _resolve_conflicts(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
-        """
-        Resuelve conflictos eliminando señales redundantes.
-        """
-        if not signals:
-            return []
-
-        seen = set()
-        resolved = []
-        for s in signals:
-            key = (s.symbol, s.source, s.direction)
-            if key not in seen:
-                resolved.append(s)
-                seen.add(key)
-
-        return resolved
+            logger.error(f"Signal composition failed: {e}", exc_info=True)
+            return signals  # Devolver señales originales como respaldo
