@@ -17,17 +17,35 @@ class BusAdapterAsync:
         self.timeout = timeout
         self._running = True
 
-        # Suscribir a tópicos estándar
-        self.queue_signals = bus.subscribe("signals")
-        self.queue_reports = bus.subscribe("reports")
-        self.queue_alerts = bus.subscribe("alerts")
+        # Colas internas
+        self.queue_signals: asyncio.Queue = asyncio.Queue()
+        self.queue_reports: asyncio.Queue = asyncio.Queue()
+        self.queue_alerts: asyncio.Queue = asyncio.Queue()
 
-        # Colas internas para compatibilidad con get_pending_*
+        # Colas de pendientes
         self._pending_reports = asyncio.Queue()
         self._pending_alerts = asyncio.Queue()
 
-        logger.info("[BusAdapterAsync] Inicializado y suscrito a tópicos signals/reports/alerts")
+        logger.info("[BusAdapterAsync] Inicializado (pendiente de start())")
 
+    async def start(self):
+        """Suscribe handlers a los tópicos del bus"""
+        self.bus.subscribe("signals", self._enqueue_signal)
+        self.bus.subscribe("reports", self._enqueue_report)
+        self.bus.subscribe("alerts", self._enqueue_alert)
+        logger.info("[BusAdapterAsync] Suscrito a signals/reports/alerts")
+
+    # Handlers que meten en colas internas
+    async def _enqueue_signal(self, message):
+        await self.queue_signals.put(message)
+
+    async def _enqueue_report(self, message):
+        await self.queue_reports.put(message)
+
+    async def _enqueue_alert(self, message):
+        await self.queue_alerts.put(message)
+    
+    
     # ----------------- CONSUMO -----------------
     async def consume_signal(self) -> Optional[Signal]:
         signal = await self._consume_generic(self.queue_signals, Signal, "Señal")

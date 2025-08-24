@@ -1,36 +1,59 @@
+# comms/message_bus.py
+# Núcleo del EventBus en memoria para toda la arquitectura HRM.
+
 import asyncio
-from collections import defaultdict
-from typing import Dict, List
+import logging
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Dict, List, Coroutine
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Message:
+    topic: str
+    payload: Dict[str, Any]
+
 
 class MessageBus:
+    """
+    MessageBus asíncrono en memoria.
+    - Permite publish/subscribe a tópicos arbitrarios.
+    - Los handlers son corutinas (async def).
+    - Base para L1, L2, L3, L4.
+    """
+
     def __init__(self):
-        self._topics: Dict[str, List[asyncio.Queue]] = defaultdict(list)
+        self._subscribers: Dict[str, List[Callable[[Message], Awaitable[None]]]] = {}
+        self._lock = asyncio.Lock()
 
-    def subscribe(self, topic: str) -> asyncio.Queue:
-        q = asyncio.Queue()
-        self._topics[topic].append(q)
-        return q
+    async def subscribe(self, topic: str, handler: Callable[[Message], Coroutine[Any, Any, None]]):
+        """Suscribir un handler asíncrono a un tópico."""
+        async with self._lock:
+            if topic not in self._subscribers:
+                self._subscribers[topic] = []
+            self._subscribers[topic].append(handler)
+            logger.debug(f"[MessageBus] Subscribed handler={handler.__name__} to topic={topic}")
 
-    async def publish(self, topic: str, message: dict):
-        for q in self._topics.get(topic, []):
-            await q.put(message)
+    async def publish(self, message: Message):
+        """Publicar un mensaje a todos los suscriptores del tópico."""
+        async with self._lock:
+            handlers = self._subscribers.get(message.topic, []).copy()
 
-    # Compatibilidad opcional
-    def create_queue(self, topic: str) -> asyncio.Queue:
-        return self.subscribe(topic)
+        if not handlers:
+            logger.debug(f"[MessageBus] No subscribers for topic={message.topic}")
+            return
 
-if __name__ == "__main__":
-    # Ejemplo de uso manual (no se ejecuta en import)
-    async def demo():
-        bus = MessageBus()
-        q = bus.subscribe("demo")
+        logger.debug(f"[MessageBus] Publishing to topic={message.topic} subscribers={len(handlers)}")
+        for handler in handlers:
+            try:
+                asyncio.create_task(handler(message))
+            except Exception as e:
+                logger.exception(f"[MessageBus] Error publishing to {handler}: {e}")
 
-        async def consumer():
-            while True:
-                m = await q.get()
-                print("[consumer]", m)
-
-        asyncio.create_task(consumer())
-        await bus.publish("demo", {"hello": "world"})
-
-    asyncio.run(demo())
+    async def unsubscribe(self, topic: str, handler: Callable):
+        """Desuscribir un handler de un tópico."""
+        async with self._lock:
+            if topic in self._subscribers:
+                self._subscribers[topic] = [h for h in self._subscribers[topic] if h != handler]
+                logger.debug(f"[MessageBus] Unsubscribed handler={handler.__name__} from topic={topic}")

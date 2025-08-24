@@ -382,8 +382,20 @@ class RiskControlManager:
         daily_pnl = float(portfolio_state.get("daily_pnl", 0.0))
         alerts.extend(self.portfolio_manager.check_portfolio_limits(self.current_positions, total_capital, daily_pnl))
 
-        # 3) spike de volatilidad (si hay historial en otra capa, aquí lo simplificamos)
-        # -> se puede conectar a VolatilityMonitor si mantienes historia
+        # 3) Asegurar STOP-LOSS si falta
+        if adjusted.stop_loss is None:
+            rp = RiskPosition(
+                symbol=signal.symbol,
+                size=adjusted.size if signal.is_long() else -adjusted.size,
+                entry_price=signal.price,
+                current_price=signal.price,
+                unrealized_pnl=0.0,
+                unrealized_pnl_pct=0.0,
+            )
+            computed = self.stop_loss_manager.calculate_initial_stop(signal, market_features, rp)
+            adjusted.stop_loss = computed
+            signal.stop_loss = computed
+            logger.info(f"[RISK] Assigned initial SL for {signal.symbol}: {computed:.6f}")
 
         # 4) ajuste por severidad
         if any(a.severity == RiskLevel.HIGH for a in alerts):

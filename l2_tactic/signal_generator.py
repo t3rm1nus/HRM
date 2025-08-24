@@ -1,389 +1,169 @@
+# l2_tactic/signal_generator.py
+# Orquestador L2: integra IA/tech/pattern -> composición -> sizing -> riesgo -> orden para L1
+
+from __future__ import annotations
+
+import asyncio
 import logging
-from typing import Dict, List, Optional, Any
-from datetime import timedelta, timezone
+from dataclasses import asdict
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-from dataclasses import dataclass
 
 from .config import L2Config
-from .models import TacticalSignal, SignalDirection, SignalSource, L2State
-from .ai_model_integration import AIModelWrapper
-from .signal_composer import SignalComposer
+from .models import TacticalSignal, MarketFeatures, PositionSize
+from .signal_composer import SignalComposer  # asume que ya existe en tu L2
+from .position_sizer import PositionSizerManager
+from .risk_controls import RiskControlManager
 
-logger = logging.getLogger("l2_tactic.signal_generator")
+logger = logging.getLogger(__name__)
 
-def _make_utc(dt):
-    """Convierte cualquier datetime a UTC aware"""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
-class TechnicalIndicators:
-    """Calculadora de indicadores técnicos para señales complementarias"""
-
-    def calculate_rsi(self, prices: pd.Series, window: int = 14) -> pd.Series:
-        try:
-            if not pd.api.types.is_numeric_dtype(prices):
-                raise ValueError("Prices must be numeric")
-            delta = prices.diff()
-            up = delta.clip(lower=0)
-            down = -delta.clip(upper=0)
-            ma_up = up.rolling(window=window).mean()
-            ma_down = down.rolling(window=window).mean()
-            rs = ma_up / ma_down.replace(0, 1e-9)
-            return 100 - (100 / (1 + rs))
-        except Exception as e:
-            logger.error(f"Error calculating RSI: {e}", exc_info=True)
-            return pd.Series()
-
-    def calculate_macd(
-        self, prices: pd.Series, short: int = 12, long: int = 26, signal: int = 9
-    ):
-        try:
-            if not pd.api.types.is_numeric_dtype(prices):
-                raise ValueError("Prices must be numeric")
-            ema_short = prices.ewm(span=short, adjust=False).mean()
-            ema_long = prices.ewm(span=long, adjust=False).mean()
-            macd_line = ema_short - ema_long
-            signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-            hist = macd_line - signal_line
-            return macd_line, signal_line, hist
-        except Exception as e:
-            logger.error(f"Error calculating MACD: {e}", exc_info=True)
-            return pd.Series(), pd.Series(), pd.Series()
-
-class PatternRecognizer:
-    """Reconocedor de patrones de velas y formaciones"""
-
-    def detect_doji(
-        self, open_prices: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, threshold=0.1
-    ) -> pd.Series:
-        try:
-            for series in [open_prices, high, low, close]:
-                if not pd.api.types.is_numeric_dtype(series):
-                    raise ValueError(f"Series {series.name} must be numeric")
-            body = (close - open_prices).abs()
-            rng = (high - low).replace(0, 1e-9)
-            return (body / rng) < threshold
-        except Exception as e:
-            logger.error(f"Error detecting Doji: {e}", exc_info=True)
-            return pd.Series()
-
-    def detect_hammer(
-        self, open_prices: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, threshold=2.0
-    ) -> pd.Series:
-        try:
-            for series in [open_prices, high, low, close]:
-                if not pd.api.types.is_numeric_dtype(series):
-                    raise ValueError(f"Series {series.name} must be numeric")
-            body = (close - open_prices).abs()
-            lower_shadow = (open_prices.where(close > open_prices, close) - low)
-            return (lower_shadow > threshold * body) & (close > open_prices)
-        except Exception as e:
-            logger.error(f"Error detecting Hammer: {e}", exc_info=True)
-            return pd.Series()
-
-class SignalGenerator:
+class L2TacticProcessor:
     """
-    Generador principal de señales tácticas
+    Flujo:
+      1) Recibe señales crudas (AI + técnicas + patrones).
+      2) Compone/filtra con SignalComposer.
+      3) Calcula tamaño de posición con PositionSizerManager.
+      4) Asegura STOP-LOSS (y opcional TP) con RiskControlManager (pre-trade).
+      5) Emite orden enriquecida (con SL/TP/size) para L1.
     """
-    def __init__(self, config: L2Config):
-        self.config = config
-        self.ai_model = AIModelWrapper(config.ai_model)
-        self.technical = TechnicalIndicators()
-        self.patterns = PatternRecognizer()
-        self.state = L2State()
-        self.composer = SignalComposer(config.__dict__)
-        self.signal_performance = {
-            symbol: {
-                "ai_model": {"hits": 0, "total": 0, "recent_accuracy": 0.5},
-                "technical": {"hits": 0, "total": 0, "recent_accuracy": 0.5},
-                "patterns": {"hits": 0, "total": 0, "recent_accuracy": 0.5},
-            } for symbol in config.signals.universe
+
+    def __init__(self, config: Optional[L2Config] = None):
+        self.config = config or L2Config()
+        self.composer = SignalComposer(self.config)
+        self.sizer = PositionSizerManager(self.config)
+        self.risk = RiskControlManager(self.config)
+        self.market_data = None 
+        # relación riesgo/beneficio por defecto para TP si no viene en la señal
+        self.default_rr = getattr(self.config, "default_rr", 2.0)
+
+    async def _compose_signals(
+        self, raw_signals: List[TacticalSignal]
+    ) -> List[TacticalSignal]:
+        # Composición/ensamble de señales (voting, weighted, etc.)
+        final_signals = self.composer.compose(raw_signals, self.market_data)
+
+        logger.info(f"Composed {len(final_signals)} tactical signals from {len(raw_signals)} candidates")
+        return final_signals
+
+    async def _ensure_stop_and_size(
+        self,
+        signal: TacticalSignal,
+        market_features: MarketFeatures,
+        portfolio_state: Dict,
+        corr_matrix: Optional[pd.DataFrame] = None,
+    ) -> Optional[Tuple[TacticalSignal, PositionSize]]:
+        """
+        Devuelve (signal_con_SL_y_TP, position_size_final) o None si se rechaza.
+        """
+
+        # 1) Sizing preliminar
+        ps = await self.sizer.calculate_position_size(signal, market_features, portfolio_state)
+        if ps is None:
+            logger.info(f"Sizing rejected for {signal.symbol} (pre-checks)")
+            return None
+
+        # 2) Evaluación de riesgo pre-trade (aquí garantizamos SL si falta)
+        allow, alerts, ps_adj = self.risk.evaluate_pre_trade_risk(
+            signal=signal,
+            position_size=ps,
+            market_features=market_features,
+            portfolio_state=portfolio_state,
+            correlation_matrix=corr_matrix
+        )
+
+        if not allow or ps_adj is None:
+            for a in alerts:
+                logger.warning(f"[RISK] {a}")
+            logger.warning(f"Trade rejected by risk for {signal.symbol}")
+            return None
+
+        # Si el riesgo no asignó SL (debería), asignamos aquí como fallback
+        if ps_adj.stop_loss is None:
+            # calcula SL inicial según riesgo dinámico; también lo escribe en signal.stop_loss
+            from .risk_controls import DynamicStopLoss, RiskPosition
+            dsl = DynamicStopLoss(self.config)
+            dummy_pos = RiskPosition(
+                symbol=signal.symbol, size=ps_adj.size if signal.is_long() else -ps_adj.size,
+                entry_price=signal.price, current_price=signal.price, unrealized_pnl=0.0,
+                unrealized_pnl_pct=0.0
+            )
+            computed_sl = dsl.calculate_initial_stop(signal, market_features, dummy_pos)
+            ps_adj.stop_loss = computed_sl
+            signal.stop_loss = computed_sl
+            logger.info(f"[FALLBACK] Added SL for {signal.symbol}: {computed_sl:.6f}")
+
+        # 3) Asignar TP si no llegó en la señal y existe SL
+        if (signal.take_profit is None) and (ps_adj.stop_loss is not None):
+            dist = abs(signal.price - ps_adj.stop_loss)
+            if signal.is_long():
+                signal.take_profit = signal.price + self.default_rr * dist
+            else:
+                signal.take_profit = signal.price - self.default_rr * dist
+            ps_adj.take_profit = signal.take_profit
+            logger.info(f"Derived TP for {signal.symbol}: {ps_adj.take_profit:.6f} (RR={self.default_rr:.2f})")
+
+        return signal, ps_adj
+
+    def _to_l1_order(self, sig: TacticalSignal, ps: PositionSize) -> Dict:
+        """
+        Formato genérico de orden para L1. Ajusta las claves si tu L1 usa otras.
+        """
+        side = "buy" if sig.is_long() else "sell"
+        order = {
+            "id": f"l2_{sig.symbol}_{datetime.utcnow().timestamp()}",
+            "symbol": sig.symbol,
+            "side": side,
+            "type": "market",   # o "limit" si prefieres
+            "amount": float(ps.size),
+            "price": float(sig.price),
+            "stop_loss": float(ps.stop_loss) if ps.stop_loss else None,
+            "take_profit": float(ps.take_profit) if ps.take_profit else None,
+            "metadata": {
+                "l2": {
+                    "kelly_fraction": ps.kelly_fraction,
+                    "vol_target_leverage": ps.vol_target_leverage,
+                    "risk_amount": ps.risk_amount,
+                    "notional": ps.notional,
+                    "margin_required": ps.margin_required,
+                },
+                "signal": sig.as_dict() if hasattr(sig, "as_dict") else asdict(sig),
+            }
         }
-        logger.info("SignalGenerator initialized for multiasset")
+        return order
 
-    def generate(self, state: Dict, symbol: str) -> List[Dict]:
+
+    async def _generate_signals(self, portfolio, market_data, features_by_symbol):
         """
-        Genera señales tácticas para un símbolo dado basado en el estado del mercado.
-        Args:
-            state: Diccionario con el estado actual del sistema.
-            symbol: Símbolo para el cual generar señales (e.g., 'BTC/USDT').
-        Returns:
-            Lista de señales con formato {'symbol': str, 'direction': str, 'confidence': float, 'source': str}.
+        Genera señales brutas a partir de datos de mercado y features.
         """
-        logger.info(f"Generating signals for {symbol}")
         signals = []
+        for symbol, features in features_by_symbol.items():
+            # lógica de señal simple de ejemplo
+            if features.momentum > self.config.MOMENTUM_THRESHOLD:
+                signals.append(TacticalSignal(symbol=symbol, side="BUY", strength=features.momentum))
+            elif features.momentum < -self.config.MOMENTUM_THRESHOLD:
+                signals.append(TacticalSignal(symbol=symbol, side="SELL", strength=features.momentum))
+        return signals
 
-        # Verificar si el símbolo está en el mercado
-        if symbol not in state["mercado"]:
-            logger.error(f"Symbol {symbol} not found in market data")
-            return signals
 
-        # Obtener datos de mercado
-        market_data = state["mercado"][symbol]
-        if market_data.empty:
-            logger.error(f"No market data available for {symbol}")
-            return signals
+    async def process(
+    self,
+    portfolio: Dict,
+    market_data: Dict,
+    features_by_symbol: Dict[str, "MarketFeatures"],
+) -> List["TacticalSignal"]:
+        """
+        Genera señales crudas a partir del portfolio, market_data y features.
+        """
 
-        # Generar señales de IA
-        logger.info(f"Generating AI signals for {symbol}")
-        try:
-            ai_signals = self.ai_model.predict(market_data, symbol)
-            for signal in ai_signals:
-                signals.append({
-                    "symbol": signal.symbol,
-                    "direction": signal.side,
-                    "confidence": signal.confidence,
-                    "source": signal.source
-                })
-            logger.info(f"Generated {len(ai_signals)} AI signals for {symbol}")
-        except Exception as e:
-            logger.error(f"Error generating AI signals for {symbol}: {e}", exc_info=True)
+        self.market_data = market_data
 
-        # Generar señales técnicas
-        logger.info(f"Generating technical signals for {symbol}")
-        try:
-            technical_signals = self._generate_technical_signals(market_data, symbol)
-            for signal in technical_signals:
-                signals.append({
-                    "symbol": signal.symbol,
-                    "direction": signal.side,
-                    "confidence": signal.confidence,
-                    "source": signal.source
-                })
-            logger.info(f"Generated {len(technical_signals)} technical signals for {symbol}")
-        except Exception as e:
-            logger.error(f"Technical signal generation failed for {symbol}: {e}", exc_info=True)
-
-        # Generar señales de patrones
-        logger.info(f"Generating pattern signals for {symbol}")
-        try:
-            pattern_signals = self._generate_pattern_signals(market_data, symbol)
-            for signal in pattern_signals:
-                signals.append({
-                    "symbol": signal.symbol,
-                    "direction": signal.side,
-                    "confidence": signal.confidence,
-                    "source": signal.source
-                })
-            logger.info(f"Generated {len(pattern_signals)} pattern signals for {symbol}")
-        except Exception as e:
-            logger.error(f"Pattern signal generation failed for {symbol}: {e}", exc_info=True)
-
-        # Combinar señales usando SignalComposer
-        try:
-            final_signals = self.composer.compose(signals, market_data)
-            logger.info(f"Generated {len(final_signals)} final signals for {symbol} from {len(signals)} candidates")
-            return final_signals
-        except Exception as e:
-            logger.error(f"Error combining signals for {symbol}: {e}", exc_info=True)
-            return []
-
-    def _generate_technical_signals(
-        self, market_data: pd.DataFrame, symbol: str
-    ) -> List[TacticalSignal]:
-        """Genera señales basadas en indicadores técnicos"""
-        logger.info(f"Generating technical signals for {symbol}")
-        signals: List[TacticalSignal] = []
-        try:
-            current_time = pd.Timestamp.now(tz="UTC")
-            required_cols = {"close"}
-            if not required_cols.issubset(market_data.columns):
-                logger.warning(f"Missing required columns for {symbol}: {market_data.columns}")
-                return signals
-
-            close = market_data["close"]
-            if close.empty or len(close) < 20:
-                logger.warning(f"Insufficient price data for {symbol}: {len(close)} rows")
-                return signals
-
-            if not pd.api.types.is_numeric_dtype(close):
-                logger.error(f"Close series for {symbol} is not numeric: {close.dtype}")
-                return signals
-
-            current_price = float(close.iloc[-1])
-            # RSI
-            rsi = self.technical.calculate_rsi(close)
-            if not rsi.empty and len(rsi) > 0:
-                rsi_value = rsi.iloc[-1]
-                if rsi_value > 70:
-                    signals.append(
-                        TacticalSignal(
-                            symbol=symbol,
-                            side=SignalDirection.SHORT.value,
-                            strength=0.6,
-                            confidence=0.6,
-                            price=current_price,
-                            timestamp=current_time,
-                            source=SignalSource.TECHNICAL.value,
-                            features_used={"indicator": "rsi", "value": rsi_value},
-                            horizon="1h",
-                            reasoning="RSI overbought (>70)"
-                        )
-                    )
-                elif rsi_value < 30:
-                    signals.append(
-                        TacticalSignal(
-                            symbol=symbol,
-                            side=SignalDirection.LONG.value,
-                            strength=0.6,
-                            confidence=0.6,
-                            price=current_price,
-                            timestamp=current_time,
-                            source=SignalSource.TECHNICAL.value,
-                            features_used={"indicator": "rsi", "value": rsi_value},
-                            horizon="1h",
-                            reasoning="RSI oversold (<30)"
-                        )
-                    )
-
-            # MACD
-            macd_line, signal_line, hist = self.technical.calculate_macd(close)
-            if not macd_line.empty and len(macd_line) > 0:
-                if macd_line.iloc[-1] > signal_line.iloc[-1] and hist.iloc[-1] > 0:
-                    signals.append(
-                        TacticalSignal(
-                            symbol=symbol,
-                            side=SignalDirection.LONG.value,
-                            strength=0.7,
-                            confidence=0.7,
-                            price=current_price,
-                            timestamp=current_time,
-                            source=SignalSource.TECHNICAL.value,
-                            features_used={"indicator": "macd", "hist": hist.iloc[-1]},
-                            horizon="1h",
-                            reasoning="MACD bullish crossover"
-                        )
-                    )
-                elif macd_line.iloc[-1] < signal_line.iloc[-1] and hist.iloc[-1] < 0:
-                    signals.append(
-                        TacticalSignal(
-                            symbol=symbol,
-                            side=SignalDirection.SHORT.value,
-                            strength=0.7,
-                            confidence=0.7,
-                            price=current_price,
-                            timestamp=current_time,
-                            source=SignalSource.TECHNICAL.value,
-                            features_used={"indicator": "macd", "hist": hist.iloc[-1]},
-                            horizon="1h",
-                            reasoning="MACD bearish crossover"
-                        )
-                    )
-
-            return signals
-        except Exception as e:
-            logger.error(f"Technical signal generation failed for {symbol}: {e}", exc_info=True)
-            return []
-
-    def _generate_pattern_signals(
-        self, market_data: pd.DataFrame, symbol: str
-    ) -> List[TacticalSignal]:
-        """Genera señales basadas en patrones de velas"""
-        logger.info(f"Generating pattern signals for {symbol}")
-        signals: List[TacticalSignal] = []
-        try:
-            current_time = pd.Timestamp.now(tz="UTC")
-            required_cols = {"open", "high", "low", "close"}
-            if not required_cols.issubset(market_data.columns):
-                logger.warning(f"Missing required columns for {symbol}: {market_data.columns}")
-                return signals
-
-            open_prices = market_data["open"]
-            high = market_data["high"]
-            low = market_data["low"]
-            close = market_data["close"]
-            if close.empty or len(close) < 2:
-                logger.warning(f"Insufficient price data for {symbol}: {len(close)} rows")
-                return signals
-
-            for series in [open_prices, high, low, close]:
-                if not pd.api.types.is_numeric_dtype(series):
-                    logger.error(f"Series {series.name} for {symbol} is not numeric: {series.dtype}")
-                    return signals
-
-            current_price = float(close.iloc[-1])
-            doji = self.patterns.detect_doji(open_prices, high, low, close)
-            if not doji.empty and doji.iloc[-1]:
-                signals.append(
-                    TacticalSignal(
-                        symbol=symbol,
-                        side=SignalDirection.NEUTRAL.value,
-                        strength=0.5,
-                        confidence=0.5,
-                        price=current_price,
-                        timestamp=current_time,
-                        source=SignalSource.PATTERN.value,
-                        features_used={"pattern": "doji"},
-                        horizon="1h",
-                        reasoning="Doji pattern detected"
-                    )
-                )
-
-            hammer = self.patterns.detect_hammer(open_prices, high, low, close)
-            if not hammer.empty and hammer.iloc[-1]:
-                signals.append(
-                    TacticalSignal(
-                        symbol=symbol,
-                        side=SignalDirection.LONG.value,
-                        strength=0.6,
-                        confidence=0.6,
-                        price=current_price,
-                        timestamp=current_time,
-                        source=SignalSource.PATTERN.value,
-                        features_used={"pattern": "hammer"},
-                        horizon="1h",
-                        reasoning="Hammer pattern detected"
-                    )
-                )
-
-            return signals
-        except Exception as e:
-            logger.error(f"Pattern signal generation failed for {symbol}: {e}", exc_info=True)
-            return []
-
-    def _apply_quality_filters(
-        self, signals: List[TacticalSignal], market_data: pd.DataFrame
-    ) -> List[TacticalSignal]:
-        """Filtra señales por fuerza mínima y elimina duplicados"""
-        if not signals:
-            return []
-
-        filtered = [
-            s for s in signals if s.strength >= self.config.signals.min_signal_strength
-        ]
-
-        unique = {}
-        for s in filtered:
-            key = (s.symbol, s.side, s.source)
-            if key not in unique or s.confidence > unique[key].confidence:
-                unique[key] = s
-
-        return list(unique.values())
-
-    def update_signal_performance(
-        self, symbol: str, signal_source: str, was_successful: bool
-    ) -> None:
-        if symbol in self.signal_performance and signal_source in self.signal_performance[symbol]:
-            perf = self.signal_performance[symbol][signal_source]
-            perf["total"] += 1
-            if was_successful:
-                perf["hits"] += 1
-            if perf["total"] > 0:
-                perf["recent_accuracy"] = perf["hits"] / perf["total"]
-
-    def get_model_info(self) -> Dict[str, Any]:
-        return {
-            "ai_model": self.ai_model.get_model_info(),
-            "signal_performance": self.signal_performance,
-            "active_signals_count": len(self.state.active_signals),
-            "config": {
-                "min_signal_strength": self.config.signals.min_signal_strength,
-                "ai_model_weight": self.config.signals.ai_model_weight,
-                "technical_weight": self.config.signals.technical_weight,
-                "pattern_weight": self.config.signals.pattern_weight,
-                "universe": self.config.signals.universe,
-            },
-        }
+        raw_signals = await self._generate_signals(
+            portfolio=portfolio,
+            market_data=market_data,
+            features_by_symbol=features_by_symbol,
+        )
+        return raw_signals

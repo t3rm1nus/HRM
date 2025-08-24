@@ -116,7 +116,7 @@ class PositionSizerManager:
 
         size = notional / signal.price
 
-        # niveles SL/TP respetando los del signal si existen
+        # niveles SL/TP respetando los del signal si existen (SL final se garantiza en RiskControlManager)
         stop_loss = signal.stop_loss
         take_profit = signal.take_profit
 

@@ -4,7 +4,7 @@ __author__ = "HRM Team"
 from .models import TacticalSignal, PositionSize, RiskMetrics
 from .config import L2Config
 from .ai_model_integration import AIModelWrapper
-from .signal_generator import SignalGenerator
+from .signal_generator import L2TacticProcessor
 
 __all__ = [
     "TacticalSignal",
@@ -12,5 +12,5 @@ __all__ = [
     "RiskMetrics",
     "L2Config",
     "AIModelWrapper",
-    "SignalGenerator"
+    "L2TacticProcessor"
 ]

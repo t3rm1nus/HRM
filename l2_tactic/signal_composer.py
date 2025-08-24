@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Any
 import pandas as pd
+from .config import L2Config
 
 logger = logging.getLogger("l2_tactic.signal_composer")
 
@@ -8,12 +9,15 @@ class SignalComposer:
     """
     Combina señales tácticas de múltiples fuentes (IA, técnicas, patrones).
     """
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: L2Config):
         self.config = config
-        self.min_signal_strength = config.get("min_signal_strength", 0.5)
-        self.ai_model_weight = config.get("ai_model_weight", 0.5)
-        self.technical_weight = config.get("technical_weight", 0.3)
-        self.pattern_weight = config.get("pattern_weight", 0.2)
+        self.min_signal_strength = getattr(config, "min_signal_strength", 0.5)
+
+        # Pesos para señales según la fuente
+        self.ai_model_weight = getattr(config, "ai_model_weight", 0.5)
+        self.technical_weight = getattr(config, "technical_weight", 0.3)
+        self.pattern_weight = getattr(config, "pattern_weight", 0.2)
+
         logger.info("SignalComposer initialized with config")
 
     def compose(self, signals: List[Dict], market_data: pd.DataFrame) -> List[Dict]:
