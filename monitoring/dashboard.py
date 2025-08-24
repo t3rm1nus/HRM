@@ -17,16 +17,23 @@ def render_dashboard(state):
 
     total_valor = 0
     for activo, qty in state["portfolio"].items():
-        precio = state["mercado"].get(activo, 0.0)
+        # Extraer último precio del activo si existe en el mercado
+        if activo in state.get("mercado", {}) and "close" in state["mercado"][activo]:
+            precio = state["mercado"][activo]["close"].iloc[-1]  # último precio como float
+        else:
+            precio = 0.0
+
         valor = qty * precio
         total_valor += valor
         table.add_row(activo, f"{qty:.4f}", f"{precio:.2f}", f"{valor:.2f}")
 
     metrics = telemetry.snapshot()
     metrics_panel = Panel.fit(
-        f"[bold cyan]Ciclos totales:[/bold cyan] {metrics['counters'].get('ciclos_total',0)}\n"
-        f"[bold cyan]Valor cartera:[/bold cyan] {total_valor:.2f} USD\n"
-        f"[bold cyan]Último tiempo ciclo:[/bold cyan] {metrics['timings'][-1][1]:.4f}s" if metrics["timings"] else "",
+        (
+            f"[bold cyan]Ciclos totales:[/bold cyan] {metrics['counters'].get('ciclos_total',0)}\n"
+            f"[bold cyan]Valor cartera:[/bold cyan] {total_valor:.2f} USD\n"
+            f"[bold cyan]Último tiempo ciclo:[/bold cyan] {metrics['timings'][-1][1]:.4f}s"
+        ) if metrics["timings"] else "",
         title="📈 Métricas"
     )
 

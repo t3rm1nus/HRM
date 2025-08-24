@@ -7,7 +7,13 @@ def procesar_l4(state):
     estrategia = seleccionar_estrategia(deriva, state["mercado"])
     portfolio_actualizado = asignar_portfolio({"capital": 1000}, estrategia)
 
+    # 🔧 Normalizar claves del portafolio a símbolos válidos
+    symbol_map = {"BTC": "BTC/USDT", "ETH": "ETH/USDT", "USDT": "USDT"}
+    portfolio_normalizado = {
+        symbol_map.get(sym, sym): val for sym, val in portfolio_actualizado.items()
+    }
+
     state["estrategia"] = estrategia
-    state["portfolio"] = portfolio_actualizado
+    state["portfolio"] = portfolio_normalizado
     state["deriva"] = deriva
     return state
