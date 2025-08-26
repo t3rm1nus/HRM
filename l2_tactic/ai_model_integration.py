@@ -42,7 +42,7 @@ class AIModelWrapper:
         model_id: str = "ppo_multiasset",
     ):
         self.config = config
-        self.model_path = getattr(config, "model_path", "models/ai_model_data_multiasset.zip")
+        self.model_path = getattr(config, "model_path", "models/L2/ai_model_data_multiasset.zip")
         self.optimizer = optimizer or PerformanceOptimizer(PerfConfig())
         self.model_id = model_id
         self.model = self._load_model()

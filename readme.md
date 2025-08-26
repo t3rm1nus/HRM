@@ -117,90 +117,113 @@ Envío/gestión de órdenes en tiempo real para BTC/USDT y ETH/USDT
 
 7️⃣ Estructura de carpetas
 HRM/
-│── docs/                 # documentación
+│── docs/                      # documentación
 │
-│── storage/              # módulo de persistencia
+│── storage/                   # módulo de persistencia
 │   ├── csv_writer.py
 │   ├── sqlite_writer.py
 │   └── __init__.py
 │
-├── core/                 # utilidades globales
-│   ├── config/           # configs YAML/JSON
+├── core/                      # utilidades globales
+│   ├── config/                # configs YAML/JSON
 │   ├── logging.py
 │   ├── scheduler.py
 │   └── utils.py
 │
-├── comms/                # comunicaciones y eventos
+├── comms/                     # comunicaciones y eventos
 │   ├── message_bus.py
 │   ├── schemas.py
-│   └── adapters/         # conectores externos (Kafka, Redis, etc.)
+│   └── adapters/              # conectores externos (Kafka, Redis, etc.)
 │
-├── l4_meta/              # meta-razonamiento (horas/días)
+├── l4_meta/                   # meta-razonamiento (horas/días)
 │   ├── drift_detector.py
 │   ├── strategy_selector.py
 │   ├── portfolio_allocator.py
 │   └── __init__.py
 │
-├── l3_strategy/          # nivel estratégico (intradía)
+├── l3_strategy/               # nivel estratégico actual (intradía)
 │   ├── regime_classifier.py
 │   ├── universe_filter.py
 │   ├── exposure_manager.py
 │   └── __init__.py
 │
-├── l2_tactic/            # nivel táctico (señales, sizing)
+├── l3_strategic/              # FUTURA arquitectura estratégica (multi-nivel)
+│   ├── __init__.py
+│   ├── README.md  
+│   ├── models.py                    # Estructuras de datos L3
+│   ├── config.py                    # Configuración estratégica simplificada
+│   ├── strategic_processor.py       # Procesador principal L3
+│   ├── bus_integration.py           # Comunicación L4 ↔ L3 ↔ L2
+│   ├── performance_tracker.py       # Tracking performance estratégico
+│   ├── metrics.py                   # Métricas L3
+│   ├── procesar_l3.py               # Entry-point local para pruebas
+│   ├── ai_model_loader.py           # Cargador de los 3 modelos IA
+│   └── ai_models/                   # Solo 3 modelos ligeros
+│       ├── __init__.py
+│       ├── unified_decision_model.py # Modelo 1: Decisiones estratégicas unificadas
+│       ├── regime_detector.py        # Modelo 2: Detección de régimen de mercado  
+│       └── risk_assessor.py          # Modelo 3: Evaluación de riesgo integrada
+│
+├── l2_tactic/                 # nivel táctico (señales, sizing)
 │   ├── signal_generator.py
 │   ├── position_sizer.py
 │   ├── risk_controls.py
 │   └── __init__.py
 │
-├── l1_operational/       # nivel operacional (OMS/EMS) - limpio y determinista
-│   ├── models.py         # Signal, ExecutionReport, RiskAlert, OrderIntent
-│   ├── config.py         # límites de riesgo centralizados por símbolo
-│   ├── bus_adapter.py    # bus asíncrono (topics: signals, reports, alerts)
-│   ├── order_manager.py  # orquesta validación → ejecución → reporte
-│   ├── risk_guard.py     # stop-loss, capital, liquidez, exposición por símbolo
-│   ├── executor.py       # timeouts/retry + métricas por activo
-│   ├── data_feed.py      # datos de mercado y saldos
-│   ├── binance_client.py # cliente Binance (sandbox por defecto)
-│   ├── ai_models/        # modelos IA entrenados
-│   │   ├── modelo1_lr.pkl      # Logistic Regression (BTC/ETH)
-│   │   ├── modelo2_rf.pkl      # Random Forest (BTC/ETH)
-│   │   ├── modelo3_lgbm.pkl    # LightGBM (BTC/ETH)
-│   ├── test_clean_l1_multiasset.py  # pruebas de limpieza y determinismo multiasset
-│   ├── README.md         # doc específica de L1
-│   └── requirements.txt  # dependencias L1
+├── l1_operational/            # nivel operacional (OMS/EMS)
+│   ├── models.py
+│   ├── config.py
+│   ├── bus_adapter.py
+│   ├── order_manager.py
+│   ├── risk_guard.py
+│   ├── executor.py
+│   ├── data_feed.py
+│   ├── binance_client.py
+│   ├── ai_models/             # modelos IA entrenados (L1)
+│   │   ├── modelo1_lr.pkl
+│   │   ├── modelo2_rf.pkl
+│   │   └── modelo3_lgbm.pkl
+│   ├── test_clean_l1_multiasset.py
+│   ├── README.md
+│   └── requirements.txt
 │
-├── data/                 # ingestión y almacenamiento
-│   ├── connectors/       # binance, dydx, etc.
+├── models/                    # modelos IA externos centralizados
+│   ├── L1/
+│   │   ├── modelo1_lr.pkl
+│   │   ├── modelo2_rf.pkl
+│   │   └── modelo3_lgbm.pkl
+│   ├── L2/
+│   │   ├── _stable_baselines3_version
+│   │   ├── data/
+│   │   ├── policy.optimizer.pth
+│   │   ├── policy.pth
+│   │   ├── pytorch_variables.pth
+│   │   └── system_info
+│   ├── L3/
+│   └── L4/
+│
+├── data/                      # ingestión y almacenamiento
+│   ├── connectors/
 │   ├── loaders.py
-│   ├── storage/          # parquet/csv
+│   ├── storage/
 │   └── __init__.py
 │
-├── risk/                 # librería transversal de riesgo
+├── risk/                      # librería transversal de riesgo
 │   ├── limits.py
 │   ├── var_es.py
 │   ├── drawdown.py
 │   └── __init__.py
 │
-├── monitoring/           # métricas y reporting
+├── monitoring/                # métricas y reporting
 │   ├── dashboards/
 │   ├── alerts.py
 │   ├── telemetry.py
 │   └── __init__.py
-├── models/               # modelos de IA externos (FinRL + L1)
-│   ├── ai_model_data_multiasset/
-│   │    ├── _stable_baselines3_version
-│   │    ├── data
-│   │    ├── policy.optimizer.pth
-│   │    ├── policy.pth
-│   │    ├── pytorch_variables.pth
-│   │    └── system_info
-│   ├── modelo1_lr.pkl        # Logistic Regression (L1: BTC/ETH)
-│   ├── modelo2_rf.pkl        # Random Forest (L1: BTC/ETH)
-│   ├── modelo3_lgbm.pkl      # LightGBM (L1: BTC/ETH)
-├── tests/                # unit & integration tests
+│
+├── tests/                     # unit & integration tests
 │   └── backtester.py
-└── main.py               # orquestador central
+└── main.py                    # orquestador central
+
 
 Nota: Esta estructura resume el proyecto real y es suficiente para navegar y extender el código.
 

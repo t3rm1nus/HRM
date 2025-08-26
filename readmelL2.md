@@ -78,14 +78,14 @@ bus_integration.py - Comunicación asíncrona L3 ↔ L2 ↔ L1
 signal_generator.py - Orquestador de generación de señales (IA + técnico + patrones)
 signal_composer.py - Composición dinámica y resolución de conflictos
 position_sizer.py - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
-ai_model_integration.py - Carga modelo FinRL desde ../../models/ai_model_data_multiasset/
+ai_model_integration.py - Carga modelo FinRL desde ../../models/L2/ai_model_data_multiasset/
 performance_optimizer.py - Optimizaciones de rendimiento (cache, batching)
 metrics.py - Tracking de performance L2 (hit rate, Sharpe ratio, drawdown)
 procesar_l2.py - Punto de entrada principal para ejecución en local
 technical/ - Indicadores técnicos y análisis multi-timeframe
 ensemble/ - Combinación de señales multi-fuente (voting, blending)
 risk_controls/ - Módulo modularizado de gestión de riesgo
-HRM RAIZ models/ - Modelos FinRL pre-entrenados descomprimidos en carpeta ai_model_data_multiasset
+HRM RAIZ models/ - Modelos FinRL pre-entrenados descomprimidos en carpeta models/L2/ai_model_data_multiasset
 
 ---
 
@@ -219,7 +219,7 @@ pytest tests/test_risk_controls.py -v
 表格
 复制
 Punto	Estado	Evidencia
-Modelo FinRL cargado	✅	Modelo PPO cargado correctamente desde models/ai_model_data_multiasset.zip
+Modelo FinRL cargado	✅	Modelo PPO cargado correctamente desde models/L2/ai_model_data_multiasset.zip
 Ensemble activo	✅	[BlenderEnsemble] inicializado: {'ai': 0.6, 'technical': 0.3, 'risk': 0.1}
 Pipeline L2 ejecutado	✅	[L2] Ejecutando capa Tactic... → Sin señal tras ensemble (sin errores)
 Métricas / performance	✅	performance_optimizer.py y metrics.py integrados (no hay excepciones)

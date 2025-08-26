@@ -23,7 +23,7 @@ class AIModelConfig:
     model_name: str = "modeloL2_multiasset"
     model_params: Dict[str, Any] = field(default_factory=dict)
     signal_horizon_minutes: int = 5
-    model_path: str = "models/ai_model_data_multiasset"  # Path adaptado para multiasset
+    model_path: str = "models/L2/ai_model_data_multiasset"  # Path adaptado para multiasset
     model_type: str = "stable_baselines3"  # tipo de modelo
     prediction_threshold: float = 0.6
     max_batch_size: int = 100

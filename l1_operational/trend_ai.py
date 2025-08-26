@@ -7,9 +7,9 @@ import joblib
 from .config import TREND_THRESHOLD
 
 # --- Paths a modelos ---
-MODEL_RF_PATH = "C:/proyectos/HRM/models/modelo2_rf.pkl"
-MODEL_LGBM_PATH = "C:/proyectos/HRM/models/modelo3_lgbm.pkl"
-MODEL_LR_PATH = "C:/proyectos/HRM/models/modelo1_lr.pkl"  # si existiera
+MODEL_RF_PATH = "C:/proyectos/HRM/models/L1/modelo2_rf.pkl"
+MODEL_LGBM_PATH = "C:/proyectos/HRM/models/L1/modelo3_lgbm.pkl"
+MODEL_LR_PATH = "C:/proyectos/HRM/models/L1/modelo1_lr.pkl"  # si existiera
 
 HIST_PATH = "C:/proyectos/HRM/logs/trend_ai_history.csv"
 

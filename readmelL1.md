@@ -93,7 +93,7 @@ order_manager.py - Orquesta el flujo de ejecución y validaciones IA/hard-coded 
 risk_guard.py - Valida límites de riesgo y exposición por símbolo
 executor.py - Ejecuta órdenes en el exchange
 config.py - Configuración centralizada de límites y parámetros por activo
-Modelos IA (desde raíz/models):
+Modelos IA (desde raíz/models/L1):
 - modelo1_lr.pkl - Logistic Regression (BTC/ETH)
 - modelo2_rf.pkl - Random Forest (BTC/ETH)
 - modelo3_lgbm.pkl - LightGBM (BTC/ETH)
@@ -165,10 +165,9 @@ python ml_training/modelo3_train_lgbm.py
 
 Salida por modelo:
 
-models/modelo1_lr.pkl - Modelo entrenado (Logistic Regression)
-models/modelo2_rf.pkl - Modelo entrenado (Random Forest)
-models/modelo3_lgbm.pkl - Modelo entrenado (LightGBM)
-models/modelo1_[tipo]_multiasset.meta.json - Metadatos con métricas por símbolo
+models/L1/modelo1_lr.pkl - Modelo entrenado (Logistic Regression)
+models/L1/modelo2_rf.pkl - Modelo entrenado (Random Forest)
+models/L1/modelo3_lgbm.pkl - Modelo entrenado (LightGBM)
 Threshold óptimo separado para BTC y ETH
 Feature importance con correlaciones cruzadas
 
