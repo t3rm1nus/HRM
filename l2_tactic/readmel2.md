@@ -1,14 +1,14 @@
-# 🎯 L2\_Tactical - Nivel Táctico de Ejecución
+# 🎯 L2_tactic - Nivel Táctico de Ejecución
 
 ## ⚡ Objetivo
 
-L2 es el **cerebro táctico** que convierte decisiones estratégicas de L3 en **señales ejecutables** para L1. Combina **modelos FinRL pre-entrenados**, análisis técnico avanzado, composición de señales multi-fuente y **gestión dinámica de riesgo** para generar señales de alta calidad en tiempo real (escala de minutos).
+L2_tactic es el **cerebro táctico** que convierte decisiones estratégicas de L3 en **señales ejecutables** para L1. Combina **modelos FinRL pre-entrenados**, análisis técnico avanzado, composición de señales multi-fuente y **gestión dinámica de riesgo** para generar señales de alta calidad en tiempo real (escala de minutos).
 
 Genera y compone señales de trading (IA + técnico + patrones) → calcula el **position sizing óptimo** → aplica **controles de riesgo pre-ejecución** → entrega señales listas para L1.
 
 ---
 
-## 🚫 Lo que L2 NO hace
+## 🚫 Lo que L2_tactic NO hace
 
 | ❌ No hace                                            |
 | ---------------------------------------------------- |
@@ -20,7 +20,7 @@ Genera y compone señales de trading (IA + técnico + patrones) → calcula el *
 
 ---
 
-## ✅ Lo que L2 SÍ hace
+## ✅ Lo que L2_tactic SÍ hace
 
 | ✅ Funcionalidad     | Descripción                                                                  |
 | ------------------- | ---------------------------------------------------------------------------- |
@@ -68,67 +68,57 @@ L3 (Strategic Decisions)
 └─────────────────────────────────────────┘
         ↓
     L2 Signals → L1 (Execution)
-```
 
 ### Componentes Principales
 
-* `models.py` - Estructuras de datos (TacticalSignal, MarketFeatures, PositionIntent)
-* `config.py` - Configuración L2 (modelos, thresholds, límites de riesgo)
-* `bus_adapter.py` - Comunicación asíncrona L3 ↔ L2 ↔ L1
-* `signal_generator.py` - Orquestador de generación de señales (IA + técnico + patrones)
-* `signal_composer.py` - Composición dinámica y resolución de conflictos
-* `position_sizer.py` - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
-* `risk_controls/` - Módulo modularizado de gestión de riesgo
-
-  * `dynamic_stops.py` - Cálculo y gestión de stops dinámicos
-  * `portfolio_risk.py` - Riesgo de correlación, calor de portafolio y drawdown global
-  * `liquidity_checks.py` - Validación de liquidez mínima y ratios
-  * `manager.py` - Orquestador principal de controles de riesgo
-* `procesar_l2.py` - **Punto de entrada principal** para ejecución en local
-* `finrl_models/` - Modelos FinRL pre-entrenados (.pkl/.zip)
+Componentes Principales
+models.py - Estructuras de datos (TacticalSignal, MarketFeatures, PositionIntent)
+config.py - Configuración L2 (modelos, thresholds, límites de riesgo)
+bus_integration.py - Comunicación asíncrona L3 ↔ L2 ↔ L1
+signal_generator.py - Orquestador de generación de señales (IA + técnico + patrones)
+signal_composer.py - Composición dinámica y resolución de conflictos
+position_sizer.py - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
+ai_model_integration.py - Carga modelo FinRL desde ../../models/ai_model_data_multiasset/
+performance_optimizer.py - Optimizaciones de rendimiento (cache, batching)
+metrics.py - Tracking de performance L2 (hit rate, Sharpe ratio, drawdown)
+procesar_l2.py - Punto de entrada principal para ejecución en local
+technical/ - Indicadores técnicos y análisis multi-timeframe
+ensemble/ - Combinación de señales multi-fuente (voting, blending)
+risk_controls/ - Módulo modularizado de gestión de riesgo
+HRM RAIZ models/ - Modelos FinRL pre-entrenados descomprimidos en carpeta ai_model_data_multiasset
 
 ---
 
-## 📁 Estructura del Proyecto
+## 📁 Estructura real del proyecto
 
-```text
 l2_tactical/
-├── 📄 README.md              # Este archivo
+├── 📄 README.md
 ├── 📄 __init__.py
-├── 📄 models.py              # Estructuras de datos L2
-├── 📄 config.py              # Configuración y parámetros
-├── 📄 bus_adapter.py         # Comunicación con MessageBus
-├── 📄 signal_generator.py    # Generador principal de señales
-├── 📄 signal_composer.py     # Composición y consenso de señales
-├── 📄 position_sizer.py      # Sizing inteligente de posiciones
-├── 📁 risk_controls/         # Controles de riesgo (modularizados)
-│   ├── 📄 dynamic_stops.py
-│   ├── 📄 portfolio_risk.py
-│   ├── 📄 liquidity_checks.py
-│   └── 📄 manager.py
-├── 📄 procesar_l2.py         # Script orquestador / runner local
-│
-├── 📁 technical/             # Indicadores técnicos avanzados
-│   ├── 📄 indicators.py
-│   ├── 📄 patterns.py
-│   ├── 📄 multi_timeframe.py
-│   └── 📄 support_resistance.py
-│
-├── 📁 ensemble/              # Lógica de ensemble
-│   ├── 📄 voting_strategy.py
-│   ├── 📄 confidence_calc.py
-│   └── 📄 consensus_builder.py
-│
-├── 📁 tests/                 # Tests unitarios e integración
-│   ├── 📄 test_signal_generator.py
-│   ├── 📄 test_signal_composer.py
-│   ├── 📄 test_position_sizer.py
-│   ├── 📄 test_risk_controls.py
-│   └── 📄 test_integration.py
-│
-├── 📄 requirements.txt       # Dependencias L2
-└── 📄 run_l2_tests.py        # Script de testing
-```
+├── 📄 models.py
+├── 📄 config.py
+├── 📄 signal_generator.py        # L2TacticProcessor
+├── 📄 signal_composer.py         # SignalComposer
+├── 📄 position_sizer.py          # PositionSizerManager
+├── 📄 ai_model_integration.py    # AIModelWrapper
+├── 📄 bus_integration.py         # L2BusAdapter
+├── 📄 performance_optimizer.py   # PerformanceOptimizer
+├── 📄 metrics.py                 # L2Metrics
+├── 📄 procesar_l2.py             # Entry-point local
+├── 📁 technical/                 # Indicadores técnicos y análisis multi-timeframe
+│   ├── 📄 __init__.py
+│   ├── 📄 multi_timeframe.py     # Fusión de señales multi-timeframe
+│   └── 📄 indicators.py          # Indicadores técnicos (RSI, MACD, etc.)
+├── 📁 ensemble/                  # Combinación de señales multi-fuente
+│   ├── 📄 __init__.py
+│   ├── 📄 voting.py              # VotingEnsemble
+│   └── 📄 blender.py             # BlenderEnsemble
+└── 📁 risk_controls/             # Módulo modularizado de gestión de riesgo
+    ├── 📄 __init__.py
+    ├── 📄 alerts.py
+    ├── 📄 manager.py
+    ├── 📄 portfolio.py
+    ├── 📄 positions.py
+    └── 📄 stop_losses.py
 
 ---
 

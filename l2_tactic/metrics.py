@@ -28,6 +28,7 @@ class L2Metrics:
     """
         
     def __init__(self, max_history: int = 10_000):
+        self.total_return = 0.0   # o el valor que corresponda
         # Señales y ejecuciones
         self.signal_history: List[TacticalSignal] = []
         self.execution_history: deque[ExecRecord] = deque(maxlen=max_history)
@@ -250,4 +251,12 @@ class L2Metrics:
         return {
             "summary": self.summary(),
             "buckets": self.bucket_summary()
+        }
+
+    def to_dict(self):
+        return {
+            "total_return": self.total_return,
+            "sharpe": self.sharpe,
+            "max_drawdown": self.max_drawdown,
+            # … cualquier otro atributo que quieras reportar
         }

@@ -187,7 +187,17 @@ HRM/
 │   ├── alerts.py
 │   ├── telemetry.py
 │   └── __init__.py
-│
+├── models/               # modelos de IA externos (FinRL + L1)
+│   ├── ai_model_data_multiasset/
+│   │    ├── _stable_baselines3_version
+│   │    ├── data
+│   │    ├── policy.optimizer.pth
+│   │    ├── policy.pth
+│   │    ├── pytorch_variables.pth
+│   │    └── system_info
+│   ├── modelo1_lr.pkl        # Logistic Regression (L1: BTC/ETH)
+│   ├── modelo2_rf.pkl        # Random Forest (L1: BTC/ETH)
+│   ├── modelo3_lgbm.pkl      # LightGBM (L1: BTC/ETH)
 ├── tests/                # unit & integration tests
 │   └── backtester.py
 └── main.py               # orquestador central

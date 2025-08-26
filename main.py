@@ -26,6 +26,10 @@ from l2_tactic.main_processor import L2MainProcessor
 # ---- Bus adapter (requiere un bus) ----
 from l1_operational.bus_adapter import BusAdapterAsync
 
+from l2_tactic.technical.patterns import detect_all as detect_patterns
+from l2_tactic.technical.multi_timeframe import resample_and_consensus
+from l2_tactic.technical.support_resistance import swing_pivots
+
 
 # ------------------------------------------------------------
 # Configuración de logging
@@ -234,6 +238,20 @@ def build_mock_state() -> dict:
         "regimen_context": {},
         "ciclo_id": 0,
     }
+
+        # --- Cálculo de features adicionales ---
+    features_by_symbol = {}
+    for sym, df in state["mercado"].items():
+        pat = detect_patterns(df)
+        mtf = resample_and_consensus(df)
+        sr  = swing_pivots(df)
+        features_by_symbol[sym] = {
+            "patterns": pat,
+            "multi_tf": mtf,
+            "s_r": sr,
+        }
+    state["features_by_symbol"] = features_by_symbol
+
     return state
 
 

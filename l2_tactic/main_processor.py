@@ -1,85 +1,142 @@
-# l2_tactic/main_processor.py
+"""
+L2MainProcessor
+Capa Tactic – genera señales y prepara órdenes para L1.
+Ahora integra l2_tactic.ensemble para combinar señales.
+"""
 
-from .bus_integration import L2BusAdapter
+import asyncio
+from typing import Dict, Any, List
+
+from core.logging import logger
+from .signal_composer import SignalComposer
+from .signal_generator import L2TacticProcessor
+from .position_sizer import PositionSizerManager
+from .technical.multi_timeframe import resample_and_consensus
+from .ensemble import VotingEnsemble, BlenderEnsemble
+from .metrics import L2Metrics
+
 
 class L2MainProcessor:
     """
-    Orquesta todo el flujo L2:
-    señales → composición → sizing → control de riesgo → output final.
+    Responsabilidades:
+      1. Recibir state (portfolio + mercado)
+      2. Generar señales (AI + técnico)
+      3. Combinar señales con ensemble
+      4. Transformar señales en órdenes con SL
+      5. Devolver órdenes listas para L1
     """
 
-    def __init__(self, config: L2Config, bus):
-        self.config = config
-        self.bus = bus
-        self.optimizer = PerformanceOptimizer(config)
+    def __init__(self, config, bus=None) -> None:
+        self.config  = config
+        self.bus     = bus
         self.generator = L2TacticProcessor(config)
-        self.composer = SignalComposer(config)
-        self.sizer = PositionSizer(config)
-        self.risk = RiskControlManager(config)
-        self.metrics = L2Metrics()
+        self.composer  = SignalComposer(config)
+        self.sizer     = PositionSizerManager(config)
+        self.metrics   = L2Metrics()
 
-        # 🔹 Nuevo: adaptador al bus
-        self.bus_adapter = L2BusAdapter(bus, config)
+        # --- ENSAMBLE ---
+        mode = getattr(config, "ensemble_mode", "blender")
+        self.use_voting = (mode == "voting")
 
-    async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        portfolio = state.get("portfolio", {})
-        market_data = state.get("mercado", {})
-        features = state.get("features", {})
-        correlation_matrix = state.get("correlation_matrix")
-
-        portfolio_state = {
-            "total_capital": state.get("portfolio_value") or state.get("total_capital", 100_000.0),
-            "available_capital": state.get("available_capital", state.get("cash", 100_000.0)),
-            "daily_pnl": state.get("daily_pnl", 0.0),
-        }
-
-        # 1) Generar señales brutas
-        raw_signals = await self.generator.process(
-            portfolio=portfolio,
-            market_data=market_data,
-            features_by_symbol=features
-        )
-
-        # 2) Componer señales
-        final_signals = await self.composer.compose_signals(raw_signals)
-
-        # 3) Pasar señales al bus_integration (con sizing + riesgo + métricas)
-        orders: List[Dict] = []
-        sizings: List[PositionSize] = []
-
-        for sig in final_signals:
-            mf: MarketFeatures = features.get(sig.symbol)
-            if mf is None:
-                logger.warning(f"No market features for {sig.symbol}. Skipping.")
-                continue
-
-            # 👉 delegamos procesamiento a L2BusAdapter
-            await self.bus_adapter._process_signal(sig, mf)
-
-            # también guardamos órdenes locales (para retorno)
-            ensured = await self.sizer.ensure_stop_and_size(
-                signal=sig,
-                market_features=mf,
-                portfolio_state=portfolio_state,
-                corr_matrix=correlation_matrix,
+        if self.use_voting:
+            method   = getattr(config, "voting_method",   "hard")
+            threshold = getattr(config, "voting_threshold", 0.5)
+            self.ensemble = VotingEnsemble(method=method, threshold=threshold)
+            logger.info("[L2MainProcessor] Usando VotingEnsemble")
+        else:
+            weights = getattr(
+                config,
+                "blender_weights",
+                {"ai": 0.6, "technical": 0.3, "risk": 0.1}
             )
-            if ensured is None:
-                continue
+            self.ensemble = BlenderEnsemble(weights=weights)
+            logger.info("[L2MainProcessor] Usando BlenderEnsemble")
 
-            sig_ok, ps_ok = ensured
-            order = self.sizer.to_l1_order(sig_ok, ps_ok)
-            orders.append(order)
-            sizings.append(ps_ok)
+    # ------------------------------------------------------------------ #
+    async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Procesa un ciclo completo de L2.
+        Devuelve un state actualizado con la clave 'ordenes'.
+        """
+        logger.info("[L2] Ejecutando capa Tactic...")
 
-        result = {
-            **state,
-            "orders_for_l1": orders,
-            "signals_final": final_signals,
-            "sizing": sizings,
-        }
+        # 1) Generar señales crudas
+        raw_signals = await self._generate_signals(state)
+        logger.debug(f"[L2] Señales crudas: {len(raw_signals)}")
 
-        # 🔹 Publicamos performance report hacia L4
-        await self.bus_adapter.publish_performance_report()
+        # 2) Combinar con ensemble
+        combined = self._combine(raw_signals)
+        if not combined:
+            logger.warning("[L2] Sin señal tras ensemble")
+            state["ordenes"] = []
+            return state
 
+        # 3) Convertir señal a órdenes con SL
+        orders = self._signal_to_orders(combined, state)
         logger.info(f"[L2] Prepared {len(orders)} orders for L1 (all with SL)")
-        return result
+        state["ordenes"] = orders
+        return state
+
+    # ------------------------------------------------------------------ #
+    async def _generate_signals(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Llama al generador para que produzca señales.
+        Cada señal debe llevar 'symbol', 'side', 'prob', 'source'.
+        """
+        signals = []
+
+        # -- AI (PPO) --
+        ai_signals = await self.generator.ai_signals(state)
+        for sig in ai_signals:
+            sig["source"] = "ai"
+            signals.append(sig)
+
+        # -- Técnico --
+        tech_signals = await self.generator.technical_signals(state)
+        for sig in tech_signals:
+            sig["source"] = "technical"
+            signals.append(sig)
+
+        # -- Risk overlay --
+        risk_signals = await self.generator.risk_overlay(state)
+        for sig in risk_signals:
+            sig["source"] = "risk"
+            signals.append(sig)
+
+        return signals
+
+    # ------------------------------------------------------------------ #
+    def _combine(self, signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Delega en el ensamble elegido.
+        """
+        if self.use_voting:
+            return self.ensemble.vote(signals)
+        return self.ensemble.blend(signals)
+
+    # ------------------------------------------------------------------ #
+    def _signal_to_orders(self,
+                          signal: Dict[str, Any],
+                          state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Convierte la señal consensuada en lista de órdenes con SL.
+        """
+        symbol = signal["symbol"]
+        side = signal["side"]
+        size = self.sizer.calculate_position(signal, state)
+
+        base_order = {
+            "symbol": symbol,
+            "type": "market",
+            "side": side,
+            "amount": size,
+            "params": {"sl": self._default_sl(symbol, state)}
+        }
+        return [base_order]
+
+    # ------------------------------------------------------------------ #
+    def _default_sl(self, symbol: str, state: Dict[str, Any]) -> float:
+        """
+        SL fijo o dinámico (ejemplo simple: 2 %).
+        """
+        return state["mercado"][symbol]["close"] * 0.98

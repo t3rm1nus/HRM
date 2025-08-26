@@ -224,3 +224,25 @@ class L2TacticProcessor:
         except Exception as e:
             logger.error(f"[L2] Error generando señales: {e}", exc_info=True)
             return []
+    
+    # ------------- STUBS ASYNC ----------------
+    async def ai_signals(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Genera señales provenientes del modelo PPO (stub).
+        Devuelve lista vacía hasta que tengas la lógica real.
+        """
+        return []
+
+    async def technical_signals(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Genera señales técnicas (stub).
+        """
+        return []
+
+    async def risk_overlay(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Capa de riesgo: puede devolver señales de reducción de exposición (stub).
+        """
+        return []
+
+SignalGenerator = L2TacticProcessor

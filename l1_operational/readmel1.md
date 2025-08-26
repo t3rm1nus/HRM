@@ -93,10 +93,10 @@ order_manager.py - Orquesta el flujo de ejecución y validaciones IA/hard-coded 
 risk_guard.py - Valida límites de riesgo y exposición por símbolo
 executor.py - Ejecuta órdenes en el exchange
 config.py - Configuración centralizada de límites y parámetros por activo
-ai_models/ - Modelos IA multiasset entrenados:
-modelo1_lr.pkl - Logistic Regression (BTC/ETH)
-modelo2_rf.pkl - Random Forest (BTC/ETH) 
-modelo3_lgbm.pkl - LightGBM (BTC/ETH)
+Modelos IA (desde raíz/models):
+- modelo1_lr.pkl - Logistic Regression (BTC/ETH)
+- modelo2_rf.pkl - Random Forest (BTC/ETH)
+- modelo3_lgbm.pkl - LightGBM (BTC/ETH)
 
 
 
