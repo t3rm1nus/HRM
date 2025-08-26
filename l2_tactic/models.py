@@ -2,19 +2,23 @@
 from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+import pandas as pd
+
 
 class SignalDirection(Enum):
     LONG = "buy"
     SHORT = "sell"
     NEUTRAL = "hold"
 
+
 class SignalSource(Enum):
     AI = "ai"
     TECHNICAL = "technical"
     PATTERN = "pattern"
     COMPOSITE = "composite"
+
 
 @dataclass
 class TacticalSignal:
@@ -40,6 +44,7 @@ class TacticalSignal:
         d["timestamp"] = self.timestamp.isoformat()
         return d
 
+
 @dataclass
 class MarketFeatures:
     volatility: Optional[float] = None
@@ -52,6 +57,12 @@ class MarketFeatures:
     resistance: Optional[float] = None
     spread_bps: Optional[float] = None
     liquidity_score: Optional[float] = None
+    # Agregar estos campos:
+    adv_notional: Optional[float] = None  # Average Daily Volume in notional
+    liquidity: Optional[float] = None     # Alias for liquidity metrics
+    volume: Optional[float] = None        # Current volume
+    price: Optional[float] = None         # Current price
+
 
 @dataclass
 class PositionSize:
@@ -73,6 +84,7 @@ class PositionSize:
     def asdict(self) -> Dict[str, Any]:
         return asdict(self)
 
+
 @dataclass
 class RiskMetrics:
     var_95: Optional[float] = None
@@ -84,6 +96,7 @@ class RiskMetrics:
     beta: Optional[float] = None
     liquidity_score: Optional[float] = None
 
+
 @dataclass
 class StrategicDecision:
     regime: str = "neutral"
@@ -92,6 +105,7 @@ class StrategicDecision:
     preferred_assets: List[str] = field(default_factory=lambda: ["BTC/USDT"])
     time_horizon: str = "1h"
     metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class L2State:

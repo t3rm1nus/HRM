@@ -156,6 +156,59 @@ class BusConfig:
 
 @dataclass
 class L2Config:
+    # --- Señales ---
+    signal_threshold: float = 0.6
+    max_signals: int = 20
+
+    # --- Position sizing ---
+    kelly_fraction: float = 0.5
+    vol_target: float = 0.02
+
+    # --- Riesgo global ---
+    max_drawdown: float = 0.15
+    max_position_risk: float = 0.02
+
+    # --- Parámetros específicos de control de riesgo ---
+    default_stop_pct: float = 0.02           # stop fijo por defecto (2%)
+    atr_multiplier: float = 2.0              # multiplicador ATR para stops dinámicos
+    trailing_stop_pct: float = 0.01          # trailing stop (1%)
+    breakeven_threshold: float = 1.5         # pasar a BE cuando R multiple ≥ 1.5
+    take_profit_rr_min: float = 1.5          # TP mínimo en múltiplos de R
+    take_profit_rr_max: float = 2.5          # TP máximo en múltiplos de R
+    max_correlation: float = 0.7             # correlación máxima permitida entre posiciones
+    max_portfolio_heat: float = 0.8          # exposición total máxima (% capital)
+    daily_loss_limit: float = 0.05           # pérdida diaria máxima (% capital)
+    max_drawdown_limit: float = 0.15         # pérdida máxima acumulada (% capital)
+    max_positions: int = 5                   # número máximo de posiciones abiertas
+    max_signal_drawdown: float = 0.20        # DD máximo por señal
+    max_strategy_drawdown: float = 0.25      # DD máximo por estrategia
+    min_liquidity_notional: float = 25_000.0 # notional mínimo de liquidez
+    min_liquidity_ratio: float = 0.02        # ratio mínimo de liquidez
+
+    # --- AI Model ---
+    ai_model_path: str = "models/l2_model.zip"
+    ai_model_timeout_s: int = 3  
+
+    # --- Performance optimizer ---
+    max_cache_items: int = 500
+    prediction_ttl_s: int = 60
+    batch_size: int = 32
+    enable_lazy_loading: bool = True
+    parallel_workers: int = 4
+    feature_ttl_s: int = 300
+    thread_name_prefix: str = "L2Perf"
+    rate_limit_qps: int = 20
+
+    # --- Pesos para el compositor de señales ---
+    ai_model_weight: float = 0.50
+    technical_weight: float = 0.30
+    pattern_weight: float = 0.20
+
+    # --- Thresholds para validar señal compuesta ---
+    min_signal_confidence: float = 0.50
+    min_signal_strength: float = 0.10
+
+    # --- Subconfiguraciones ---
     ai_model: AIModelConfig = field(default_factory=AIModelConfig)
     signals: SignalConfig = field(default_factory=SignalConfig)
     position_sizing: PositionSizingConfig = field(default_factory=PositionSizingConfig)
@@ -163,7 +216,7 @@ class L2Config:
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     bus: BusConfig = field(default_factory=BusConfig)
 
-    # Paths (adaptados para multiasset)
+    # --- Paths ---
     base_path: str = "l2_tactic"
     data_path: str = "data/multiasset"
     models_path: str = "models/multiasset"

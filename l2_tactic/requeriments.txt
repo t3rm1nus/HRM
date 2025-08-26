@@ -15,3 +15,6 @@ joblib>=1.0.0
 # tensorflow>=2.6.0  # Para modelos TensorFlow
 
 # Configuración y serial
+
+stable-baselines3[extra]>=1.8.0
+torch>=1.9.0

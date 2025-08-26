@@ -2,20 +2,21 @@
 # Orquestador L2: integra IA/tech/pattern -> composición -> sizing -> riesgo -> orden para L1
 
 from __future__ import annotations
-
-import asyncio
 import logging
-from dataclasses import asdict
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pandas as pd
 
 from .config import L2Config
-from .models import TacticalSignal, MarketFeatures, PositionSize
-from .signal_composer import SignalComposer  # asume que ya existe en tu L2
+from .models import TacticalSignal, MarketFeatures
+from .signal_composer import SignalComposer
 from .position_sizer import PositionSizerManager
 from .risk_controls import RiskControlManager
+from .performance_optimizer import PerformanceOptimizer
+from .ai_model_integration import AIModelIntegration
+
+from l2_tactic.indicators.technical import TechnicalIndicators, IndicatorWindows
+from l2_tactic.models import MarketFeatures
 
 logger = logging.getLogger(__name__)
 
@@ -23,147 +24,203 @@ logger = logging.getLogger(__name__)
 class L2TacticProcessor:
     """
     Flujo:
-      1) Recibe señales crudas (AI + técnicas + patrones).
-      2) Compone/filtra con SignalComposer.
-      3) Calcula tamaño de posición con PositionSizerManager.
-      4) Asegura STOP-LOSS (y opcional TP) con RiskControlManager (pre-trade).
-      5) Emite orden enriquecida (con SL/TP/size) para L1.
+      1) Genera señales (IA + técnicas).
+      2) Filtra por calidad.
+      3) Ajusta pesos según régimen (L3).
+      4) Devuelve lista de TacticalSignal.
     """
 
-    def __init__(self, config: Optional[L2Config] = None):
+    def __init__(self, config: Optional[L2Config] = None, ai_model: Optional[AIModelIntegration] = None):
         self.config = config or L2Config()
         self.composer = SignalComposer(self.config)
         self.sizer = PositionSizerManager(self.config)
         self.risk = RiskControlManager(self.config)
-        self.market_data = None 
-        # relación riesgo/beneficio por defecto para TP si no viene en la señal
-        self.default_rr = getattr(self.config, "default_rr", 2.0)
+        self.ai = ai_model or AIModelIntegration(config)
+        self.optimizer = PerformanceOptimizer(config)
+        self.market_data = None
 
-    async def _compose_signals(
-        self, raw_signals: List[TacticalSignal]
-    ) -> List[TacticalSignal]:
-        # Composición/ensamble de señales (voting, weighted, etc.)
-        final_signals = self.composer.compose(raw_signals, self.market_data)
-
-        logger.info(f"Composed {len(final_signals)} tactical signals from {len(raw_signals)} candidates")
-        return final_signals
-
-    async def _ensure_stop_and_size(
-        self,
-        signal: TacticalSignal,
-        market_features: MarketFeatures,
-        portfolio_state: Dict,
-        corr_matrix: Optional[pd.DataFrame] = None,
-    ) -> Optional[Tuple[TacticalSignal, PositionSize]]:
-        """
-        Devuelve (signal_con_SL_y_TP, position_size_final) o None si se rechaza.
-        """
-
-        # 1) Sizing preliminar
-        ps = await self.sizer.calculate_position_size(signal, market_features, portfolio_state)
-        if ps is None:
-            logger.info(f"Sizing rejected for {signal.symbol} (pre-checks)")
-            return None
-
-        # 2) Evaluación de riesgo pre-trade (aquí garantizamos SL si falta)
-        allow, alerts, ps_adj = self.risk.evaluate_pre_trade_risk(
-            signal=signal,
-            position_size=ps,
-            market_features=market_features,
-            portfolio_state=portfolio_state,
-            correlation_matrix=corr_matrix
-        )
-
-        if not allow or ps_adj is None:
-            for a in alerts:
-                logger.warning(f"[RISK] {a}")
-            logger.warning(f"Trade rejected by risk for {signal.symbol}")
-            return None
-
-        # Si el riesgo no asignó SL (debería), asignamos aquí como fallback
-        if ps_adj.stop_loss is None:
-            # calcula SL inicial según riesgo dinámico; también lo escribe en signal.stop_loss
-            from .risk_controls import DynamicStopLoss, RiskPosition
-            dsl = DynamicStopLoss(self.config)
-            dummy_pos = RiskPosition(
-                symbol=signal.symbol, size=ps_adj.size if signal.is_long() else -ps_adj.size,
-                entry_price=signal.price, current_price=signal.price, unrealized_pnl=0.0,
-                unrealized_pnl_pct=0.0
-            )
-            computed_sl = dsl.calculate_initial_stop(signal, market_features, dummy_pos)
-            ps_adj.stop_loss = computed_sl
-            signal.stop_loss = computed_sl
-            logger.info(f"[FALLBACK] Added SL for {signal.symbol}: {computed_sl:.6f}")
-
-        # 3) Asignar TP si no llegó en la señal y existe SL
-        if (signal.take_profit is None) and (ps_adj.stop_loss is not None):
-            dist = abs(signal.price - ps_adj.stop_loss)
-            if signal.is_long():
-                signal.take_profit = signal.price + self.default_rr * dist
-            else:
-                signal.take_profit = signal.price - self.default_rr * dist
-            ps_adj.take_profit = signal.take_profit
-            logger.info(f"Derived TP for {signal.symbol}: {ps_adj.take_profit:.6f} (RR={self.default_rr:.2f})")
-
-        return signal, ps_adj
-
-    def _to_l1_order(self, sig: TacticalSignal, ps: PositionSize) -> Dict:
-        """
-        Formato genérico de orden para L1. Ajusta las claves si tu L1 usa otras.
-        """
-        side = "buy" if sig.is_long() else "sell"
-        order = {
-            "id": f"l2_{sig.symbol}_{datetime.utcnow().timestamp()}",
-            "symbol": sig.symbol,
-            "side": side,
-            "type": "market",   # o "limit" si prefieres
-            "amount": float(ps.size),
-            "price": float(sig.price),
-            "stop_loss": float(ps.stop_loss) if ps.stop_loss else None,
-            "take_profit": float(ps.take_profit) if ps.take_profit else None,
-            "metadata": {
-                "l2": {
-                    "kelly_fraction": ps.kelly_fraction,
-                    "vol_target_leverage": ps.vol_target_leverage,
-                    "risk_amount": ps.risk_amount,
-                    "notional": ps.notional,
-                    "margin_required": ps.margin_required,
-                },
-                "signal": sig.as_dict() if hasattr(sig, "as_dict") else asdict(sig),
-            }
-        }
-        return order
-
-
-    async def _generate_signals(self, portfolio, market_data, features_by_symbol):
-        """
-        Genera señales brutas a partir de datos de mercado y features.
-        """
-        signals = []
-        for symbol, features in features_by_symbol.items():
-            # lógica de señal simple de ejemplo
-            if features.momentum > self.config.MOMENTUM_THRESHOLD:
-                signals.append(TacticalSignal(symbol=symbol, side="BUY", strength=features.momentum))
-            elif features.momentum < -self.config.MOMENTUM_THRESHOLD:
-                signals.append(TacticalSignal(symbol=symbol, side="SELL", strength=features.momentum))
-        return signals
-
-
-    async def process(
+    async def _generate_ai_signals(
     self,
     portfolio: Dict,
-    market_data: Dict,
-    features_by_symbol: Dict[str, "MarketFeatures"],
-) -> List["TacticalSignal"]:
+    market_data: Dict[str, "pd.DataFrame"],  # añadimos market_data aquí
+) -> List[TacticalSignal]:
         """
-        Genera señales crudas a partir del portfolio, market_data y features.
+        Genera señales AI enriquecidas con indicadores técnicos.
+        - Calcula MarketFeatures por símbolo usando TechnicalIndicators
+        - Llama al modelo AI para predicción
+        - Devuelve lista de TacticalSignal
         """
+        signals = []
 
+        try:
+            # --- calcular indicadores técnicos para todos los símbolos ---
+            ti = TechnicalIndicators.compute_for_universe(
+                market_data, IndicatorWindows(), as_features=True
+            )
+
+            features_by_symbol: Dict[str, MarketFeatures] = {}
+            for sym, f in ti.items():
+                features_by_symbol[sym] = MarketFeatures(
+                    volatility=f.get("volatility", 0.0),
+                    volume_ratio=f.get("volume_ratio", 0.0),
+                    price_momentum=f.get("price_momentum", 0.0),
+                    # aquí podrías mapear extras: RSI, MACD, etc.
+                )
+
+            # --- generar predicciones AI ---
+            for symbol, features in features_by_symbol.items():
+                try:
+                    pred = await self.ai.predict(symbol, features)
+                    if pred is None:
+                        continue
+
+                    sig = TacticalSignal(
+                        symbol=symbol,
+                        side="buy" if pred["direction"] == "LONG" else "sell",
+                        strength=pred.get("strength", 0.5),
+                        confidence=pred.get("confidence", 0.5),
+                        price=market_data.get(symbol, {}).get("close", 0.0),
+                        source="ai",
+                        model_name=pred.get("model", "l2_ai_model"),
+                        features_used=features.__dict__,
+                        reasoning=pred.get("reasoning"),
+                    )
+                    signals.append(sig)
+
+                except Exception as e:
+                    logger.error(f"AI prediction failed for {symbol}: {e}")
+
+        except Exception as e:
+            logger.error(f"Feature computation failed: {e}")
+
+        return signals
+
+    def _generate_technical_signals(
+        self,
+        features_by_symbol: Dict[str, MarketFeatures],
+    ) -> List[TacticalSignal]:
+        signals = []
+        for symbol, features in features_by_symbol.items():
+            price = self.market_data.get(symbol, {}).get("price", 0.0)
+            # Ejemplo: MA crossover con momentum
+            if features.price_momentum and features.price_momentum > self.config.MOMENTUM_THRESHOLD:
+                signals.append(TacticalSignal(
+                    symbol=symbol,
+                    side="buy",
+                    strength=features.price_momentum,
+                    confidence=0.6,
+                    price=price,
+                    source="technical",
+                    reasoning="Momentum breakout",
+                ))
+            elif features.price_momentum and features.price_momentum < -self.config.MOMENTUM_THRESHOLD:
+                signals.append(TacticalSignal(
+                    symbol=symbol,
+                    side="sell",
+                    strength=abs(features.price_momentum),
+                    confidence=0.6,
+                    price=price,
+                    source="technical",
+                    reasoning="Momentum breakdown",
+                ))
+            # RSI filter
+            if features.rsi:
+                if features.rsi < 30:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        side="buy",
+                        strength=1 - features.rsi / 100,
+                        confidence=0.5,
+                        price=price,
+                        source="technical",
+                        reasoning="RSI oversold",
+                    ))
+                elif features.rsi > 70:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        side="sell",
+                        strength=features.rsi / 100,
+                        confidence=0.5,
+                        price=price,
+                        source="technical",
+                        reasoning="RSI overbought",
+                    ))
+            # ATR breakout
+            if features.atr and features.volatility:
+                if features.volatility > 1.5 * features.atr:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        side="buy",
+                        strength=features.volatility,
+                        confidence=0.55,
+                        price=price,
+                        source="technical",
+                        reasoning="ATR breakout",
+                    ))
+        return signals
+
+    def _filter_signals(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
+        filtered = []
+        for s in signals:
+            if s.confidence < getattr(self.config, "min_confidence", 0.4):
+                continue
+            if hasattr(s, "features_used"):
+                vol = s.features_used.get("volatility")
+                if vol is not None and vol < getattr(self.config, "min_volatility", 0.01):
+                    continue
+            filtered.append(s)
+        return filtered
+
+    def _apply_regime_weights(
+        self, signals: List[TacticalSignal], regime: Optional[str]
+    ) -> List[TacticalSignal]:
+        if not regime:
+            return signals
+        adjusted = []
+        for s in signals:
+            if regime == "bull" and s.is_long():
+                s.strength *= 1.2
+            elif regime == "bear" and not s.is_long():
+                s.strength *= 1.2
+            elif regime == "neutral":
+                s.strength *= 0.8
+            adjusted.append(s)
+        return adjusted
+
+    async def _generate_signals(
+        self,
+        portfolio: Dict,
+        market_data: Dict,
+        features_by_symbol: Dict[str, MarketFeatures],
+    ) -> List[TacticalSignal]:
         self.market_data = market_data
 
-        raw_signals = await self._generate_signals(
-            portfolio=portfolio,
-            market_data=market_data,
-            features_by_symbol=features_by_symbol,
-        )
-        return raw_signals
+        ai_signals = await self._generate_ai_signals(portfolio, features_by_symbol)
+        tech_signals = self._generate_technical_signals(features_by_symbol)
+
+        combined = ai_signals + tech_signals
+        filtered = self._filter_signals(combined)
+
+        regime = portfolio.get("regime")
+        adjusted = self._apply_regime_weights(filtered, regime)
+
+        logger.info(f"Generated {len(adjusted)} signals (AI={len(ai_signals)}, Tech={len(tech_signals)})")
+        return adjusted
+
+    async def process(
+        self,
+        portfolio: Dict,
+        market_data: Dict,
+        features_by_symbol: Dict[str, MarketFeatures],
+    ) -> List[TacticalSignal]:
+        try:
+            raw_signals = await self._generate_signals(
+                portfolio=portfolio,
+                market_data=market_data,
+                features_by_symbol=features_by_symbol,
+            )
+            logger.debug(f"[L2] Señales generadas: {len(raw_signals)}")
+            return raw_signals or []
+        except Exception as e:
+            logger.error(f"[L2] Error generando señales: {e}", exc_info=True)
+            return []

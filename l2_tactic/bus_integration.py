@@ -1,9 +1,4 @@
 # l2_tactic/bus_integration.py
-# Adaptador de integración de L2 con el MessageBus:
-# - Recibe inputs de L3 (decisiones, régimen, allocation)
-# - Recibe datos de mercado
-# - Genera señales tácticas + sizing + controles de riesgo
-# - Publica a L1 (tactical_signal, position_size, risk_alert)
 
 from __future__ import annotations
 
@@ -13,14 +8,22 @@ import pandas as pd
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from comms.message_bus import MessageBus, Message
-from .models import TacticalSignal, PositionSize, MarketFeatures, RiskMetrics, StrategicDecision, L2State
+from .models import (
+    TacticalSignal,
+    PositionSize,
+    MarketFeatures,
+    RiskMetrics,
+    StrategicDecision,
+    L2State,
+)
 from .signal_generator import SignalGenerator
 from .position_sizer import PositionSizerManager
 from .risk_controls import RiskControlManager, RiskAlert
 from .config import L2Config
+from l2_tactic.metrics import L2Metrics
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,9 @@ class MessageType(Enum):
     TACTICAL_SIGNAL = "l2.tactical_signal"
     POSITION_SIZE = "l2.position_size"
     RISK_ALERT = "l2.risk_alert"
+
+    # Reporting (L2 -> L4)
+    PERFORMANCE_REPORT = "l2.performance_report"
 
     # Bidirectional (L1 <-> L2)
     EXECUTION_REPORT = "l1.execution_report"
@@ -72,7 +78,6 @@ class L2Message:
             data=p.get("data", {}),
         )
 
-
 class L2BusAdapter:
     def __init__(self, bus: MessageBus, config: L2Config):
         self.bus = bus
@@ -84,6 +89,7 @@ class L2BusAdapter:
 
         self.l2_state = L2State()
         self.is_running = False
+        self.metrics = L2Metrics()
 
     # ---------- lifecycle ----------
     async def start(self):
@@ -92,12 +98,15 @@ class L2BusAdapter:
         self.is_running = True
         await self._subscribe_topics()
         asyncio.create_task(self._heartbeat_task())
+        asyncio.create_task(self._performance_report_task())  # 👈 loop automático de métricas
         logger.info("✅ L2BusAdapter started")
 
     async def _subscribe_topics(self):
         await self.bus.subscribe(MessageType.STRATEGIC_DECISION.value, self._handle_strategic_decision)
         await self.bus.subscribe(MessageType.MARKET_DATA_UPDATE.value, self._handle_market_data_update)
         await self.bus.subscribe(MessageType.EXECUTION_REPORT.value, self._handle_execution_report)
+        await self.bus.subscribe(MessageType.MARKET_REGIME_UPDATE.value, self._handle_market_regime_update)
+        await self.bus.subscribe(MessageType.PORTFOLIO_ALLOCATION.value, self._handle_portfolio_allocation)
 
     # ---------- handlers ----------
     async def _handle_strategic_decision(self, message: Message):
@@ -128,14 +137,34 @@ class L2BusAdapter:
             symbol = l2msg.data.get("symbol")
             status = l2msg.data.get("status")
             logger.info(f"Execution report {symbol}: {status}")
+
+            # 🔹 Actualizamos métricas con resultado de ejecución
+            self.metrics.record_execution(symbol=symbol, status=status)
         except Exception:
             logger.exception("Error handling execution report")
+
+    async def _handle_market_regime_update(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            self.l2_state.regime = l2msg.data.get("regime", "neutral")
+            logger.info(f"📊 Régimen de mercado actualizado: {self.l2_state.regime}")
+        except Exception:
+            logger.exception("Error handling market regime update")
+
+    async def _handle_portfolio_allocation(self, message: Message):
+        try:
+            l2msg = L2Message.from_bus_message(message)
+            self.l2_state.allocation = l2msg.data
+            logger.info(f"📊 Allocation recibida de L3: {self.l2_state.allocation}")
+        except Exception:
+            logger.exception("Error handling portfolio allocation")
 
     # ---------- processing ----------
     async def _process_signal(self, signal: TacticalSignal, mf: MarketFeatures):
         ps = await self.position_sizer.calculate_position_size(signal, mf, self._portfolio_state())
         if not ps:
             logger.info(f"❌ Sizing rejected for {signal.symbol}")
+            self.metrics.record_signal(signal.symbol, accepted=False)
             return
 
         allow, alerts, adjusted = self.risk_manager.evaluate_pre_trade_risk(signal, ps, mf, self._portfolio_state())
@@ -144,13 +173,20 @@ class L2BusAdapter:
 
         if not allow or not adjusted:
             logger.warning(f"⚠️ Trade blocked by risk controls for {signal.symbol}")
+            self.metrics.record_signal(signal.symbol, accepted=False)
             return
 
+        # 🔹 Publicamos TacticalSignal + PositionSize
         await self._publish(MessageType.TACTICAL_SIGNAL, {"signal": signal.asdict(), "position_size": asdict(adjusted)})
+        await self._publish(MessageType.POSITION_SIZE, asdict(adjusted))
+
+        # 🔹 Actualizamos métricas
+        self.metrics.record_signal(signal.symbol, accepted=True)
 
     # ---------- helpers ----------
     async def _get_market_data(self) -> Dict[str, pd.DataFrame]:
-        # Fallback: datos dummy
+        if self.l2_state.market_data:
+            return self.l2_state.market_data
         return {"BTC/USDT": pd.DataFrame({"close": [50000]}), "ETH/USDT": pd.DataFrame({"close": [3000]})}
 
     async def _get_features(self, symbol: str) -> MarketFeatures:
@@ -163,8 +199,28 @@ class L2BusAdapter:
         msg = L2Message(message_type=mtype, timestamp=datetime.utcnow(), data=data)
         await self.bus.publish(msg.to_bus_message())
 
+    async def publish_performance_report(self):
+        try:
+            payload = {
+                "metrics": self.metrics.to_dict(),
+                "ts": datetime.utcnow().isoformat(),
+            }
+            await self.bus.publish(MessageType.PERFORMANCE_REPORT.value, payload)
+            logger.info("📊 Performance report publicado a L4")
+        except Exception as e:
+            logger.exception(f"Error publicando performance report: {e}")
+
     # ---------- background ----------
     async def _heartbeat_task(self):
         while self.is_running:
-            await self._publish(MessageType.HEARTBEAT, {"status": "ok", "active_signals": len(self.l2_state.active_signals)})
+            await self._publish(
+                MessageType.HEARTBEAT,
+                {"status": "ok", "active_signals": len(self.l2_state.active_signals)}
+            )
             await asyncio.sleep(30)
+
+    async def _performance_report_task(self):
+        """Loop periódico que envía métricas de L2 hacia L4."""
+        while self.is_running:
+            await self.publish_performance_report()
+            await asyncio.sleep(60)  # cada 60s publica métricas

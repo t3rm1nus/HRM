@@ -1,5 +1,4 @@
-# position_sizer.py - L2 position sizing (Kelly fraccional + Vol targeting)
-
+# l2_tactic/position_sizer.py - L2 position sizing (Kelly fraccional + Vol targeting + Liquidity + SL-aware)
 from __future__ import annotations
 
 import logging
@@ -27,25 +26,38 @@ class PositionSizerManager:
     Cálculo de tamaño de posición:
       1) Kelly fraccional (deriva de probabilidad/confianza y payoff)
       2) Vol targeting (ajuste por volatilidad objetivo)
-      3) Límite por riesgo/heat de portfolio desde config/L3
+      3) Ajuste por liquidez (cap por % de ADV/turnover)
+      4) Límite por riesgo de la operación y límites absolutos
+      5) Si hay SL → sizing ajustado a pérdida máxima tolerada
     """
 
+    def compute_position_size(self, *args, **kwargs):
+        return self.calculate_position_size(*args, **kwargs)
+
     def __init__(self, config: L2Config):
-        self.config = config
-        self.kelly_cap = getattr(config, "kelly_cap", 0.25)                # límite superior de Kelly
+        self.cfg = config
+
+        # Kelly
+        self.kelly_cap = getattr(config, "kelly_cap", 0.25)                # Kelly máximo permitido
         self.kelly_fraction = getattr(config, "kelly_fraction", 0.5)       # fracción de Kelly a aplicar
-        self.vol_target = getattr(config, "vol_target", 0.20)              # vol objetivo anualizada
+
+        # Vol targeting
+        self.vol_target = getattr(config, "vol_target", 0.20)              # vol objetivo
+
+        # Liquidez
+        self.max_notional_pct_of_adv = getattr(config, "max_notional_pct_of_adv", 0.02)
+        self.min_adv_required = getattr(config, "min_adv_required", 10_000.0)
+
+        # Límites absolutos
         self.min_position_notional = getattr(config, "min_position_notional", 100.0)
         self.max_position_notional = getattr(config, "max_position_notional", 1_000_000.0)
-        self.max_risk_per_trade = getattr(config, "max_risk_per_trade", 0.01)  # % capital
+        self.max_risk_per_trade = getattr(config, "max_risk_per_trade", 0.01)  # % del capital total
 
     # ---------- Kelly ----------
 
     def _kelly_from_signal(self, signal: TacticalSignal) -> KellyInputs:
         """
-        Traducimos la confianza y "strength" a inputs de Kelly.
-        - win_prob: mapea confidence (0..1) a [0.45..0.65] (centrado en 0.55)
-        - win_loss_ratio: mapea strength (0..1) a [0.8..1.8]
+        Traduce confianza y 'strength' a inputs de Kelly.
         """
         win_prob = 0.45 + 0.20 * _bounded(signal.confidence, 0.0, 1.0)
         win_loss_ratio = 0.8 + 1.0 * _bounded(signal.strength, 0.0, 1.0)
@@ -54,7 +66,6 @@ class PositionSizerManager:
     def _kelly_fraction(self, k: KellyInputs) -> float:
         """
         Kelly óptimo: f* = (b*p - q) / b
-        donde b = win_loss_ratio, p = win_prob, q = 1 - p
         """
         b = max(1e-9, k.win_loss_ratio)
         p = _bounded(k.win_prob, 0.0, 1.0)
@@ -66,16 +77,34 @@ class PositionSizerManager:
     # ---------- Vol targeting ----------
 
     def _leverage_for_vol_target(self, realized_vol: Optional[float]) -> float:
-        """
-        Leverage recomendado según vol objetivo: lev = vol_target / realized_vol
-        Si no hay realized_vol, devolvemos 1.0
-        """
         if not realized_vol or realized_vol <= 0:
             return 1.0
         lev = self.vol_target / realized_vol
-        # mantenemos límites razonables
-        lev = _bounded(lev, 0.25, 5.0)
-        return lev
+        return _bounded(lev, 0.25, 5.0)
+
+    # ---------- Liquidez ----------
+
+    def _cap_by_liquidity(self, desired_notional: float, features: MarketFeatures) -> float:
+        adv = getattr(features, "adv_notional", None) or getattr(features, "liquidity", None)
+        if adv and adv > 0:
+            cap = float(self.max_notional_pct_of_adv) * float(adv)
+            if desired_notional > cap:
+                logger.info(f"Liquidity cap applied: desired={desired_notional:.2f}, cap={cap:.2f}")
+            return min(desired_notional, cap)
+
+        if getattr(features, "volume", None) and getattr(features, "price", None):
+            try:
+                proxy_adv = float(features.volume) * float(features.price)
+                cap = float(self.max_notional_pct_of_adv) * proxy_adv
+                return min(desired_notional, cap)
+            except Exception:
+                pass
+
+        if adv is not None and adv < self.min_adv_required:
+            logger.warning(f"⚠️ ADV={adv:.2f} < min required, forcing minimal position")
+            return min(desired_notional, self.min_position_notional)
+
+        return desired_notional
 
     # ---------- API principal ----------
 
@@ -85,9 +114,6 @@ class PositionSizerManager:
         market_features: MarketFeatures,
         portfolio_state: Dict
     ) -> Optional[PositionSize]:
-        """
-        Devuelve un PositionSize o None si no pasa mínimos.
-        """
         total_capital = float(portfolio_state.get("total_capital", 0.0) or 0.0)
         available_capital = float(portfolio_state.get("available_capital", total_capital))
 
@@ -97,30 +123,45 @@ class PositionSizerManager:
 
         # 1) Kelly fraccional
         kelly_inputs = self._kelly_from_signal(signal)
-        f_kelly = self._kelly_fraction(kelly_inputs)  # fracción del capital
+        f_kelly = self._kelly_fraction(kelly_inputs)
 
-        # 2) Límite de riesgo por trade (cap a f_kelly)
+        # 2) Límite de riesgo por trade
         risk_pct_cap = _bounded(self.max_risk_per_trade, 0.001, 0.05)
         risk_fraction = min(f_kelly, risk_pct_cap)
 
-        # 3) Vol targeting -> leverage recomendado
+        # 3) Vol targeting
         realized_vol = market_features.volatility or self.vol_target
         vol_leverage = self._leverage_for_vol_target(realized_vol)
 
-        # 4) Notional base y riesgos
-        base_notional = total_capital * risk_fraction * 10.0  # multiplicador para convertir riesgo% en exposición base
+        # 4) Notional inicial
+        base_notional = total_capital * risk_fraction * 10.0
         notional = base_notional * vol_leverage
 
-        # bounds
-        notional = _bounded(notional, self.min_position_notional, min(self.max_position_notional, available_capital))
+        # 5) Si hay stop_loss definido → recalcular tamaño en base al riesgo real
+        stop_loss = signal.stop_loss
+        if stop_loss and stop_loss > 0:
+            stop_distance = abs(signal.price - stop_loss)
+            if stop_distance > 0:
+                max_risk_amount = total_capital * risk_pct_cap
+                size_sl_based = max_risk_amount / stop_distance
+                notional_sl_based = size_sl_based * signal.price
+                if notional_sl_based < notional:
+                    logger.info(f"SL-based sizing applied: {notional_sl_based:.2f} vs {notional:.2f}")
+                notional = min(notional, notional_sl_based)
+
+        # 6) Liquidez
+        notional = self._cap_by_liquidity(notional, market_features)
+
+        # 7) Límites absolutos + disponibilidad de capital
+        notional = _bounded(
+            notional,
+            self.min_position_notional,
+            min(self.max_position_notional, available_capital),
+        )
 
         size = notional / signal.price
 
-        # niveles SL/TP respetando los del signal si existen (SL final se garantiza en RiskControlManager)
-        stop_loss = signal.stop_loss
-        take_profit = signal.take_profit
-
-        # calculamos max_loss aproximado (si existe SL); si no, usamos riesgo fraccional sobre notional
+        # 8) Estimar riesgo máximo
         if stop_loss and stop_loss > 0:
             if signal.is_long():
                 max_loss = max(0.0, (signal.price - stop_loss) * size)
@@ -129,7 +170,7 @@ class PositionSizerManager:
         else:
             max_loss = notional * risk_fraction
 
-        # margen aproximado si hay apalancamiento
+        # 9) Margen requerido
         leverage = max(1.0, vol_leverage)
         margin_required = notional / leverage
 
@@ -144,7 +185,7 @@ class PositionSizerManager:
             vol_target_leverage=vol_leverage,
             max_loss=max_loss,
             stop_loss=stop_loss,
-            take_profit=take_profit,
+            take_profit=signal.take_profit,
             leverage=leverage,
             margin_required=margin_required,
             metadata={
@@ -153,10 +194,13 @@ class PositionSizerManager:
                 "total_capital": total_capital,
                 "available_capital": available_capital,
                 "realized_vol": realized_vol,
-            }
+                "liquidity_cap_pct_of_adv": self.max_notional_pct_of_adv,
+                "adv_notional": getattr(market_features, "adv_notional", None)
+                    or getattr(market_features, "liquidity", None),
+                "sizing_method": "SL_based" if stop_loss else "heuristic",
+            },
         )
 
-        # sanity checks mínimos
         if ps.size <= 0 or ps.notional < self.min_position_notional:
             logger.info(f"Sizing rejected for {signal.symbol}: notional too small ({ps.notional:.2f})")
             return None
