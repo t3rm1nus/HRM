@@ -57,8 +57,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from hashlib import sha1
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
-
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple,Hashable, Union
 try:
     import pandas as pd  # opcional
 except Exception:  # pragma: no cover - compat si no hay pandas
@@ -656,3 +655,130 @@ def get_or_predict_sync(
     features: Any,
 ) -> Any:
     return opt_model.predict(symbol=symbol, horizon=horizon, features=features)
+
+# ------------------------------------------------------------------ #
+# Decorador para cachear predicciones del modelo (LRU + TTL)
+def ai_cache(maxsize: int = 256, ttl: Optional[float] = None):
+    """
+    Decorador con TTL opcional (en segundos).
+    Si ttl es None, se usa simple LRU sin expiración.
+    """
+    def decorator(func):
+        cache = OrderedDict()
+        _ttl = ttl
+
+        @functools.wraps(func)
+        async def wrapper(self, key: Hashable) -> Any:
+            now = time.time()
+            if key in cache:
+                value, timestamp = cache[key]
+                if _ttl is None or now - timestamp < _ttl:
+                    cache.move_to_end(key)
+                    return value
+                else:
+                    del cache[key]
+
+            result = await func(self, key)
+            cache[key] = (result, now)
+            if len(cache) > maxsize:
+                cache.popitem(last=False)
+            return result
+
+        wrapper.cache_clear = cache.clear
+        return wrapper
+    return decorator
+
+
+# ------------------------------------------------------------------ #
+class CacheManager:
+    """
+    Cache genérico para:
+      - predicciones del modelo
+      - indicadores técnicos
+      - features pre-computadas
+    """
+
+    def __init__(self, maxsize: int = 1024, ttl: Optional[float] = 60.0):
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self._cache: OrderedDict[Hashable, Any] = OrderedDict()
+        self._timestamps: Dict[Hashable, float] = {}
+
+    def _is_expired(self, key: Hashable) -> bool:
+        if self.ttl is None:
+            return False
+        return time.time() - self._timestamps[key] > self.ttl
+
+    def get(self, key: Hashable) -> Any:
+        if key in self._cache and not self._is_expired(key):
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        if key in self._cache:
+            del self._cache[key]
+            del self._timestamps[key]
+        return None
+
+    def set(self, key: Hashable, value: Any) -> None:
+        now = time.time()
+        self._cache[key] = value
+        self._timestamps[key] = now
+        if len(self._cache) > self.maxsize:
+            oldest_key, _ = self._cache.popitem(last=False)
+            self._timestamps.pop(oldest_key, None)
+
+    def clear(self) -> None:
+        self._cache.clear()
+        self._timestamps.clear()
+        logger.info("[CacheManager] cache cleared")
+
+
+# ------------------------------------------------------------------ #
+class BatchProcessor:
+    """
+    Agrupa features para enviar al modelo en batch y reducir overhead.
+    """
+
+    def __init__(self, max_batch_size: int = 64, max_wait_ms: int = 20) -> None:
+        self.max_batch = max_batch_size
+        self.max_wait = max_wait_ms / 1000.0
+        self.queue: List[Dict] = []
+        self._flush_event = asyncio.Event()
+
+    async def add(self, payload: Dict) -> Any:
+        self.queue.append(payload)
+        if len(self.queue) >= self.max_batch:
+            self._flush_event.set()
+            return await self._flush()
+        try:
+            await asyncio.wait_for(self._flush_event.wait(), timeout=self.max_wait)
+        except asyncio.TimeoutError:
+            pass
+        return await self._flush()
+
+    async def _flush(self) -> List[Any]:
+        if not self.queue:
+            return []
+        batch = self.queue[:]
+        self.queue.clear()
+        self._flush_event.clear()
+        logger.debug(f"[BatchProcessor] flushing {len(batch)} items")
+        # Aquí iría la llamada real al modelo en batch
+        return batch
+
+
+# ------------------------------------------------------------------ #
+class LazyFeatureLoader:
+    """
+    Lazy-loading de features costosas (ej. indicadores de múltiples timeframes).
+    """
+
+    def __init__(self, cache: CacheManager):
+        self.cache = cache
+
+    async def load(self, key: Hashable, producer_func):
+        cached = self.cache.get(key)
+        if cached is not None:
+            return cached
+        result = await producer_func()
+        self.cache.set(key, result)
+        return result

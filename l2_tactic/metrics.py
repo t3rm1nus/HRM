@@ -26,9 +26,11 @@ class L2Metrics:
     - Evaluación del modelo IA: precisión/recall/F1
     - Telemetría por timeframe y estrategia
     """
-        
     def __init__(self, max_history: int = 10_000):
-        self.total_return = 0.0   # o el valor que corresponda
+        self.total_return: float = 0.0
+        self.sharpe: float = 0.0
+        self.max_drawdown: float = 0.0
+
         # Señales y ejecuciones
         self.signal_history: List[TacticalSignal] = []
         self.execution_history: deque[ExecRecord] = deque(maxlen=max_history)
@@ -38,17 +40,18 @@ class L2Metrics:
 
         # Predicciones y etiquetas reales para IA
         # key = (strategy_id, timeframe)
-        self._preds: DefaultDict[Tuple[Optional[str], Optional[str]], List[int]] = defaultdict(list)   # y_pred {0,1}
-        self._truth: DefaultDict[Tuple[Optional[str], Optional[str]], List[int]] = defaultdict(list)   # y_true {0,1}
-        self._scores: DefaultDict[Tuple[Optional[str], Optional[str]], List[float]] = defaultdict(list)  # probas/score
+        self._preds: DefaultDict[Tuple[Optional[str], Optional[str]], List[int]] = defaultdict(list)
+        self._truth: DefaultDict[Tuple[Optional[str], Optional[str]], List[int]] = defaultdict(list)
+        self._scores: DefaultDict[Tuple[Optional[str], Optional[str]], List[float]] = defaultdict(list)
 
         # Telemetría por (strategy_id, timeframe)
         self._pnl_buckets: DefaultDict[Tuple[Optional[str], Optional[str]], List[float]] = defaultdict(list)
         self._wins_buckets: DefaultDict[Tuple[Optional[str], Optional[str]], int] = defaultdict(int)
         self._trades_buckets: DefaultDict[Tuple[Optional[str], Optional[str]], int] = defaultdict(int)
 
-        self.start_time = time.time()
+        self.start_time: float = time.time()
 
+        
     # ==== Backward compatibility methods ====
     def update(self, success: bool, pnl: float, latency: float = 0.0):
         """Backward compatibility method for record_trade"""
