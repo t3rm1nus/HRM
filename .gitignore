@@ -3,3 +3,4 @@ models/data/historico.csv
 data/historico.db
 data/
 models/
+logs/
