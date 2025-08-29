@@ -38,7 +38,7 @@ Genera y compone señales de trading (IA + técnico + patrones) → calcula el *
 
 ## 🏗️ Arquitectura Modular
 
-```text
+```
 L3 (Strategic Decisions)
         ↓
 ┌─────────────────────────────────────────┐
@@ -68,29 +68,30 @@ L3 (Strategic Decisions)
 └─────────────────────────────────────────┘
         ↓
     L2 Signals → L1 (Execution)
+```
 
-### Componentes Principales
+### 🔧 Componentes Principales
 
-Componentes Principales
-models.py - Estructuras de datos (TacticalSignal, MarketFeatures, PositionIntent)
-config.py - Configuración L2 (modelos, thresholds, límites de riesgo)
-bus_integration.py - Comunicación asíncrona L3 ↔ L2 ↔ L1
-signal_generator.py - Orquestador de generación de señales (IA + técnico + patrones)
-signal_composer.py - Composición dinámica y resolución de conflictos
-position_sizer.py - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
-ai_model_integration.py - Carga modelo FinRL desde ../../models/L2/ai_model_data_multiasset/
-performance_optimizer.py - Optimizaciones de rendimiento (cache, batching)
-metrics.py - Tracking de performance L2 (hit rate, Sharpe ratio, drawdown)
-procesar_l2.py - Punto de entrada principal para ejecución en local
-technical/ - Indicadores técnicos y análisis multi-timeframe
-ensemble/ - Combinación de señales multi-fuente (voting, blending)
-risk_controls/ - Módulo modularizado de gestión de riesgo
-HRM RAIZ models/ - Modelos FinRL pre-entrenados descomprimidos en carpeta models/L2/ai_model_data_multiasset
+- **models.py** - Estructuras de datos (TacticalSignal, MarketFeatures, PositionIntent)
+- **config.py** - Configuración L2 (modelos, thresholds, límites de riesgo)
+- **bus_integration.py** - Comunicación asíncrona L3 ↔ L2 ↔ L1
+- **signal_generator.py** - Orquestador de generación de señales (IA + técnico + patrones)
+- **signal_composer.py** - Composición dinámica y resolución de conflictos
+- **position_sizer.py** - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
+- **ai_model_integration.py** - Carga modelo FinRL desde ../../models/L2/ai_model_data_multiasset/
+- **performance_optimizer.py** - Optimizaciones de rendimiento (cache, batching)
+- **metrics.py** - Tracking de performance L2 (hit rate, Sharpe ratio, drawdown)
+- **procesar_l2.py** - Punto de entrada principal para ejecución en local
+- **technical/** - Indicadores técnicos y análisis multi-timeframe
+- **ensemble/** - Combinación de señales multi-fuente (voting, blending)
+- **risk_controls/** - Módulo modularizado de gestión de riesgo
+- **HRM RAIZ models/** - Modelos FinRL pre-entrenados descomprimidos en carpeta models/L2/ai_model_data_multiasset
 
 ---
 
 ## 📁 Estructura real del proyecto
 
+```
 l2_tactical/
 ├── 📄 README.md
 ├── 📄 __init__.py
@@ -119,14 +120,16 @@ l2_tactical/
     ├── 📄 portfolio.py
     ├── 📄 positions.py
     └── 📄 stop_losses.py
+```
 
 ---
 
 ## 🔄 Risk Controls (modularizado)
 
-Antes: todo en risk_controls.py (~600 líneas).
-Ahora: separado en 6 módulos dentro de l2_tactic/risk_controls/.
+**Antes:** todo en risk_controls.py (~600 líneas).  
+**Ahora:** separado en 6 módulos dentro de l2_tactic/risk_controls/.
 
+```
 l2_tactic/risk_controls/
  ├── __init__.py         # punto de entrada público
  ├── alerts.py           # enums y RiskAlert
@@ -134,48 +137,39 @@ l2_tactic/risk_controls/
  ├── positions.py        # RiskPosition (posición normalizada)
  ├── portfolio.py        # PortfolioRiskManager (riesgo agregado)
  └── manager.py          # RiskControlManager (orquestador central)
+```
 
-Módulos
+### 📋 Módulos
 
-alerts.py
+- **alerts.py**
+  - RiskLevel, AlertType, RiskAlert
+  - Estructura estándar para todas las alertas.
 
-RiskLevel, AlertType, RiskAlert
+- **stop_losses.py**
+  - DynamicStopLoss → stop inicial (ATR, vol, S/R, trailing, breakeven).
+  - StopLossOrder → datos de un stop activo.
 
-Estructura estándar para todas las alertas.
+- **positions.py**
+  - RiskPosition → representación simplificada de una posición para gestión de riesgo.
 
-stop_losses.py
+- **portfolio.py**
+  - PortfolioRiskManager → chequea correlación, heat, drawdowns de cartera, límites de posiciones y métricas agregadas (volatilidad, Sharpe, retorno).
 
-DynamicStopLoss → stop inicial (ATR, vol, S/R, trailing, breakeven).
+- **manager.py**
+  - RiskControlManager → integra todo:
+    - Evalúa señales pre-trade (liquidez, correlación, drawdowns de señal/estrategia).
+    - Ajusta tamaño o bloquea operaciones.
+    - Mantiene stops dinámicos, trailing y TP.
+    - Trackea drawdowns por señal y estrategia.
 
-StopLossOrder → datos de un stop activo.
+- **init.py**
+  - Exposición pública sencilla para evitar imports largos.
 
-positions.py
-
-RiskPosition → representación simplificada de una posición para gestión de riesgo.
-
-portfolio.py
-
-PortfolioRiskManager → chequea correlación, heat, drawdowns de cartera, límites de posiciones y métricas agregadas (volatilidad, Sharpe, retorno).
-
-manager.py
-
-RiskControlManager → integra todo:
-
-Evalúa señales pre-trade (liquidez, correlación, drawdowns de señal/estrategia).
-
-Ajusta tamaño o bloquea operaciones.
-
-Mantiene stops dinámicos, trailing y TP.
-
-Trackea drawdowns por señal y estrategia.
-
-init.py
-
-Exposición pública sencilla para evitar imports largos.
+---
 
 ## 🔄 Flujo de Procesamiento
 
-```text
+```
 1. 📥 ENTRADA: Decisión estratégica de L3
    ├─ Regime de mercado (trend/range/volatile)
    ├─ Universo de activos (BTC, ETH, …)
@@ -214,22 +208,24 @@ pytest tests/test_signal_composer.py -v
 pytest tests/test_position_sizer.py -v
 pytest tests/test_risk_controls.py -v
 ```
-✅ Confirmado: L2_tactic está 100 % funcional y completo.
-✅ Evidencias en los logs
-表格
-复制
-Punto	Estado	Evidencia
-Modelo FinRL cargado	✅	Modelo PPO cargado correctamente desde models/L2/ai_model_data_multiasset.zip
-Ensemble activo	✅	[BlenderEnsemble] inicializado: {'ai': 0.6, 'technical': 0.3, 'risk': 0.1}
-Pipeline L2 ejecutado	✅	[L2] Ejecutando capa Tactic... → Sin señal tras ensemble (sin errores)
-Métricas / performance	✅	performance_optimizer.py y metrics.py integrados (no hay excepciones)
-Tests pasados	✅	No hay AssertionError, ModuleNotFoundError ni KeyError
-README actualizado	✅	Documentación completa y ejemplos incluidos
-✅ Resumen
-✅ Código implementado
-✅ Tests funcionando
-✅ CI/CD pendiente (no es bloqueante para 100 % funcional)
-✅ Logs limpios
+
+### ✅ Estado de Implementación
+
+| Punto | Estado | Evidencia |
+|-------|--------|-----------|
+| Modelo FinRL cargado | ✅ | Modelo PPO cargado correctamente desde models/L2/ai_model_data_multiasset.zip |
+| Ensemble activo | ✅ | [BlenderEnsemble] inicializado: {'ai': 0.6, 'technical': 0.3, 'risk': 0.1} |
+| Pipeline L2 ejecutado | ✅ | [L2] Ejecutando capa Tactic... → Sin señal tras ensemble (sin errores) |
+| Métricas / performance | ✅ | performance_optimizer.py y metrics.py integrados (no hay excepciones) |
+| Tests pasados | ✅ | No hay AssertionError, ModuleNotFoundError ni KeyError |
+| README actualizado | ✅ | Documentación completa y ejemplos incluidos |
+
+### ✅ Resumen
+- ✅ Código implementado
+- ✅ Tests funcionando
+- ✅ CI/CD pendiente (no es bloqueante para 100 % funcional)
+- ✅ Logs limpios
+
 ---
 
 <div align="center">

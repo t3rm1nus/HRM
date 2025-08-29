@@ -1,256 +1,282 @@
-# 📁 L1_Operational - Nivel de Ejecución de Órdenes (Actualizado)
+# 🌟 L3_Strategic - Nivel Estratégico de Decisión
 
 ## 🎯 Objetivo
 
-L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA multiasset y reglas hard-coded para garantizar que solo se ejecuten órdenes seguras. Recibe señales consolidadas de L2/L3 y las ejecuta de forma determinista, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución para múltiples activos (BTC, ETH).
+L3_Strategic es el **nivel superior de toma de decisiones** que define la estrategia global del sistema de trading. Analiza condiciones macroeconómicas, tendencias de mercado y patrones a largo plazo para establecer el **régimen de mercado**, **asignación de activos** y **apetito de riesgo** que guiarán las decisiones tácticas de L2.
 
 ---
 
-## 🚫 Lo que L1 NO hace
+## 🚫 Lo que L3 NO hace
 
-❌ **No decide estrategias de trading**  
-❌ **No ajusta precios de señales estratégicas**  
-❌ **No toma decisiones tácticas fuera de seguridad y ejecución**  
-❌ **No actualiza portafolio completo (responsabilidad de L2/L3)**  
-❌ **No recolecta ni procesa datos de mercado (responsabilidad de L2/L3)**
-
----
-
-## ✅ Lo que L1 SÍ hace
-
-| ✅ Funcionalidad              | Descripción                                                                 |
-|------------------------------|-----------------------------------------------------------------------------|
-| **Hard-coded Safety Layer**  | Bloquea operaciones peligrosas, aplica stop-loss obligatorio y chequeos de liquidez/saldo |
-| **Multiasset Trend AI**      | Evalúa probabilidad de movimientos para BTC y ETH, filtra señales de baja confianza |
-| **Execution Logic**          | Optimiza fraccionamiento de órdenes, timing y reduce slippage por símbolo |
-| **Risk Rules**               | Ajusta tamaño de trade y stops según reglas hard-coded basadas en volatilidad y exposición por activo |
-| **Ejecución determinista**   | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal |
-| **Reportes multiasset**      | Genera reportes detallados de todas las órdenes ejecutadas por símbolo |
-| **Gestión de errores**       | Maneja errores de ejecución de forma robusta |
+| ❌ No hace |
+|-----------|
+| No genera señales de trading específicas (responsabilidad de L2) |
+| No ejecuta órdenes (responsabilidad de L1) |
+| No analiza datos técnicos en tiempo real |
+| No gestiona el riesgo operacional por trade |
+| No interactúa directamente con los exchanges |
 
 ---
 
-## 🗂️ Arquitectura Actualizada
+## ✅ Lo que L3 SÍ hace
+
+| ✅ Funcionalidad | Descripción |
+|----------------|-------------|
+| **Análisis Macro** | Evalúa condiciones económicas globales y tendencias del mercado |
+| **Regime Detection** | Identifica el régimen de mercado actual (bull, bear, range, volatile) |
+| **Asset Allocation** | Define la asignación óptima de capital entre diferentes activos |
+| **Risk Appetite** | Establece el nivel de riesgo permitido según condiciones del mercado |
+| **Strategic Signals** | Genera directrices estratégicas para guiar a L2 |
+| **Portfolio Optimization** | Optimiza la cartera global basado en modelos de Markowitz y Black-Litterman |
+| **Market Sentiment** | Analiza el sentimiento del mercado mediante NLP y redes sociales |
+
+---
+
+## 🏗️ Arquitectura del Sistema
 
 ```
-L2/L3 (Señales BTC/ETH)
-          ↓
-    Bus Adapter
-          ↓
-  Order Manager
-          ↓
-[Hard-coded Safety Layer]
-          ↓
-[Modelo 1: LogReg] → Feature 1 (BTC/ETH)
-          ↓
-[Modelo 2: Random Forest] → Feature 2 (BTC/ETH)
-          ↓
-[Modelo 3: LightGBM] → Feature 3 (BTC/ETH)
-          ↓
-[Decision Layer: Trend AI + Risk Rules + Execution Logic]
-          ↓
-   Executor → Exchange
-          ↓
-Execution Report → Bus Adapter → L2/L3
+┌─────────────────────────────────────────────────┐
+│                   L3_Strategic                  │
+│                                                 │
+│  ┌─────────────┐    ┌─────────────────────┐    │
+│  │  Macro      │    │   Regime            │    │
+│  │  Analysis   │───▶│   Detection         │    │
+│  └─────────────┘    └─────────────────────┘    │
+│                          │                     │
+│  ┌─────────────┐    ┌────▼─────────────────┐   │
+│  │  Sentiment  │    │   Portfolio          │   │
+│  │  Analysis   │───▶│   Optimization       │   │
+│  └─────────────┘    └─────────────────────┘    │
+│                          │                     │
+│                   ┌──────▼──────────────┐      │
+│                   │  Risk Appetite      │      │
+│                   │  Calculator         │      │
+│                   └─────────────────────┘      │
+│                          │                     │
+│                   ┌──────▼──────────────┐      │
+│                   │  Strategic          │      │
+│                   │  Decision Maker     │      │
+│                   └─────────────────────┘      │
+└─────────────────────────▼──────────────────────┘
+                          │
+                  Strategic Guidelines → L2
 ```
 
 ### 🔧 Componentes Principales
 
-- **models.py** - Estructuras de datos (Signal, ExecutionReport, RiskAlert, OrderIntent)
-- **bus_adapter.py** - Interfaz asíncrona con el bus de mensajes del sistema (tópicos: signals, reports, alerts)
-- **order_manager.py** - Orquesta el flujo de ejecución y validaciones IA/hard-coded multiasset
-- **risk_guard.py** - Valida límites de riesgo y exposición por símbolo
-- **executor.py** - Ejecuta órdenes en el exchange
-- **config.py** - Configuración centralizada de límites y parámetros por activo
-
-### 🤖 Modelos IA (desde raíz/models/L1):
-- modelo1_lr.pkl - Logistic Regression (BTC/ETH)
-- modelo2_rf.pkl - Random Forest (BTC/ETH)
-- modelo3_lgbm.pkl - LightGBM (BTC/ETH)
+- **macro_analyzer.py** - Análisis de condiciones macroeconómicas
+- **regime_detector.py** - Detección de régimen de mercado mediante ML
+- **portfolio_optimizer.py** - Optimización de cartera con modelos avanzados
+- **sentiment_analyzer.py** - Análisis de sentimiento del mercado
+- **risk_manager.py** - Gestión estratégica del riesgo
+- **decision_maker.py** - Tomador final de decisiones estratégicas
+- **data_provider.py** - Proveedor de datos macro y de mercado
+- **config.py** - Configuración de parámetros estratégicos
 
 ---
 
-## 🔑 Validaciones de Riesgo (Multiasset)
-
-### 📋 Por Operación
-- Stop-loss obligatorio (coherente con side y price)
-- Tamaño mínimo/máximo por orden (USDT) y por símbolo específico
-- Límites por símbolo (BTC: 0.05 BTC max, ETH: 1.0 ETH max)
-- Validación de parámetros básicos
-
-### 📊 Por Portafolio
-- Exposición máxima por activo: BTC (20%), ETH (15%)
-- Drawdown diario máximo por símbolo
-- Saldo mínimo requerido por par (BTC/USDT, ETH/USDT)
-- Correlación BTC-ETH: Límites de exposición cruzada (calculados en L2/L3, aplicados en L1)
-
-### ⚡ Por Ejecución
-- Validación de saldo disponible por base asset
-- Verificación de conexión al exchange (pendiente en modo LIVE)
-- Timeout de órdenes y reintentos exponenciales
-- Slippage protection por símbolo (simulado en modo PAPER)
-
----
-
-## 📊 Flujo de Ejecución (Determinista Multiasset)
-
-1. Recepción de Señal desde L2/L3 vía bus (BTC/USDT o ETH/USDT)
-2. Validación Hard-coded por símbolo (stop-loss, tamaño, liquidez/saldo, exposición, drawdown)
-3. Filtros IA multiasset:
-   - LogReg: Probabilidad de tendencia (threshold específico por símbolo)
-   - Random Forest: Confirmación robusta
-   - LightGBM: Decisión final con regularización
-4. Ejecución determinista (1 intento por señal)
-5. Reporte enviado a L2/L3 con métricas por símbolo
-
----
-
-## 🎭 Modo de Operación
-
-- **PAPER**: Simulación sin ejecución real (por defecto) - soporta BTC/ETH
-- **LIVE**: Ejecución real en el exchange - binance BTC/USDT, ETH/USDT (pendiente de implementación)
-- **REPLAY**: Reproducción de datos históricos - soporte mediante datasets multiasset, requiere configuración adicional
-
----
-
-## 📝 Logging Multiasset
-
-- Nivel INFO para operaciones normales con etiqueta [BTC] o [ETH]
-- Nivel WARNING para rechazos de órdenes por símbolo específico
-- Nivel ERROR para fallos de ejecución con contexto de asset
-- Logs incluyen contexto completo por símbolo y correlaciones
-
----
-
-## 🤖 Entrenamiento de Modelos Multiasset
-
-```bash
-# Modelo 1: Logistic Regression (BTC + ETH)
-python ml_training/modelo1_train_lr.py
-
-# Modelo 2: Random Forest (BTC + ETH)  
-python ml_training/modelo2_train_rf.py
-
-# Modelo 3: LightGBM (BTC + ETH)
-python ml_training/modelo3_train_lgbm.py
-```
-
-**Salida por modelo:**
-- models/L1/modelo1_lr.pkl - Modelo entrenado (Logistic Regression)
-- models/L1/modelo2_rf.pkl - Modelo entrenado (Random Forest)
-- models/L1/modelo3_lgbm.pkl - Modelo entrenado (LightGBM)
-- Threshold óptimo separado para BTC y ETH
-- Feature importance con correlaciones cruzadas
-
----
-
-## 🧠 Sistema IA Jerárquico (Multiasset)
-
-**Flujo de Decisión:**
-1. Hard-coded Safety: Validaciones básicas por símbolo
-2. LogReg: Filtro rápido de tendencia (BTC/ETH específico)  
-3. Random Forest: Confirmación con ensemble robusto
-4. LightGBM: Decisión final con regularización avanzada
-5. Decision Layer: Combinación ponderada de los 3 modelos
-
-**Features Multiasset:**
-- Por símbolo: RSI, MACD, Bollinger, volumen, etc.
-- Cruzadas: ETH/BTC ratio, correlación rolling, divergencias
-- Encoding: is_btc, is_eth para diferenciación
-- Temporales: Features específicas por timeframe de cada asset
-
----
-
-## 📊 Dashboard de Métricas (Multiasset)
-
-**Ejemplo de métricas consolidadas generadas por L1:**
+## 📊 Flujo de Decisión Estratégica
 
 ```
-🎯 L1 OPERATIONAL DASHBOARD
-├── BTC/USDT
-│   ├── Señales procesadas: 45 ✅ | 3 ❌
-│   ├── Success rate: 93.8%
-│   ├── Slippage promedio: 0.12%
-│   └── Exposición actual: 18.5% / 20% max
-├── ETH/USDT  
-│   ├── Señales procesadas: 32 ✅ | 2 ❌
-│   ├── Success rate: 94.1%
-│   ├── Slippage promedio: 0.15%
-│   └── Exposición actual: 12.3% / 15% max
-└── Correlación BTC-ETH: 0.73 (límite: 0.80)
-```
+1. 📈 Recolección de Datos
+   ├─ Indicadores macroeconómicos (GDP, inflación, tasas de interés)
+   ├─ Datos de mercado (precios, volúmenes, volatilidad)
+   ├─ Datos de sentimiento (redes sociales, noticias)
+   └─ Datos de flujos (institucionales, retail)
 
-> Nota: El dashboard representa métricas calculadas internamente; la visualización es manejada por componentes externos.
+2. 🧠 Procesamiento y Análisis
+   ├─ Detección de régimen de mercado (ML models)
+   ├─ Análisis de correlaciones entre activos
+   ├─ Optimización de cartera mean-variance
+   ├─ Cálculo de métricas de riesgo estratégico
+   └─ Análisis de sentimiento consolidado
+
+3. 🎯 Toma de Decisiones
+   ├─ Definición de régimen de mercado actual
+   ├─ Asignación óptima de capital por activo
+   ├─ Establecimiento de apetito de riesgo
+   ├─ Definición de directrices estratégicas
+   └─ Generación de señales para L2
+
+4. 📤 Salida a L2
+   ├─ Régimen de mercado: "bull_market"
+   ├─ Asset allocation: {"BTC": 0.6, "ETH": 0.3, "CASH": 0.1}
+   ├─ Risk appetite: "moderate"
+   └─ Strategic context: {correlation_matrix, volatility_forecast}
+```
 
 ---
 
-## 🔄 Integración con Capas Superiores
+## 🎭 Modos de Operación
 
-**L2/L3 → L1 (Input esperado):**
+### 🔄 Modo Automático
+- Toma decisiones completamente autónomas
+- Ejecuta el pipeline completo de análisis
+- Ajusta estrategias basado en condiciones del mercado
+
+### 🎮 Modo Semi-Automático
+- Presenta recomendaciones al trader
+- Requiere confirmación humana para decisiones clave
+- Permite override manual de parámetros
+
+### 📊 Modo Simulación
+- Backtesting de estrategias históricas
+- Análisis de performance con datos pasados
+- Optimización de parámetros estratégicos
+
+---
+
+## 📈 Métricas y KPIs
+
+### 📋 Métricas de Rendimiento
+- **Sharpe Ratio** estratégico
+- **Sortino Ratio** ajustado al riesgo
+- **Maximum Drawdown** histórico
+- **Annualized Return**
+- **Volatility** de la cartera
+
+### 🎯 Métricas de Decisión
+- **Regime Accuracy** - Precisión en detección de régimen
+- **Allocation Efficiency** - Efectividad en asignación
+- **Risk-Adjusted Return** - Retorno ajustado al riesgo
+- **Correlation Capture** - Capacidad de capturar correlaciones
+
+---
+
+## 🔗 Integración con L2
+
+**L3 → L2 (Output estratégico):**
 ```json
 {
-  "signal_id": "btc_signal_123",
-  "symbol": "BTC/USDT",        // O "ETH/USDT"
-  "side": "buy",
-  "qty": 0.01,                 // Respetando límites por símbolo
-  "stop_loss": 49000.0,
-  "strategy_context": {
-    "regime": "bull_market",
-    "correlation_btc_eth": 0.65
-  }
-}
-```
-
-**L1 → L2/L3 (Output generado):**
-```json
-{
-  "execution_id": "exec_456", 
-  "signal_id": "btc_signal_123",
-  "symbol": "BTC/USDT",
-  "status": "filled",
-  "executed_qty": 0.01,
-  "avg_price": 50125.30,
-  "slippage": 0.11,
-  "ai_scores": {
-    "logreg": 0.745,
-    "random_forest": 0.821, 
-    "lightgbm": 0.798
+  "strategy_id": "strat_2024_q1",
+  "market_regime": "bull_market",
+  "asset_allocation": {
+    "BTC": 0.65,
+    "ETH": 0.25,
+    "stablecoins": 0.10
   },
-  "risk_metrics": {
-    "portfolio_exposure_btc": 0.185,
-    "correlation_impact": 0.023
-  }
+  "risk_appetite": "aggressive",
+  "target_exposure": 0.95,
+  "rebalance_frequency": "weekly",
+  "strategic_guidelines": {
+    "max_single_asset_exposure": 0.70,
+    "min_correlation_diversification": 0.30,
+    "volatility_target": 0.25,
+    "liquidity_requirements": {
+      "min_daily_volume": 1000000,
+      "max_slippage": 0.002
+    }
+  },
+  "market_context": {
+    "correlation_matrix": {
+      "BTC-ETH": 0.78,
+      "BTC-SPX": 0.45,
+      "ETH-SPX": 0.38
+    },
+    "volatility_forecast": {
+      "BTC_30d": 0.55,
+      "ETH_30d": 0.62,
+      "market_30d": 0.48
+    },
+    "sentiment_score": 0.72,
+    "macro_indicators": {
+      "inflation_risk": "moderate",
+      "liquidity_conditions": "favorable",
+      "regulatory_environment": "neutral"
+    }
+  },
+  "valid_until": "2024-03-31T23:59:59Z",
+  "confidence_level": 0.88
 }
 ```
 
 ---
 
-## ✨ Novedades de la Versión Multiasset
+## 🛡️ Gestión de Riesgo Estratégico
 
-### 🆕 Nuevas características:
-- ✅ Soporte nativo BTC + ETH en todos los componentes
-- ✅ 3 modelos IA entrenados con features cruzadas
-- ✅ Thresholds optimizados por F1-score específicos por símbolo  
-- ✅ Gestión de riesgo avanzada con límites de exposición
-- ✅ Métricas granulares por activo y globales
-- ✅ Configuración flexible para añadir más assets (e.g., ADA en config)
+### 📊 Risk Framework
+- **Value at Risk (VaR)** - Cálculo de pérdidas potenciales
+- **Expected Shortfall** - Pérdidas esperadas en colas de distribución
+- **Stress Testing** - Pruebas bajo escenarios extremos
+- **Scenario Analysis** - Análisis de múltiples escenarios posibles
 
-### 🔧 Componentes actualizados:
-- order_manager.py → Flujo multiasset con 3 IA
-- risk_guard.py → Límites específicos por símbolo
-- config.py → Configuración granular BTC/ETH
-- ai_models/ → Modelos entrenados listos para producción
+### 🔒 Controles Estratégicos
+- Límites de exposición por asset class
+- Límites de concentración sectorial
+- Requisitos de liquidez mínima
+- Triggers de reducción de riesgo automáticos
+- Circuit breakers estratégicos
 
-### 📈 Rendimiento esperado:
-- BTC: Accuracy ~66%, F1 ~64%, AUC ~72%
-- ETH: Accuracy ~65%, F1 ~61%, AUC ~70%  
-- Latencia: <50ms por señal (incluyendo 3 modelos IA)
-- Throughput: >100 señales/segundo
+---
+
+## 🤖 Modelos de Machine Learning
+
+### 🧠 Modelos Implementados
+- **Random Forest** para regime detection
+- **LSTM Networks** para forecast de volatilidad
+- **BERT** para análisis de sentimiento
+- **GARCH** para modelado de volatilidad
+- **Black-Litterman** para optimización de cartera
+
+### 📚 Datasets Utilizados
+- Datos macroeconómicos (FRED, OECD)
+- Datos de mercado (Bloomberg, Yahoo Finance)
+- Datos de sentimiento (Twitter, Reddit, News APIs)
+- Datos on-chain (Glassnode, Santiment)
+
+---
+
+## 🚀 Rendimiento Esperado
+
+### ⚡ Performance
+- **Latencia de decisión**: < 5 minutos (ejecución horaria)
+- **Precisión regime detection**: > 75%
+- **Accuracy sentiment analysis**: > 80%
+- **Backtest performance**: Sharpe > 1.5 en bull markets
+
+### 📈 Capacity
+- **Assets soportados**: 10+ (extensible)
+- **Timeframes**: Diario, semanal, mensual
+- **Historical data**: 5+ años de datos
+- **Execution frequency**: Horaria/Diaría
+
+---
+
+## 🔮 Roadmap Futuro
+
+### 🎯 Q2 2024
+- [ ] Integración con más fuentes de datos macro
+- [ ] Mejora de modelos de sentiment analysis
+- [ ] Adición de más asset classes (forex, commodities)
+
+### 🎯 Q3 2024
+- [ ] Implementación de reinforcement learning
+- [ ] Mejora de modelos de optimización de cartera
+- [ ] Integración con DeFi protocols
+
+### 🎯 Q4 2024
+- [ ] Predictive analytics para eventos macro
+- [ ] Modelos de deep learning para regime detection
+- [ ] Sistema auto-adaptativo de parámetros
 
 ---
 
 ## 🎉 Conclusión
 
-L1 está ahora completamente preparado para operar con múltiples activos, combinando la robustez de reglas deterministas con la inteligencia de 3 modelos IA especializados en BTC y ETH. El sistema garantiza ejecución segura, eficiente y optimizada para cada símbolo mientras mantiene control de riesgo a nivel de portafolio.
+L3_Strategic representa el cerebro estratégico del sistema de trading, combinando análisis macroeconómico avanzado, machine learning sofisticado y principios modernos de teoría de portafolio para guiar las decisiones tácticas de L2. Este nivel asegura que el sistema opere dentro de un marco estratégico coherente y adaptado a las condiciones del mercado.
 
-**¿Listo para el trading multiasset inteligente? 🚀**
+**¿Listo para llevar tu estrategia al siguiente nivel? 🚀**
+
+---
+
+<div align="center">
+
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![ML](https://img.shields.io/badge/machine-learning-orange.svg)
+![Finance](https://img.shields.io/badge/quant-finance-green.svg)
+![Status](https://img.shields.io/badge/status-active-success.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
+**Desarrollado con ❤️ para el Sistema HRM**
+
+</div>
