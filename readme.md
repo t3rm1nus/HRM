@@ -1,83 +1,117 @@
-# 🔱 HRM — Hierarchical Reasoning Model para Trading Algorítmico
+🔱 HRM — Hierarchical Reasoning Model para Trading Algorítmico
+Estado: Activo · Lenguaje: Python · Dominio: Cripto / Trading · Arquitectura: Multi-nivel (L4 → L1)
+Regla de oro: Si existe conflicto entre este README y los README de módulos, prevalece el README del módulo.
+🧭 TL;DR
+HRM es un framework de razonamiento jerárquico para trading algorítmico multiactivo (p. ej. BTC, ETH). Divide la toma de decisiones en 4 niveles —desde meta-razonamiento (L4) hasta ejecución determinista y segura (L1)— combinando reglas hard-coded y modelos IA (Logistic Regression, Random Forest, LightGBM) en L1. Soporta bus de mensajes, telemetría, persistencia histórica, dataset multitimeframe y tests robustos. Objetivo: decidir qué, cuándo y cuánto operar con trazabilidad y control de riesgo (incl. correlación BTC–ETH).
+🆕 Integración con Binance (real o testnet)
+✅ El sistema está totalmente implementado para operar en modo LIVE con conexión directa a Binance Spot.
+Modos de operación
+表格
+复制
+Modo	Descripción
+PAPER	Simulación completa sin conexión real.
+LIVE	Ejecución real en Binance Spot (requiere claves API).
+REPLAY	Reproducción con datasets históricos.
+Activar modo LIVE
+bash
+复制
+export BINANCE_MODE=LIVE
+export USE_TESTNET=false
+export BINANCE_API_KEY=your_real_key
+export BINANCE_API_SECRET=your_real_secret
+python main.py
+1️⃣ Objetivo del proyecto
+Tomar decisiones de trading razonadas y trazables para múltiples activos (BTC, ETH) mediante una jerarquía de agentes.
+Aprender qué señales funcionan bajo distintos regímenes y cómo combinar niveles (L2/L3) para optimizar ejecución en L1 con modelos IA.
+Minimizar riesgos con análisis multinivel, capa dura de seguridad en L1 y gestión de correlación BTC–ETH.
+Crear un framework reutilizable para distintos universos de activos líquidos.
+Qué queremos aprender a nivel de sistema
+Si el razonamiento multietapa mejora la estabilidad frente a un agente monolítico.
+Qué señales funcionan en cada régimen y cómo combinarlas en L2/L3.
+Cómo distribuir capital/ponderaciones entre modelos/estrategias y detectar concept drift en L4.
+2️⃣ Beneficios esperados
+Mayor precisión mediante composición multiasset y modelos IA (LogReg, RF, LightGBM).
+Reducción de riesgo vía diversificación temporal, límite rígido en L1 y gestión de correlación BTC–ETH.
+Adaptabilidad automática a distintos regímenes de mercado.
+Razonamiento multi-variable con métricas granulares por activo (latencia, slippage, tasa de éxito).
+⚙️ 3️⃣ Flujo general (visión de tiempos)
+Nivel 4: Meta-Razonamiento — horas/días
+Nivel 3: Análisis Estratégico — horas
+Nivel 2: Táctica de Ejecución — minutos
+Nivel 1: Ejecución + Gestión de Riesgo — segundos
+🧭 4️⃣ Jerarquía del sistema (HRM extendido)
+🔮 Nivel 4 — Meta-Razonamiento (horas/días)
+Rol: Reflexión y adaptación del sistema completo.
+Funciones: Evaluación de desempeño (Sharpe, drawdown), detección de drift, selección de modelos/estrategias, asignación de capital y ajustes globales.
+Ejemplo: Si mean reversion pierde eficacia, reducir su peso y reasignar capital a trend-following.
+🧭 Nivel 3 — Análisis Estratégico (horas)
+Rol: Planificación de alto nivel.
+Funciones: Clasificación de régimen (tendencia/rango/volatilidad), selección de sub-estrategias, priorización de activos (BTC, ETH), metas intradía (exposición, riesgo máximo).
+🚧 Por desarrollar:
+Integración con indicadores macroeconómicos (FRED, OECD).
+Modelos de Black-Litterman para asignación dinámica.
+Detección de eventos de riesgo sistémico.
+Escenarios de estrés y rebalanceo automático.
+⚔️ Nivel 2 — Táctica de Ejecución (minutos)
+Rol: Convertir decisiones estratégicas en operaciones concretas.
+Funciones: Composición de señales, position sizing (vol-targeting, Kelly fracc.), stops/targets dinámicos, ajustes por liquidez/volatilidad.
+⚙️ Nivel 1 — Ejecución y Riesgo (segundos)
+Rol: Implementación determinista con capa dura de seguridad y modelos IA.
+Funciones clave:
+Validación de límites por símbolo (stop-loss, exposición, correlación BTC–ETH).
+Filtrado de señales con IA (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl).
+Ejecución optimizada (fraccionamiento, timing, reducción de slippage).
+Envío de órdenes con timeouts/retries.
+Reportes y métricas por activo (BTC/USDT, ETH/USDT): latencia, slippage, exposición, tasas de éxito.
+🆕 Features incluidas (actualizado)
+表格
+复制
+Tipo	Descripción
+Precio	delta_close, EMA/SMA
+Volumen	volumen relativo
+Momentum	RSI, MACD
+Multi-timeframe	1m + 5m
+Cross-asset	ETH/BTC ratio, correlación rolling, divergencias
+Real-time data	Desde Binance Spot (modo LIVE) o testnet
+⚙️ Puesta en marcha (actualizado)
+Requisitos
+Python 3.10+
+Cuenta en Binance (Spot o Futures)
+Credenciales/API keys (ya cargadas en .env o variables de entorno)
+Instalación rápida
+bash
+复制
+# 1) Clonar
+git clone https://github.com/t3rm1nus/HRM.git
+cd HRM
 
-**Estado:** Activo · **Lenguaje:** Python · **Dominio:** Cripto / Trading · **Arquitectura:** Multi-nivel (L4 → L1)
-**Regla de oro:** *Si existe conflicto entre este README y los README de módulos, prevalece el README del módulo.*
+# 2) Entorno
+python -m venv .venv && source .venv/bin/activate
 
----
+# 3) Dependencias
+pip install -r l1_operational/requirements.txt
 
-## 🧭 TL;DR
+# 4) Configurar entorno (ejemplo .env)
+export BINANCE_API_KEY=your_real_key
+export BINANCE_API_SECRET=your_real_secret
+export BINANCE_MODE=LIVE
+export USE_TESTNET=false
 
-HRM es un framework de **razonamiento jerárquico** para trading algorítmico multiactivo (p. ej. BTC, ETH). Divide la toma de decisiones en **4 niveles** —desde meta-razonamiento (L4) hasta ejecución determinista y segura (L1)— combinando reglas *hard-coded* y modelos IA (Logistic Regression, Random Forest, LightGBM) en L1. Soporta bus de mensajes, telemetría, persistencia histórica, dataset multitimeframe y tests robustos. Objetivo: decidir **qué**, **cuándo** y **cuánto** operar con trazabilidad y control de riesgo (incl. correlación BTC–ETH).
-
----
-
-## 1️⃣ Objetivo del proyecto
-
-* Tomar decisiones de trading razonadas y trazables para múltiples activos (BTC, ETH) mediante una **jerarquía de agentes**.
-* Aprender qué señales funcionan bajo distintos regímenes y cómo combinar niveles (L2/L3) para optimizar ejecución en L1 con modelos IA.
-* Minimizar riesgos con análisis multinivel, capa dura de seguridad en L1 y gestión de correlación BTC–ETH.
-* Crear un framework reutilizable para distintos universos de activos líquidos.
-
-**Qué queremos aprender a nivel de sistema**
-
-* Si el razonamiento multietapa mejora la estabilidad frente a un agente monolítico.
-* Qué señales funcionan en cada régimen y cómo combinarlas en L2/L3.
-* Cómo distribuir capital/ponderaciones entre modelos/estrategias y detectar concept drift en L4.
-
----
-
-## 2️⃣ Beneficios esperados
-
-* Mayor precisión mediante composición multiasset y modelos IA (LogReg, RF, LightGBM).
-* Reducción de riesgo vía diversificación temporal, límite rígido en L1 y gestión de correlación BTC–ETH.
-* Adaptabilidad automática a distintos regímenes de mercado.
-* Razonamiento multi-variable con métricas granulares por activo (latencia, slippage, tasa de éxito).
-
----
-
-## ⚙️ 3️⃣ Flujo general (visión de tiempos)
-
-* **Nivel 4:** Meta-Razonamiento — horas/días
-* **Nivel 3:** Análisis Estratégico — horas
-* **Nivel 2:** Táctica de Ejecución — minutos
-* **Nivel 1:** Ejecución + Gestión de Riesgo — segundos
-
----
-
-## 🧭 4️⃣ Jerarquía del sistema (HRM extendido)
-
-### 🔮 Nivel 4 — Meta-Razonamiento (horas/días)
-
-**Rol:** Reflexión y adaptación del sistema completo.
-**Funciones:** Evaluación de desempeño (Sharpe, drawdown), detección de drift, selección de modelos/estrategias, asignación de capital y ajustes globales.
-**Ejemplo:** Si *mean reversion* pierde eficacia, reducir su peso y reasignar capital a *trend-following*.
-
-### 🧭 Nivel 3 — Análisis Estratégico (horas)
-
-**Rol:** Planificación de alto nivel.
-**Funciones:** Clasificación de régimen (tendencia/rango/volatilidad), selección de sub-estrategias, priorización de activos (BTC, ETH), metas intradía (exposición, riesgo máximo).
-
-### ⚔️ Nivel 2 — Táctica de Ejecución (minutos)
-
-**Rol:** Convertir decisiones estratégicas en operaciones concretas.
-**Funciones:** Composición de señales, position sizing (vol-targeting, Kelly fracc.), stops/targets dinámicos, ajustes por liquidez/volatilidad.
-
-### ⚙️ Nivel 1 — Ejecución y Riesgo (segundos)
-
-**Rol:** Implementación determinista con capa dura de seguridad y modelos IA.
-**Funciones clave:**
-
-* Validación de límites por símbolo (stop-loss, exposición, correlación BTC–ETH).
-* Filtrado de señales con IA (`modelo1_lr.pkl`, `modelo2_rf.pkl`, `modelo3_lgbm.pkl`).
-* Ejecución optimizada (fraccionamiento, timing, reducción de slippage).
-* Envío de órdenes con timeouts/retries.
-* Reportes y métricas por activo (BTC/USDT, ETH/USDT): latencia, slippage, exposición, tasas de éxito.
-
----
-
-## 🏗️ 5️⃣ Arquitectura (ASCII)
-
-```
+# 5) Ejecutar
+python main.py
+✅ Buenas prácticas de riesgo (resumen actualizado)
+表格
+复制
+Concepto	Valor real
+Stop-loss	Obligatorio
+Límites por trade	BTC: 0.05, ETH: 1.0
+Exposición máxima	BTC: 20%, ETH: 15%
+Correlación BTC-ETH	Monitoreada en tiempo real
+Modo LIVE	Implementado y validado
+Determinismo	Una orden por señal → si falla → rechazo y reporte
+Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
+🏗️ 5️⃣ Arquitectura (ASCII actualizada)
+复制
 ┌─────────────────────────────────────────┐
 │        NIVEL META-RAZONAMIENTO          │
 │  ┌──────────────┐  ┌─────────────────┐  │
@@ -96,6 +130,10 @@ HRM es un framework de **razonamiento jerárquico** para trading algorítmico mu
 │  │ Macro       │  │ Portfolio       │   │
 │  │ Analysis    │  │ Management      │   │
 │  └─────────────┘  └─────────────────┘   │
+│  ┌─────────────┐  ┌─────────────────┐   │
+│  │ Sentiment   │  │ Risk Appetite   │   │
+│  │ Analysis    │  │ Calculator      │   │
+│  └─────────────┘  └─────────────────┘   │
 └─────────────┬───────────────────────────┘
               │ Decisiones de Alto Nivel (Horas)
 ┌─────────────▼───────────────────────────┐
@@ -110,22 +148,17 @@ HRM es un framework de **razonamiento jerárquico** para trading algorítmico mu
 ┌─────────────▼────────────── Nivel Operacional ───────────────┐
 │ Hard-coded Safety Layer + Order Manager (determinista)       │
 │ AI Models (LogReg, RF, LightGBM) + Multiasset Execution      │
-│ Executor determinista → Exchange                             │
+│ Executor determinista → Exchange (Binance real o testnet)    │
 └──────────────────────────────────────────────────────────────┘
-```
+🔗 6️⃣ Conexión entre niveles (resumen actualizado)
+表格
+复制
+Flujo	Descripción
+L4 → L3	Ajuste de capital y parámetros globales
+L3 → L2	Selección de sub-estrategias y universo (BTC, ETH)
+L2 → L1	Señales concretas (cantidad, stop, target) por símbolo
+L1 → Exchange	Envío/gestión de órdenes en tiempo real para BTC/USDT y ETH/USDT desde Binance Spot o testnet
 
----
-
-## 🔗 6️⃣ Conexión entre niveles (resumen)
-
-| Flujo             | Descripción                                                      |
-| ----------------- | ---------------------------------------------------------------- |
-| **L4 → L3**       | Ajuste de capital y parámetros globales                          |
-| **L3 → L2**       | Selección de sub-estrategias y universo (BTC, ETH)               |
-| **L2 → L1**       | Señales concretas (cantidad, stop, target) por símbolo           |
-| **L1 → Exchange** | Envío/gestión de órdenes en tiempo real para BTC/USDT y ETH/USDT |
-
----
 
 ## 📂 7️⃣ Estructura de carpetas
 
@@ -205,6 +238,7 @@ HRM/
 │
 ├── data/                      
 │   ├── connectors/
+│   │   └── binance_connector.py
 │   ├── loaders.py
 │   ├── storage/
 │   └── __init__.py

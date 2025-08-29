@@ -25,7 +25,7 @@ class AIModelConfig:
     signal_horizon_minutes: int = 5
     model_path: str = "models/L2/ai_model_data_multiasset"  # Path adaptado para multiasset
     model_type: str = "stable_baselines3"  # tipo de modelo
-    prediction_threshold: float = 0.6
+    prediction_threshold: float = 0.3
     max_batch_size: int = 100
     cache_predictions: bool = True
     cache_ttl_seconds: int = 300
@@ -36,17 +36,17 @@ class AIModelConfig:
 @dataclass
 class SignalConfig:
     """Configuración de generación de señales (multiasset)"""
-    min_signal_strength: float = 0.3
-    strong_signal_threshold: float = 0.7
+    min_signal_strength: float = 0.1
+    strong_signal_threshold: float = 0.5
     signal_expiry_minutes: int = 15
 
     # Pesos para composición de señales
-    ai_model_weight: float = 0.6
+    ai_model_weight: float = 0.6  # Era 0.5
     technical_weight: float = 0.3
     pattern_weight: float = 0.1
 
     # Filtros de calidad
-    min_confidence: float = 0.5
+    min_confidence: float = 0.3
     require_volume_confirmation: bool = True
     max_conflicting_signals: int = 2
 
@@ -157,7 +157,7 @@ class BusConfig:
 @dataclass
 class L2Config:
     # --- Señales ---
-    signal_threshold: float = 0.6
+    signal_threshold: float = 0.4
     max_signals: int = 20
 
     # --- Position sizing ---
@@ -200,13 +200,14 @@ class L2Config:
     rate_limit_qps: int = 20
 
     # --- Pesos para el compositor de señales ---
-    ai_model_weight: float = 0.50
-    technical_weight: float = 0.30
-    pattern_weight: float = 0.20
+    ai_model_weight: float = 0.5
+    technical_weight: float = 0.3
+    pattern_weight: float = 0.2
 
     # --- Thresholds para validar señal compuesta ---
-    min_signal_confidence: float = 0.50
-    min_signal_strength: float = 0.10
+    min_signal_confidence: float = 0.3
+   
+    min_signal_strength: float = 0.05
 
     # --- Subconfiguraciones ---
     ai_model: AIModelConfig = field(default_factory=AIModelConfig)

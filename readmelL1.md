@@ -6,6 +6,9 @@ L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA
 
 ---
 
+✅ Novedad: L1 ahora soporta conexión directa a Binance Spot (modo LIVE) y testnet (modo PAPER), con logging persistente y métricas por activo.
+
+
 ## 🚫 Lo que L1 NO hace
 
 ❌ **No decide estrategias de trading**  
@@ -13,8 +16,11 @@ L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA
 ❌ **No toma decisiones tácticas fuera de seguridad y ejecución**  
 ❌ **No actualiza portafolio completo (responsabilidad de L2/L3)**  
 ❌ **No recolecta ni procesa datos de mercado (responsabilidad de L2/L3)**
+❌ **No recolecta datos crudos	L1 consume datos procesados desde DataFeed**
 
 ---
+⚠️ Aclaración: L1 sí consume datos de mercado desde DataFeed, pero no los genera ni modifica.
+
 
 ## ✅ Lo que L1 SÍ hace
 
@@ -33,23 +39,23 @@ L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA
 ## 🗂️ Arquitectura Actualizada
 
 ```
-L2/L3 (Señales BTC/ETH)
+L2/L3 (Señales BTC/ETH/ADA)
           ↓
-    Bus Adapter
+    Bus Adapter (async)
           ↓
-  Order Manager
+  Order Manager (orquestador)
           ↓
 [Hard-coded Safety Layer]
           ↓
-[Modelo 1: LogReg] → Feature 1 (BTC/ETH)
+[Modelo 1: LogReg] → Feature 1 (por símbolo)
           ↓
-[Modelo 2: Random Forest] → Feature 2 (BTC/ETH)
+[Modelo 2: Random Forest] → Feature 2 (por símbolo)
           ↓
-[Modelo 3: LightGBM] → Feature 3 (BTC/ETH)
+[Modelo 3: LightGBM] → Feature 3 (por símbolo)
           ↓
 [Decision Layer: Trend AI + Risk Rules + Execution Logic]
           ↓
-   Executor → Exchange
+   Executor → Binance Spot (LIVE) o simulado (PAPER)
           ↓
 Execution Report → Bus Adapter → L2/L3
 ```
@@ -62,6 +68,8 @@ Execution Report → Bus Adapter → L2/L3
 - **risk_guard.py** - Valida límites de riesgo y exposición por símbolo
 - **executor.py** - Ejecuta órdenes en el exchange
 - **config.py** - Configuración centralizada de límites y parámetros por activo
+- **binance_client.py** - Cliente oficial para Spot y testnet
+
 
 ### 🤖 Modelos IA (desde raíz/models/L1):
 - modelo1_lr.pkl - Logistic Regression (BTC/ETH)
@@ -92,6 +100,15 @@ Execution Report → Bus Adapter → L2/L3
 
 ---
 
+## 🎭 Modos de Operación
+
+| Modo       | Descripción                           | Activación                               |
+| ---------- | ------------------------------------- | ---------------------------------------- |
+| **PAPER**  | Simulación completa sin conexión real | `BINANCE_MODE=PAPER` (por defecto)       |
+| **LIVE**   | Ejecución real en Binance Spot        | `BINANCE_MODE=LIVE`, `USE_TESTNET=false` |
+| **REPLAY** | Reproducción con datasets históricos  | Requiere configuración adicional         |
+
+
 ## 📊 Flujo de Ejecución (Determinista Multiasset)
 
 1. Recepción de Señal desde L2/L3 vía bus (BTC/USDT o ETH/USDT)
@@ -118,7 +135,7 @@ Execution Report → Bus Adapter → L2/L3
 - Nivel INFO para operaciones normales con etiqueta [BTC] o [ETH]
 - Nivel WARNING para rechazos de órdenes por símbolo específico
 - Nivel ERROR para fallos de ejecución con contexto de asset
-- Logs incluyen contexto completo por símbolo y correlaciones
+- nivel PERSISTENTE Guardado en data/logs/ con métricas por ciclo y símbolo
 
 ---
 

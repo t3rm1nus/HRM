@@ -9,9 +9,9 @@ OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
 
 # Límites de riesgo por operación
 RISK_LIMITS = {
-    "MAX_ORDER_SIZE_BTC": 0.05,      # máximo BTC por orden
+    "MAX_ORDER_SIZE_BTC": 0.1,     # Era 0.05
     "MAX_ORDER_SIZE_USDT": 1000,     # máximo valor en USDT por orden
-    "MIN_ORDER_SIZE_USDT": 10,       # mínimo valor en USDT por orden
+    "MIN_ORDER_SIZE_USDT": 50,       # mínimo valor en USDT por orden
     "MAX_ORDER_SIZE_ETH": 1.0,       # máximo ETH por orden
     "MAX_ORDER_SIZE_ADA": 1000,      # máximo ADA por orden
 }
@@ -50,4 +50,4 @@ LOGGING_CONFIG = {
 }
 
 # Umbrales IA
-TREND_THRESHOLD = 0.6
+TREND_THRESHOLD = 0.3

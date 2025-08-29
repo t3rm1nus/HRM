@@ -8,6 +8,8 @@ Genera y compone señales de trading (IA + técnico + patrones) → calcula el *
 
 ---
 
+✅ Novedad: L2 ahora consume datos reales desde Binance Spot (vía DataFeed) y soporta activos adicionales (ADA, SOL) sin cambios de código.
+
 ## 🚫 Lo que L2_tactic NO hace
 
 | ❌ No hace                                            |
@@ -17,6 +19,7 @@ Genera y compone señales de trading (IA + técnico + patrones) → calcula el *
 | No ejecuta órdenes directamente (responsabilidad L1) |
 | No recolecta datos raw desde exchange                |
 | No modifica parámetros de configuración global       |
+| No recolecta datos raw	Consume datos procesados desde DataFeed|
 
 ---
 
@@ -172,8 +175,8 @@ l2_tactic/risk_controls/
 ```
 1. 📥 ENTRADA: Decisión estratégica de L3
    ├─ Regime de mercado (trend/range/volatile)
-   ├─ Universo de activos (BTC, ETH, …)
-   ├─ Target exposure (0.0 - 1.0)
+   ├─ Universo de activos (BTC, ETH, ADA, SOL, …)
+   ├─ Target exposure (0.0–1.0)
    └─ Risk appetite (conservative/aggressive)
 
 2. 🧠 PROCESAMIENTO TÁCTICO:
@@ -191,7 +194,7 @@ l2_tactic/risk_controls/
    ├─ confidence: 0.85
    ├─ stop_loss: 49000.0
    ├─ take_profit: 52000.0
-   └─ metadata: {"ensemble_vote": "bullish", "weights": {…}}
+   └─ metadata: {"ensemble_vote": "bullish", "weights": {...}}
 ```
 
 ---
@@ -219,6 +222,7 @@ pytest tests/test_risk_controls.py -v
 | Métricas / performance | ✅ | performance_optimizer.py y metrics.py integrados (no hay excepciones) |
 | Tests pasados | ✅ | No hay AssertionError, ModuleNotFoundError ni KeyError |
 | README actualizado | ✅ | Documentación completa y ejemplos incluidos |
+| Modo LIVE con datos reales	✅	Consume datos desde Binance Spot |
 
 ### ✅ Resumen
 - ✅ Código implementado
