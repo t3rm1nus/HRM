@@ -1,25 +1,41 @@
 # l1_operational/binance_client.py
 import os
-import ccxt
+from binance.client import Client
+from binance.enums import *
+from comms.config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET, MODE
+import logging
 
-# Lectura segura desde variables de entorno
-API_KEY = os.getenv('BINANCE_API_KEY', '')
-API_SECRET = os.getenv('BINANCE_API_SECRET', '')
-MODE = os.getenv('BINANCE_MODE', 'PAPER').upper()  # PAPER | LIVE
+logger = logging.getLogger(__name__)
 
-exchange = ccxt.binance({
-    'apiKey': API_KEY,
-    'secret': API_SECRET,
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'spot',
-        'adjustForTimeDifference': True,
-    },
-})
-
-# Modo por defecto: PAPER (sin claves reales). Cambiar a LIVE bajo tu responsabilidad.
-if MODE == 'PAPER':
-    try:
-        exchange.set_sandbox_mode(True)
-    except Exception:
+class BinanceClient:
+    def __init__(self):
+        self.client = Client(
+            BINANCE_API_KEY, 
+            BINANCE_API_SECRET,
+            testnet=USE_TESTNET
+        )
+        self.mode = MODE
+        logger.info(f"BinanceClient inicializado en modo: {self.mode}, Testnet: {USE_TESTNET}")
+    
+    def get_klines(self, symbol, interval, limit=100):
+        """Obtener datos OHLCV de Binance"""
+        try:
+            if self.mode == "PAPER":
+                # Simular en modo paper o usar datos reales
+                klines = self.client.get_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    limit=limit
+                )
+                return klines
+            else:
+                # Modo LIVE - implementar lógica real
+                return self._get_real_klines(symbol, interval, limit)
+        except Exception as e:
+            logger.error(f"Error getting klines for {symbol}: {e}")
+            return None
+    
+    def _get_real_klines(self, symbol, interval, limit):
+        """Lógica para modo LIVE"""
+        # Implementar cuando estés listo para trading real
         pass

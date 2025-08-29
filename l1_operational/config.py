@@ -5,7 +5,7 @@ Contiene todos los límites de riesgo y parámetros de ejecución.
 """
 
 # Modo de operación
-OPERATION_MODE = "paper"  # "paper", "live", "development", "testing"
+OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
 
 # Límites de riesgo por operación
 RISK_LIMITS = {

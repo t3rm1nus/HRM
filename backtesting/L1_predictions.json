@@ -1,0 +1,23 @@
+{
+    "LogisticRegression": {
+        "accuracy": 0.85,
+        "precision": 0.8,
+        "f1_score": 0.82,
+        "profit_contribution": 1000,
+        "latency_ms": 50
+    },
+    "RandomForest": {
+        "accuracy": 0.85,
+        "precision": 0.8,
+        "f1_score": 0.82,
+        "profit_contribution": 1000,
+        "latency_ms": 50
+    },
+    "LightGBM": {
+        "accuracy": 0.85,
+        "precision": 0.8,
+        "f1_score": 0.82,
+        "profit_contribution": 1000,
+        "latency_ms": 50
+    }
+}

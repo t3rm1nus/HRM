@@ -1,0 +1,55 @@
+================================================================================
+HRM BACKTESTING - ANÁLISIS POR MODELOS
+================================================================================
+Fecha: 2025-08-27 17:37:44
+
+🤖 ANÁLISIS MODELOS L1:
+----------------------------------------
+LOGISTICREGRESSION:
+  • Accuracy: 0.8500
+  • Precision: 0.8000
+  • F1 Score: 0.8200
+  • Profit Contribution: 1000.0000
+  • Latency Ms: 50.0000
+
+RANDOMFOREST:
+  • Accuracy: 0.8500
+  • Precision: 0.8000
+  • F1 Score: 0.8200
+  • Profit Contribution: 1000.0000
+  • Latency Ms: 50.0000
+
+LIGHTGBM:
+  • Accuracy: 0.8500
+  • Precision: 0.8000
+  • F1 Score: 0.8200
+  • Profit Contribution: 1000.0000
+  • Latency Ms: 50.0000
+
+🎯 ANÁLISIS MODELO L2:
+----------------------------------------
+  • Signal Quality: 0.7500
+  • Sizing Efficiency: 0.8000
+  • Hit Rate: 0.6500
+  • Risk Adjusted Return: 0.0500
+
+🧠 ANÁLISIS MODELOS L3:
+----------------------------------------
+STRATEGIC:
+  • Decision Accuracy: 0.9000
+  • Regime Detection Accuracy: 0.8500
+  • Strategic Value: 0.9500
+  • Allocation Efficiency: 0.8800
+
+💡 RECOMENDACIONES POR MODELO:
+----------------------------------------
+  LogisticRegression:
+
+  RandomForest:
+
+  LightGBM:
+
+  strategic:
+    • Evaluar contribución al rendimiento
+
+================================================================================

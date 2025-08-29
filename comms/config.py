@@ -1,10 +1,15 @@
 # comms/config.py
 import os
 
-# Claves API (cargar desde variables de entorno por seguridad)
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "EfI5aIIX4TeKu9hUhcGLOSi0RkSROoRZPKx90zx17rxncuDbAJ1KOWqOkVE9Jkq6")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "So7jYGP7jDm1XlOTA5jdxN99bYP9bw87Ajnr3cELgxoTO1rWn3ty3O99pklxlzO5")
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"  # Convertir a boolean
+SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT").split(',')
+MODE = os.getenv("BINANCE_MODE", "PAPER")  # Nuevo: modo de operación
 
-# Opciones
-USE_TESTNET = True  # True = usar Binance Testnet, False = real
-SYMBOL = "BTC/USDT"
+# Límites de riesgo (pueden venir de .env o valores por defecto)
+RISK_LIMIT_BTC = float(os.getenv("RISK_LIMIT_BTC", 0.05))
+RISK_LIMIT_ETH = float(os.getenv("RISK_LIMIT_ETH", 1.0))
+EXPOSURE_MAX_BTC = float(os.getenv("EXPOSURE_MAX_BTC", 0.20))
+EXPOSURE_MAX_ETH = float(os.getenv("EXPOSURE_MAX_ETH", 0.15))
+CORRELATION_LIMIT = float(os.getenv("CORRELATION_LIMIT", 0.80))

@@ -10,7 +10,6 @@ from .models import TacticalSignal
 
 logger = logging.getLogger("l2_tactic.signal_composer")
 
-
 class SignalComposer:
     """
     Combina señales tácticas de múltiples fuentes (IA, técnicas, patrones).
@@ -33,140 +32,92 @@ class SignalComposer:
         self.min_strength = getattr(config, "min_signal_strength", 0.10)
 
         # Cómo resolver conflictos buy/sell
-        self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", 0.03)  # si scores muy parecidos, gana el mayor
-        self.keep_both_when_far = getattr(config, "conflict_keep_both_when_far", False)
-
-        # Cómo promediar atributos continuos
-        self.aggregate_price = getattr(config, "composer_price_agg", "first")  # 'first' | 'mean'
-        self.aggregate_strength = getattr(config, "composer_strength_agg", "weighted")  # 'mean' | 'weighted'
-        self.aggregate_conf = getattr(config, "composer_confidence_agg", "weighted")  # 'mean' | 'weighted'
-
-        logger.info("SignalComposer initialized with config")
-
-    # ---------- helpers ----------
-
-    def _source_weight(self, source: str) -> float:
-        source = (source or "").lower()
-        base = {
-            "ai": self.w_ai,
-            "technical": self.w_tech,
-            "pattern": self.w_pattern,
-            "composite": 1.0,  # por si reenviamos resultados compuestos (no debería)
-        }.get(source, 0.10)
-
-        # Ajuste por performance histórica (si metrics está disponible)
-        # Convención esperada de metrics (si existe):
-        #   metrics.get_source_perf_weight(source: str) -> float   (1.0 = neutral)
-        adj = 1.0
-        if self.metrics and hasattr(self.metrics, "get_source_perf_weight"):
-            try:
-                adj = float(self.metrics.get_source_perf_weight(source))
-            except Exception:  # defensivo
-                adj = 1.0
-
-        return max(0.0, base * adj)
-
-    @staticmethod
-    def _group_by_symbol_side(signals: Iterable[TacticalSignal]) -> Dict[Tuple[str, str], List[TacticalSignal]]:
-        g: Dict[Tuple[str, str], List[TacticalSignal]] = {}
-        for s in signals:
-            key = (s.symbol, s.side)
-            g.setdefault(key, []).append(s)
-        return g
-
-    def _aggregate_group(self, symbol: str, side: str, group: List[TacticalSignal]) -> Optional[TacticalSignal]:
+        self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", 0.05)
+        self.keep_both_when_far = getattr(config, "keep_both_when_far", False)
+    
+    # --- MÉTODO CORREGIDO ---
+    def compose(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
         """
-        Genera una señal compuesta a partir de un grupo de señales del mismo símbolo+lado.
-        Usamos media/ponderación configurable sobre confidence y strength.
+        Método principal para componer una lista de señales en una única señal por símbolo.
         """
-        if not group:
+        if not signals:
+            return []
+        
+        # 1. Agrupar y ponderar señales por símbolo y lado
+        grouped_by_symbol_side = self._group_and_weight_signals(signals)
+
+        # 2. Convertir a una señal compuesta por símbolo y lado
+        composed_signals = [self._create_composed_signal(key, weighted_signals)
+                            for key, weighted_signals in grouped_by_symbol_side.items()]
+        
+        # 3. Resolver conflictos (buy vs sell) y filtrar por calidad
+        final_signals = self._resolve_conflicts_and_filter(composed_signals)
+        
+        logger.info(f"Composed {len(final_signals)} final signals from {len(signals)} raw signals.")
+        return final_signals
+
+    # --- Métodos auxiliares ---
+    def _group_and_weight_signals(self, signals: List[TacticalSignal]) -> Dict[Tuple, List[Tuple[TacticalSignal, float]]]:
+        """Agrupa las señales por (símbolo, lado) y calcula el peso dinámico."""
+        grouped = {}
+        for signal in signals:
+            key = (signal.symbol, signal.side)
+            weight = self._get_dynamic_weight(signal)
+            grouped.setdefault(key, []).append((signal, weight))
+        return grouped
+
+    def _create_composed_signal(self, key: Tuple, weighted_signals: List[Tuple]) -> TacticalSignal:
+        """Crea una señal compuesta a partir de las señales ponderadas."""
+        symbol, side = key
+        
+        # Calcular promedios ponderados
+        total_weight = sum(w for _, w in weighted_signals)
+        if total_weight == 0:
             return None
 
-        # Precio compuesto
-        if self.aggregate_price == "mean":
-            prices = [s.price for s in group if s.price]
-            price = sum(prices) / len(prices) if prices else (group[0].price or 0.0)
-        else:
-            price = group[0].price
-
-        # Pesos por fuente
-        weights = [self._source_weight(s.source) for s in group]
-        total_w = sum(weights) if any(w > 0 for w in weights) else len(group)
-        norm_w = [w / total_w for w in (weights if total_w > 0 else [1.0] * len(group))]
-
-        # Strength
-        if self.aggregate_strength == "weighted" and total_w > 0:
-            strength = sum(s.strength * w for s, w in zip(group, norm_w))
-        else:
-            strength = sum(s.strength for s in group) / len(group)
-
-        # Confidence
-        if self.aggregate_conf == "weighted" and total_w > 0:
-            confidence = sum(s.confidence * w for s, w in zip(group, norm_w))
-        else:
-            confidence = sum(s.confidence for s in group) / len(group)
-
-        # score compuesto para facilitar conflictos
-        composite_score = strength * confidence
-
-        # Usar el más reciente como base para mantener metadatos y timestamps
-        base = max(group, key=lambda s: s.timestamp or 0)
-
-        composite = replace(
-            base,
-            side=side,
-            price=price,
-            strength=strength,
-            confidence=confidence,
-            source="composite",
-            composite_score=composite_score,
-            notes={**(base.notes or {}), "sources": [s.source for s in group], "n_sources": len(group)},
+        # Ejemplo de promedio ponderado para confianza y fuerza
+        avg_confidence = sum(s.confidence * w for s, w in weighted_signals) / total_weight
+        avg_strength = sum(s.strength * w for s, w in weighted_signals) / total_weight
+        
+        # Tomar la primera señal como base para los otros atributos
+        base_signal = weighted_signals[0][0]
+        
+        return replace(
+            base_signal,
+            confidence=avg_confidence,
+            strength=avg_strength,
+            sources=[s.source for s, _ in weighted_signals],
+            composite_score=avg_confidence * avg_strength
         )
 
-        # filtros de calidad
-        if composite.confidence < self.min_conf or composite.strength < self.min_strength:
-            return None
+    def _get_dynamic_weight(self, signal: TacticalSignal) -> float:
+        """Asigna un peso a la señal basado en su fuente y, si está disponible, su performance histórica."""
+        base_weight = getattr(self, f"w_{signal.source}", 0.0)
+        # Lógica para ajustar por métricas de performance si estuviera disponible.
+        # Por ahora, devolvemos solo el peso base.
+        return base_weight
 
-        return composite
-
-    # ---------- API principal ----------
-
-    async def compose_signals(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
+    def _resolve_conflicts_and_filter(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
         """
-        Entrada: señales de varias fuentes (IA, técnicas, patrones...).
-        Salida: señales compuestas por símbolo (resolviendo conflictos buy/sell).
+        Resuelve conflictos BUY vs SELL y filtra por umbrales de calidad.
         """
-        logger.info("Composing signals")
-        if not signals:
-            logger.warning("No signals provided for composition")
-            return []
+        signals_by_symbol = {}
+        for s in signals:
+            if s and s.confidence >= self.min_conf and s.strength >= self.min_strength:
+                signals_by_symbol.setdefault(s.symbol, {}).update({s.side: s})
+        
+        final = []
+        for symbol, signals_in_conflict in signals_by_symbol.items():
+            buy = signals_in_conflict.get("buy")
+            sell = signals_in_conflict.get("sell")
 
-        # 1) Agrupar por (symbol, side) y componer
-        by_key = self._group_by_symbol_side(signals)
-        interim: Dict[str, Dict[str, TacticalSignal]] = {}  # symbol -> {"BUY": s?, "SELL": s?}
-
-        for (symbol, side), group in by_key.items():
-            comp = self._aggregate_group(symbol, side, group)
-            if comp is None:
+            if not buy and not sell:
                 continue
-            interim.setdefault(symbol, {})[side] = comp
-
-        if not interim:
-            return []
-
-        # 2) Resolver conflictos BUY vs SELL por símbolo
-        final: List[TacticalSignal] = []
-        for symbol, sides in interim.items():
-            buy = sides.get("BUY")
-            sell = sides.get("SELL")
-
             if buy and not sell:
                 final.append(buy)
                 continue
             if sell and not buy:
                 final.append(sell)
-                continue
-            if not buy and not sell:
                 continue
 
             # Ambos existen → comparar score compuesto
@@ -192,5 +143,5 @@ class SignalComposer:
                 else:
                     logger.debug(f"Conflict tie for {symbol}; discarding both")
 
-        logger.info(f"[L2] Composed {len(final)} signals from {len(signals)} candidates")
+        logger.info(f"Final signals after composition and conflict resolution: {len(final)}")
         return final

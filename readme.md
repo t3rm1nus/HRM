@@ -125,12 +125,12 @@ HRM/
 │   └── __init__.py
 │
 ├── core/                      # utilidades globales
-│   ├── config/                # configs YAML/JSON
 │   ├── logging.py
 │   ├── scheduler.py
 │   └── utils.py
 │
 ├── comms/                     # comunicaciones y eventos
+│   ├── config/                # configs YAML/JSON
 │   ├── message_bus.py
 │   ├── schemas.py
 │   └── adapters/              # conectores externos (Kafka, Redis, etc.)

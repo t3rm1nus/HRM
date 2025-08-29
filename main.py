@@ -1,316 +1,257 @@
-# main.py
-import asyncio
-import sys
+# main.py - Versión corregida con logging persistente
+import os
 import time
 import logging
-from collections import defaultdict
-from typing import Any, Callable, Dict, List, Coroutine, Optional
-
+import asyncio
 import pandas as pd
+from dotenv import load_dotenv
+from datetime import datetime
 
-# ---- Core / Monitoring / Storage ----
-from core.logging import setup_logger
-from monitoring.telemetry import telemetry
-from monitoring.dashboard import render_dashboard
-from storage import guardar_estado_csv, guardar_estado_sqlite
-
-# ---- Pipeline levels ----
-from l4_meta import procesar_l4
-from l3_strategy import procesar_l3
-from l1_operational import procesar_l1
-
-# ---- L2 Tactic (async) ----
-from l2_tactic.config import L2Config
+from l1_operational.data_feed import DataFeed
 from l2_tactic.main_processor import L2MainProcessor
+from l1_operational.order_manager import OrderManager
+from comms.config import SYMBOLS, USE_TESTNET
+from core.logging import setup_logger
+from l2_tactic.config import L2Config
+from l2_tactic.models import TacticalSignal
+from l1_operational.order_manager import Signal
 
-# ---- Bus adapter (requiere un bus) ----
-from l1_operational.bus_adapter import BusAdapterAsync
+# Importar el logger persistente
+from core.persistent_logger import persistent_logger
 
-from l2_tactic.technical.patterns import detect_all as detect_patterns
-from l2_tactic.technical.multi_timeframe import resample_and_consensus
-from l2_tactic.technical.support_resistance import swing_pivots
+# Configurar logging
+setup_logger()
+logger = logging.getLogger(__name__)
 
+config_l2 = L2Config()
 
-# ------------------------------------------------------------
-# Configuración de logging
-# ------------------------------------------------------------
-logger = setup_logger(level=logging.DEBUG)
+# Cargar variables de entorno
+load_dotenv()
 
-# ------------------------------------------------------------
-# Bus mínimo en memoria para trabajar con BusAdapterAsync
-# ------------------------------------------------------------
-class LocalMessageBus:
-    """
-    Bus pub/sub muy simple y compatible con BusAdapterAsync.
-    - subscribe(topic, handler)
-    - publish(topic, msg) (async)
-    - publish_sync(topic, msg) (sync helper)
-    """
-    def __init__(self) -> None:
-        self._subs: Dict[str, List[Callable[[Any], Any]]] = defaultdict(list)
+# Inicializar componentes
+data_feed = DataFeed()
+l2_processor = L2MainProcessor(config=config_l2)
+l1_order_manager = OrderManager()
 
-    def subscribe(self, topic: str, handler: Callable[[Any], Any]) -> None:
-        self._subs[topic].append(handler)
+# Estado global
+state = {
+    "mercado": {symbol: {} for symbol in SYMBOLS}, 
+    "estrategia": "neutral",
+    "portfolio": {symbol: 0.0 for symbol in SYMBOLS + ["USDT"]},
+    "universo": SYMBOLS,
+    "exposicion": {symbol: 0.0 for symbol in SYMBOLS},
+    "senales": {},
+    "ordenes": [],
+    "riesgo": {},
+    "deriva": False,
+    "ciclo_id": 0,
+}
 
-    async def publish(self, topic: str, message: Any) -> None:
-        for h in list(self._subs.get(topic, [])):
-            try:
-                if asyncio.iscoroutinefunction(h):
-                    await h(message)
-                else:
-                    # ejecutar en thread para no bloquear el loop
-                    await asyncio.to_thread(h, message)
-            except Exception:
-                logger.exception(f"[BUS] Error enviando mensaje a handler de '{topic}'")
-
-    # Algunos adaptadores llaman publish en modo sync
-    def publish_sync(self, topic: str, message: Any) -> None:
-        for h in list(self._subs.get(topic, [])):
-            try:
-                if asyncio.iscoroutinefunction(h):
-                    asyncio.create_task(h(message))
-                else:
-                    h(message)
-            except Exception:
-                logger.exception(f"[BUS] Error enviando mensaje sync a handler de '{topic}'")
-
-
-# Variables globales necesarias para funciones auxiliares
-BUS: Optional[BusAdapterAsync] = None
-CONFIG_L2: L2Config = L2Config()
-
-
-# ------------------------------------------------------------
-# Utilidades
-# ------------------------------------------------------------
-def validate_portfolio(portfolio: Dict[str, float], valid_symbols: List[str], stage: str) -> None:
-    invalid = {symbol for symbol in portfolio if symbol not in valid_symbols}
-    if invalid:
-        logger.error(f"Invalid symbols in portfolio at {stage}: {', '.join(invalid)}")
-        raise ValueError(f"Invalid symbols in portfolio at {stage}: {', '.join(invalid)}")
-
-
-def _calc_portfolio_value(state: dict) -> float:
-    """
-    Calcula el valor del portafolio usando el último 'close' disponible por símbolo.
-    Espera state['mercado'][symbol] como DataFrame con columna 'close'.
-    """
-    total = 0.0
-    for a, qty in state["portfolio"].items():
-        df = state["mercado"].get(a)
-        if df is None or df.empty or "close" not in df.columns:
-            price = 0.0
-        else:
-            price = float(df["close"].iloc[-1])
-        total += float(qty) * price
-    return total
-
-
-# ------------------------------------------------------------
-# TICK principal (una iteración del pipeline)
-# ------------------------------------------------------------
-async def run_tick(state: dict) -> dict:
-    global BUS, CONFIG_L2
-
-    start = time.time()
-    state["ciclo_id"] = int(state.get("ciclo_id", 0)) + 1
-    state["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    logger.info(f"[TICK] Iniciando ciclo {state['ciclo_id']}")
-    logger.debug(f"[MAIN] Portfolio antes de L4: {state['portfolio']}")
-
-    # ---------------- L4 ----------------
-    logger.info("[L4] Ejecutando capa Meta...")
-    state = procesar_l4(state)
-    logger.debug(f"[L4] Portfolio después de L4: {state['portfolio']}")
-    validate_portfolio(state["portfolio"], list(state["mercado"].keys()), "after L4")
-
-    # ---------------- L3 ----------------
-    logger.info("[L3] Ejecutando capa Strategy...")
-    state = procesar_l3(state)
-    logger.debug(f"[L3] Portfolio después de L3: {state['portfolio']}")
-    logger.debug(f"[L3] Órdenes generadas: {state.get('ordenes', [])}")
-    validate_portfolio(state["portfolio"], list(state["mercado"].keys()), "after L3")
-
-    # ---------------- L2 (ASYNC) ----------------
-    logger.info("[L2] Ejecutando capa Tactic...")
-    if BUS is None or PROCESSOR is None:
-        raise RuntimeError("BUS o PROCESSOR no inicializados")
-    state = await PROCESSOR.process(state)
-
-    # Validación previa a L1
-    logger.info("[VALIDATION] Validando state['portfolio'] antes de L1...")
-    valid_symbols = set(state["mercado"].keys())
-    portfolio_symbols = set(state["portfolio"].keys())
-    if not portfolio_symbols.issubset(valid_symbols):
-        invalid_symbols = portfolio_symbols - valid_symbols
-        raise ValueError(f"Invalid symbols in portfolio before L1: {', '.join(invalid_symbols)}")
-
-    # ---------------- L1 ----------------
-    logger.info("[L1] Ejecutando capa Operational...")
-    if asyncio.iscoroutinefunction(procesar_l1):
-        state = await procesar_l1(state)
-    else:
-        state = await asyncio.to_thread(procesar_l1, state)
-    logger.debug(f"[L1] Portfolio después de L1: {state['portfolio']}")
-    logger.debug(f"[L1] Órdenes procesadas: {state.get('ordenes', [])}")
-
-    # ---------------- Métricas ----------------
-    telemetry.incr("ciclos_total")
-    telemetry.timing("tick_time", start)
-    valor_portfolio = _calc_portfolio_value(state)
-    telemetry.gauge("valor_portfolio", valor_portfolio)
-    logger.debug(f"[METRICS] Valor del portafolio: {valor_portfolio}")
-
-    logger.info(
-        f"[TICK] Ciclo {state['ciclo_id']} completado",
-        extra={
-            "ciclo_id": state["ciclo_id"],
-            "valor_portfolio": valor_portfolio,
-            "ordenes": len(state.get("ordenes", [])),
-            "senales": len(state.get("senales", {}).get("signals", [])),
-            "riesgo": state.get("riesgo"),
-            "deriva": state.get("deriva"),
-        },
-    )
-
-    # ---------------- Dashboard ----------------
-    logger.debug("[DASHBOARD] Renderizando estado actual")
+async def log_cycle_data(state: dict, cycle_id: int, start_time: float):
+    """Loggear todos los datos del ciclo."""
     try:
-        render_dashboard(state)
-    except Exception:
-        logger.exception("[DASHBOARD] Error en render_dashboard")
+        cycle_duration = (time.time() - start_time) * 1000
+        
+        # Datos de mercado
+        btc_price = state['mercado'].get('BTCUSDT', {}).get('close', 0)
+        eth_price = state['mercado'].get('ETHUSDT', {}).get('close', 0)
+        
+        # Log ciclo
+        await persistent_logger.log_cycle({
+            'timestamp': datetime.now().isoformat(),
+            'cycle_id': cycle_id,
+            'duration_ms': cycle_duration,
+            'signals_generated': len(state.get('senales', {}).get('signals', [])),
+            'orders_executed': len(state.get('ordenes', [])),
+            'market_condition': state.get('estrategia', 'neutral'),
+            'btc_price': btc_price,
+            'eth_price': eth_price,
+            'total_operations': len(state.get('ordenes', [])),
+            'successful_operations': len([o for o in state.get('ordenes', []) if o.get('status') == 'filled']),
+            'failed_operations': len([o for o in state.get('ordenes', []) if o.get('status') == 'rejected'])
+        })
+        
+        # Log señales
+        signals = state.get('senales', {}).get('signals', [])
+        for signal in signals:
+            await persistent_logger.log_signal({
+                'timestamp': datetime.now().isoformat(),
+                'cycle_id': cycle_id,
+                'symbol': signal.get('symbol', ''),
+                'side': signal.get('side', ''),
+                'confidence': signal.get('confidence', 0),
+                'quantity': signal.get('qty', 0),
+                'stop_loss': signal.get('stop_loss', 0),
+                'take_profit': signal.get('take_profit', 0),
+                'signal_id': signal.get('signal_id', f'cycle_{cycle_id}'),
+                'strategy': signal.get('strategy', ''),
+                'ai_score': signal.get('ai_score', 0),
+                'tech_score': signal.get('tech_score', 0),
+                'risk_score': signal.get('risk_score', 0),
+                'ensemble_decision': signal.get('ensemble_decision', ''),
+                'market_regime': state.get('estrategia', 'neutral')
+            })
+        
+        # Log datos de mercado
+        for symbol in SYMBOLS:
+            market_data = state['mercado'].get(symbol, {})
+            if market_data:
+                await persistent_logger.log_market_data({
+                    'symbol': symbol,
+                    'price': market_data.get('close', 0),
+                    'volume': market_data.get('volume', 0),
+                    'high': market_data.get('high', 0),
+                    'low': market_data.get('low', 0),
+                    'open': market_data.get('open', 0),
+                    'close': market_data.get('close', 0),
+                    'spread': 0,  # Puedes calcularlo si tienes bid/ask
+                    'liquidity': 0,
+                    'volatility': 0,
+                    'rsi': 0,
+                    'macd': 0,
+                    'bollinger_upper': 0,
+                    'bollinger_lower': 0
+                })
+        
+        # Log performance cada 10 ciclos
+        if cycle_id % 10 == 0:
+            portfolio_value = sum(state["portfolio"].values())
+            await persistent_logger.log_performance({
+                'timestamp': datetime.now().isoformat(),
+                'cycle_id': cycle_id,
+                'portfolio_value': portfolio_value,
+                'total_exposure': state.get('exposicion', {}).get('total', 0),
+                'btc_exposure': state.get('exposicion', {}).get('BTCUSDT', 0),
+                'eth_exposure': state.get('exposicion', {}).get('ETHUSDT', 0),
+                'cash_balance': state.get('portfolio', {}).get('USDT', 0),
+                'total_pnl': 0,
+                'daily_pnl': 0,
+                'win_rate': 0,
+                'sharpe_ratio': 0,
+                'max_drawdown': 0,
+                'correlation_btc_eth': 0,
+                'signals_count': len(signals),
+                'trades_count': len(state.get('ordenes', []))
+            })
+        
+        # Log estado completo cada 30 ciclos
+        if cycle_id % 30 == 0:
+            await persistent_logger.log_state(state, cycle_id)
+            
+    except Exception as e:
+        logger.error(f"Error en logging del ciclo: {e}")
 
-    # ---------------- Persistencia ----------------
-    logger.debug("[STORAGE] Guardando estado en CSV...")
-    try:
-        guardar_estado_csv(state)
-    except Exception:
-        logger.exception("[STORAGE] Error guardando CSV")
-    logger.debug("[STORAGE] Guardando estado en SQLite...")
-    try:
-        guardar_estado_sqlite(state)
-    except Exception:
-        logger.exception("[STORAGE] Error guardando SQLite")
-
-    return state
-
-
-# ------------------------------------------------------------
-# Seed de datos de ejemplo (si no hay feed real aún)
-# ------------------------------------------------------------
-def build_mock_state() -> dict:
-    ts = pd.date_range(start="2025-08-23 21:03:00", periods=200, freq="1min", tz="UTC")
-    btc = pd.DataFrame(
-        {
-            "timestamp": ts,
-            "open": [50000.0 + i * 10 for i in range(len(ts))],
-            "high": [50500.0 + i * 10 for i in range(len(ts))],
-            "low":  [49500.0 + i * 10 for i in range(len(ts))],
-            "close":[50200.0 + i * 10 for i in range(len(ts))],
-            "volume": [100.0] * len(ts),
-        }
-    ).set_index("timestamp")
-    eth = pd.DataFrame(
-        {
-            "timestamp": ts,
-            "open": [2000.0 + i * 5 for i in range(len(ts))],
-            "high": [2020.0 + i * 5 for i in range(len(ts))],
-            "low":  [1980.0 + i * 5 for i in range(len(ts))],
-            "close":[2010.0 + i * 5 for i in range(len(ts))],
-            "volume": [50.0] * len(ts),
-        }
-    ).set_index("timestamp")
-    usdt = pd.DataFrame(
-        {
-            "timestamp": ts,
-            "open": [1.0] * len(ts),
-            "high": [1.0] * len(ts),
-            "low":  [1.0] * len(ts),
-            "close":[1.0] * len(ts),
-            "volume": [1000.0] * len(ts),
-        }
-    ).set_index("timestamp")
-
-    state = {
-        "portfolio": {"BTC/USDT": 0.7, "ETH/USDT": 0.2, "USDT": 100.0},
-        "mercado": {"BTC/USDT": btc, "ETH/USDT": eth, "USDT": usdt},
-        "regimen_context": {},
-        "ciclo_id": 0,
-    }
-
-        # --- Cálculo de features adicionales ---
-    features_by_symbol = {}
-    for sym, df in state["mercado"].items():
-        pat = detect_patterns(df)
-        mtf = resample_and_consensus(df)
-        sr  = swing_pivots(df)
-        features_by_symbol[sym] = {
-            "patterns": pat,
-            "multi_tf": mtf,
-            "s_r": sr,
-        }
-    state["features_by_symbol"] = features_by_symbol
-
-    return state
-
-
-# ------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------
-async def main() -> None:
-    
-    global BUS, CONFIG_L2, PROCESSOR
-
-    # Bus principal y adaptador
-    core_bus = LocalMessageBus()
-    BUS = BusAdapterAsync(core_bus)
-    await BUS.start()
-
-    # Config L2
-    CONFIG_L2 = L2Config()
-
-    # Inicializar Processor
-    PROCESSOR = L2MainProcessor(CONFIG_L2, BUS)
-    
-
-    # Windows: usar Proactor si está disponible (coincide con el log "Using proactor: IocpProactor")
-    if sys.platform.startswith("win"):
+# ------------------------------------------------------------------ #
+# Bucle principal
+# ------------------------------------------------------------------ #
+async def _run_loop():
+    while True:
         try:
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-            logger.debug("Using proactor: IocpProactor")
-        except Exception:
-            logger.debug("Falling back to default event loop policy")
+            cycle_start = time.time()
+            state['ciclo_id'] += 1
+            current_cycle = state['ciclo_id']
+            
+            logger.info(f"[TICK] Iniciando ciclo {current_cycle}")
+            
+            # PASO 0: Recolectar datos de mercado para cada símbolo
+            for symbol in SYMBOLS:
+                df = data_feed.fetch_data(symbol)
+                if not df.empty:
+                    # Guardar el último precio y datos
+                    last_row = df.iloc[-1]
+                    state['mercado'][symbol] = {
+                        'close': last_row['close'],
+                        'open': last_row['open'],
+                        'high': last_row['high'],
+                        'low': last_row['low'],
+                        'volume': last_row['volume']
+                    }
+                    logger.debug(f"Datos mercado {symbol}: {last_row['close']}")
+                else:
+                    logger.warning(f"No se pudieron obtener datos para {symbol}")
 
-    # Bus principal y adaptador
-    core_bus = LocalMessageBus()
-    BUS = BusAdapterAsync(core_bus)  # el adaptador ya se suscribe a topics internos
-    await BUS.start()
+            logger.info("[L4] Ejecutando capa Meta...")
+            logger.info("[L3] Ejecutando capa Strategy...")
+            logger.info("[L2] Ejecutando capa Tactic...")
+            
+            # PASO 1: Generar señales tácticas con L2
+            signals = await l2_processor.process(state)
+            state["senales"] = {"signals": signals, "orders": []}
+            
+            logger.info(f"[L2] Señales generadas: {len(signals)}")
 
-    # Config L2 (thresholds, sizing/risk, etc.)
-    CONFIG_L2 = L2Config()
+            logger.info("[VALIDATION] Validando state['portfolio'] antes de L1...")
+            logger.info("[L1] Ejecutando capa Operational...")
+            
+            orders = []
+            for signal in signals:
+                if isinstance(signal, (TacticalSignal, Signal)): 
+                    try:
+                        order_report = await l1_order_manager.handle_signal(signal)
+                        orders.append(order_report)
+                    except Exception as e:
+                        logger.error(f"Error procesando señal: {e}")
+                else:
+                    logger.warning(f"Se ignoró objeto no válido: {type(signal)}")
 
-    # Estado inicial (mock si no hay datos reales aún)
-    state = build_mock_state()
-    logger.info(f"[MAIN] Estado inicial de portfolio: {state['portfolio']}")
-    logger.debug(f"[MAIN] Símbolos válidos: {list(state['mercado'].keys())}")
-    logger.info("[MAIN] Iniciando loop principal con ciclo cada 10s...")
+            state["ordenes"] = orders
+            logger.info(f"[L1] Órdenes procesadas: {len(orders)}")
 
-    # Bucle continuo
+            # 📊 LOGGING PERSISTENTE
+            await log_cycle_data(state, current_cycle, cycle_start)
+
+            # Tiempo de ciclo y sleep
+            elapsed_time = time.time() - cycle_start
+            sleep_time = max(0, 10 - elapsed_time)
+            
+            logger.info(f"[TICK] Ciclo {current_cycle} completado en {elapsed_time:.2f}s. Esperando {sleep_time:.2f}s.")
+            
+            # Mostrar estadísticas cada 50 ciclos
+            if current_cycle % 50 == 0:
+                stats = persistent_logger.get_log_stats()
+                logger.info(f"📊 ESTADÍSTICAS: {stats}")
+            
+            await asyncio.sleep(sleep_time)
+
+        except KeyboardInterrupt:
+            logger.info("🛑 Interrupción por usuario")
+            break
+        except Exception as e:
+            logger.error(f"Error fatal en el loop principal: {e}", exc_info=True)
+            await asyncio.sleep(10)  # Esperar antes de reintentar
+
+# ------------------------------------------------------------------ #
+async def main():
     try:
-        while True:
-            try:
-                state = await run_tick(state)
-            except Exception:
-                logger.exception("[MAIN] Error en tick; continuo tras breve espera")
-
-            # Espera entre ciclos
-            await asyncio.sleep(10)
-    except asyncio.CancelledError:
-        logger.info("[MAIN] Cancelado, cerrando...")
+        logger.info("🚀 INICIANDO SISTEMA HRM CON LOGGING PERSISTENTE")
+        logger.info(f"📁 Logs guardados en: data/logs/")
+        
+        # Iniciar componentes
+        await data_feed.start()
+        
+        # Mostrar información inicial
+        logger.info(f"✅ DataFeed iniciado")
+        logger.info(f"✅ Símbolos: {SYMBOLS}")
+        logger.info(f"✅ Modo Testnet: {USE_TESTNET}")
+        logger.info("🌙 Sistema listo para ejecución prolongada")
+        
+        await _run_loop()
+        
     except KeyboardInterrupt:
-        logger.info("[MAIN] Interrumpido por usuario, cerrando...")
-
+        logger.info("🛑 Ejecución interrumpida por usuario")
+    except Exception as e:
+        logger.error(f"❌ Error crítico en main: {e}", exc_info=True)
+    finally:
+        try:
+            await data_feed.stop()
+            logger.info("✅ DataFeed detenido")
+        except:
+            pass
+        
+        # Estadísticas finales
+        stats = persistent_logger.get_log_stats()
+        logger.info(f"📈 ESTADÍSTICAS FINALES: {stats}")
+        logger.info("🎯 EJECUCIÓN FINALIZADA")
 
 if __name__ == "__main__":
     asyncio.run(main())

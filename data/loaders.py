@@ -1,325 +1,204 @@
-"""
-Utilidades para cargar dataset de BTC y generar features sin ensuciar el código.
-
-Objetivos:
-- Tomar datos históricos solo de BTC/USDT (o BTC/USD) con columnas estándar
-  requeridas: timestamp (índice), close; opcionales: open, high, low, volume.
-- Generar features: precio (delta, EMA, SMA), volumen relativo, momentum (RSI, MACD).
-- Multitimeframe: agregar features de 1m + 5m con sufijos.
-- Split train/test respetando el orden temporal.
-
-Nota: Se implementa todo en este archivo para evitar dispersión de utilidades.
-"""
-
-from __future__ import annotations
-
-from typing import Optional, Dict, Iterable, Tuple
-
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import Tuple, Optional, Dict
+import logging
+from .connectors.binance_connector import BinanceConnector
+from comms.config import SYMBOLS
 
+logger = logging.getLogger(__name__)
 
-# Configuración por defecto de features
-DEFAULT_FEATURE_CONFIG: Dict[str, object] = {
-    "ema_windows": (10, 20),
-    "sma_windows": (10, 20),
-    "rsi_window": 14,
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "vol_window": 20,
-    # Nuevos indicadores
-    "adx_window": 14,
-    "stoch_k_window": 14,
-    "stoch_d_window": 3,
-    "bb_window": 20,
-    "bb_std": 2.0,
-    "atr_window": 14,
-}
-
-
-def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
-    if not isinstance(df.index, pd.DatetimeIndex):
-        if "timestamp" in df.columns:
-            df = df.set_index(pd.to_datetime(df["timestamp"], errors="coerce"))
-            df = df.drop(columns=["timestamp"])  # mantener limpio
-        else:
-            raise ValueError("El DataFrame debe tener índice datetime o columna 'timestamp'.")
-    return df.sort_index()
-
-
-def normalize_btc_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normaliza nombres de columnas a [open, high, low, close, volume] cuando sea posible.
-    Si solo existe 'BTC_close', se mapea a 'close'.
-    """
-    mapping = {}
-    if "BTC_close" in df.columns and "close" not in df.columns:
-        mapping["BTC_close"] = "close"
-    # Si viniese de alguna otra convención, añadir aquí mapeos futuros
-    if mapping:
-        df = df.rename(columns=mapping)
+def normalize_column_names(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
+    """Normaliza nombres de columnas independientemente del origen."""
+    column_mapping = {
+        'close': 'close', 'Close': 'close', 'CLOSE': 'close',
+        'open': 'open', 'Open': 'open', 'OPEN': 'open',
+        'high': 'high', 'High': 'high', 'HIGH': 'high', 
+        'low': 'low', 'Low': 'low', 'LOW': 'low',
+        'volume': 'volume', 'Volume': 'volume', 'VOLUME': 'volume',
+        'timestamp': 'timestamp', 'Timestamp': 'timestamp', 'TIMESTAMP': 'timestamp',
+        'datetime': 'timestamp', 'Datetime': 'timestamp', 'DATETIME': 'timestamp'
+    }
+    
+    df = df.rename(columns={col: column_mapping.get(col, col) for col in df.columns})
+    
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+    
     return df
 
+def calculate_technical_indicators(df: pd.DataFrame, window_sizes: list = [10, 20, 50]) -> pd.DataFrame:
+    """Calcula indicadores técnicos para el DataFrame."""
+    df = df.copy()
+    
+    # Precios
+    df['returns'] = df['close'].pct_change()
+    df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
+    
+    # Medias móviles
+    for window in window_sizes:
+        df[f'sma_{window}'] = df['close'].rolling(window=window).mean()
+        df[f'ema_{window}'] = df['close'].ewm(span=window, adjust=False).mean()
+    
+    # Volatilidad
+    df['volatility_20'] = df['returns'].rolling(window=20).std()
+    df['atr_14'] = calculate_atr(df, window=14)
+    
+    # Momentum
+    df['rsi_14'] = calculate_rsi(df['close'], window=14)
+    df['macd'], df['macd_signal'], df['macd_hist'] = calculate_macd(df['close'])
+    
+    # Bollinger Bands
+    df['bb_upper_20'], df['bb_lower_20'] = calculate_bollinger_bands(df['close'], window=20)
+    df['bb_width_20'] = (df['bb_upper_20'] - df['bb_lower_20']) / df['sma_20']
+    
+    # Volume indicators
+    df['volume_sma_20'] = df['volume'].rolling(window=20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+    
+    return df.dropna()
 
-def compute_price_features(
-    df: pd.DataFrame,
-    ema_windows: Iterable[int] = DEFAULT_FEATURE_CONFIG["ema_windows"],
-    sma_windows: Iterable[int] = DEFAULT_FEATURE_CONFIG["sma_windows"],
+def calculate_rsi(series: pd.Series, window: int = 14) -> pd.Series:
+    """Calcula RSI."""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Calcula MACD."""
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd - macd_signal
+    return macd, macd_signal, macd_hist
+
+def calculate_bollinger_bands(series: pd.Series, window: int = 20, num_std: int = 2) -> Tuple[pd.Series, pd.Series]:
+    """Calcula Bollinger Bands."""
+    sma = series.rolling(window=window).mean()
+    std = series.rolling(window=window).std()
+    upper_band = sma + (std * num_std)
+    lower_band = sma - (std * num_std)
+    return upper_band, lower_band
+
+def calculate_atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
+    """Calcula Average True Range."""
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    true_range = np.maximum.reduce([high_low, high_close, low_close])
+    return true_range.rolling(window=window).mean()
+
+def build_multitimeframe_features(
+    df_1m: pd.DataFrame, 
+    df_5m: Optional[pd.DataFrame] = None, 
+    symbol: str = ""
 ) -> pd.DataFrame:
-    if "close" not in df.columns:
-        raise ValueError("Se requiere columna 'close' para features de precio.")
-
-    out = pd.DataFrame(index=df.index)
-    out["close"] = df["close"].astype(float)
-    out["delta_close"] = out["close"].pct_change().fillna(0.0)
-
-    for w in ema_windows:
-        out[f"ema_{w}"] = out["close"].ewm(span=w, adjust=False).mean()
-    for w in sma_windows:
-        out[f"sma_{w}"] = out["close"].rolling(window=w, min_periods=1).mean()
-    return out
-
-
-def compute_volume_features(
-    df: pd.DataFrame,
-    vol_window: int = int(DEFAULT_FEATURE_CONFIG["vol_window"]),
-) -> pd.DataFrame:
-    out = pd.DataFrame(index=df.index)
-    if "volume" in df.columns:
-        vol = df["volume"].astype(float)
-        out["volume"] = vol
-        rolling_mean = vol.rolling(window=vol_window, min_periods=1).mean()
-        out["vol_rel"] = (vol / rolling_mean).replace([np.inf, -np.inf], np.nan).fillna(1.0)
-    return out
-
-def normalize_eth_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Normaliza nombres de columnas de ETH/USDT a [open, high, low, close, volume].
-    Similar a BTC pero para ETH.
+    Construye features multi-timeframe a partir de datos de mercado.
     """
-    mapping = {}
-    if "ETH_close" in df.columns and "close" not in df.columns:
-        mapping["ETH_close"] = "close"
-    # Mapear otras convenciones si existen
-    if mapping:
-        df = df.rename(columns=mapping)
-    return df
+    logger.info(f"🔧 Construyendo features para {symbol} - 1m shape: {df_1m.shape}")
+    
+    # Normalizar datos
+    df_1m = normalize_column_names(df_1m, symbol)
+    df_1m_features = calculate_technical_indicators(df_1m)
+    
+    # Features multi-timeframe si hay datos 5m
+    if df_5m is not None and not df_5m.empty:
+        df_5m = normalize_column_names(df_5m, symbol)
+        df_5m_features = calculate_technical_indicators(df_5m)
+        
+        # Reindexar features 5m a 1m y añadir sufijo
+        df_5m_reindexed = df_5m_features.reindex(df_1m_features.index, method='ffill')
+        df_5m_reindexed = df_5m_reindexed.add_suffix('_5m')
+        
+        # Combinar features
+        df_1m_features = pd.concat([df_1m_features, df_5m_reindexed], axis=1)
+    
+    # Añadir identificador de símbolo
+    df_1m_features['symbol'] = symbol
+    df_1m_features['is_btc'] = 1 if 'BTC' in symbol else 0
+    df_1m_features['is_eth'] = 1 if 'ETH' in symbol else 0
+    
+    logger.info(f"✅ Features construidas para {symbol} - shape final: {df_1m_features.shape}")
+    return df_1m_features.dropna()
 
-
-def compute_rsi(df: pd.DataFrame, window: int = int(DEFAULT_FEATURE_CONFIG["rsi_window"])) -> pd.Series:
-    close = df["close"].astype(float)
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=window, min_periods=window).mean()
-    avg_loss = loss.rolling(window=window, min_periods=window).mean()
-    rs = (avg_gain / avg_loss).replace([np.inf, -np.inf], np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(method="bfill").fillna(50.0)
-
-
-def compute_macd(
-    df: pd.DataFrame,
-    fast: int = int(DEFAULT_FEATURE_CONFIG["macd_fast"]),
-    slow: int = int(DEFAULT_FEATURE_CONFIG["macd_slow"]),
-    signal: int = int(DEFAULT_FEATURE_CONFIG["macd_signal"]),
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    close = df["close"].astype(float)
-    ema_fast = close.ewm(span=fast, adjust=False).mean()
-    ema_slow = close.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
-
-
-def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = pd.DataFrame(index=df.index)
-    out["rsi"] = compute_rsi(df)
-    macd, macd_signal, macd_hist = compute_macd(df)
-    out["macd"] = macd
-    out["macd_signal"] = macd_signal
-    out["macd_hist"] = macd_hist
-    return out
-
-
-def compute_adx(df: pd.DataFrame, window: int = int(DEFAULT_FEATURE_CONFIG["adx_window"])) -> pd.Series:
-    """Calcula ADX (Wilder) aproximado. Requiere high/low/close."""
-    if not {"high", "low", "close"}.issubset(df.columns):
-        return pd.Series(index=df.index, dtype=float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
-
-    prev_high = high.shift(1)
-    prev_low = low.shift(1)
-    prev_close = close.shift(1)
-
-    plus_dm = (high - prev_high).clip(lower=0)
-    minus_dm = (prev_low - low).clip(lower=0)
-    plus_dm = plus_dm.where(plus_dm > minus_dm, 0.0)
-    minus_dm = minus_dm.where(minus_dm > (high - prev_high).clip(lower=0), 0.0)
-
-    tr = pd.concat([
-        (high - low),
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-
-    atr = tr.ewm(alpha=1 / window, adjust=False).mean()
-    plus_di = 100 * (plus_dm.ewm(alpha=1 / window, adjust=False).mean() / atr)
-    minus_di = 100 * (minus_dm.ewm(alpha=1 / window, adjust=False).mean() / atr)
-    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di)).replace([np.inf, -np.inf], np.nan)
-    adx = dx.ewm(alpha=1 / window, adjust=False).mean()
-    return adx
-
-
-def compute_stochastic(
-    df: pd.DataFrame,
-    k_window: int = int(DEFAULT_FEATURE_CONFIG["stoch_k_window"]),
-    d_window: int = int(DEFAULT_FEATURE_CONFIG["stoch_d_window"]),
-) -> pd.DataFrame:
-    """Stochastic Oscillator: %K y %D. Requiere high/low/close."""
-    out = pd.DataFrame(index=df.index)
-    if not {"high", "low", "close"}.issubset(df.columns):
-        out["stoch_k"] = np.nan
-        out["stoch_d"] = np.nan
-        return out
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
-    lowest_low = low.rolling(window=k_window, min_periods=k_window).min()
-    highest_high = high.rolling(window=k_window, min_periods=k_window).max()
-    denom = (highest_high - lowest_low).replace(0, np.nan)
-    stoch_k = 100 * (close - lowest_low) / denom
-    stoch_d = stoch_k.rolling(window=d_window, min_periods=d_window).mean()
-    out["stoch_k"] = stoch_k
-    out["stoch_d"] = stoch_d
-    return out
-
-
-def compute_obv(df: pd.DataFrame) -> pd.Series:
-    """On-Balance Volume. Requiere close y volume."""
-    if not {"close", "volume"}.issubset(df.columns):
-        return pd.Series(index=df.index, dtype=float)
-    close = df["close"].astype(float)
-    volume = df["volume"].astype(float)
-    sign = np.sign(close.diff()).fillna(0.0)
-    obv = (sign * volume).cumsum()
-    return obv
-
-
-def compute_bbw(df: pd.DataFrame, window: int = int(DEFAULT_FEATURE_CONFIG["bb_window"]), num_std: float = float(DEFAULT_FEATURE_CONFIG["bb_std"])) -> pd.Series:
-    if "close" not in df.columns:
-        return pd.Series(index=df.index, dtype=float)
-    close = df["close"].astype(float)
-    m = close.rolling(window=window, min_periods=window).mean()
-    s = close.rolling(window=window, min_periods=window).std(ddof=0)
-    upper = m + num_std * s
-    lower = m - num_std * s
-    denom = m.replace(0, np.nan)
-    bbw = (upper - lower) / denom
-    return bbw
-
-
-def compute_atr(df: pd.DataFrame, window: int = int(DEFAULT_FEATURE_CONFIG["atr_window"])) -> pd.Series:
-    if not {"high", "low", "close"}.issubset(df.columns):
-        return pd.Series(index=df.index, dtype=float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        (high - low),
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1 / window, adjust=False).mean()
-    return atr
-
-
-def build_features_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
-    df_1m = ensure_datetime_index(normalize_btc_columns(df_1m.copy()))
-    price = compute_price_features(df_1m)
-    vol = compute_volume_features(df_1m)
-    mom = add_momentum_features(df_1m)
-
-    # Indicadores adicionales
-    adx = compute_adx(df_1m)
-    stoch = compute_stochastic(df_1m)
-    obv = compute_obv(df_1m)
-    bbw = compute_bbw(df_1m)
-    atr = compute_atr(df_1m)
-
-    feat = pd.concat([price, vol, mom, adx.rename("trend_adx"), stoch.rename(columns={"stoch_k": "momentum_stoch", "stoch_d": "momentum_stoch_signal"}), obv.rename("volume_obv"), bbw.rename("volatility_bbw"), atr.rename("volatility_atr")], axis=1)
-
-    # Alias con nombres solicitados
-    sma_fast = int(DEFAULT_FEATURE_CONFIG["sma_windows"][0])
-    sma_slow = int(DEFAULT_FEATURE_CONFIG["sma_windows"][1])
-    ema_fast = int(DEFAULT_FEATURE_CONFIG["ema_windows"][0])
-    ema_slow = int(DEFAULT_FEATURE_CONFIG["ema_windows"][1])
-    if f"sma_{sma_fast}" in feat.columns:
-        feat["trend_sma_fast"] = feat[f"sma_{sma_fast}"]
-    if f"sma_{sma_slow}" in feat.columns:
-        feat["trend_sma_slow"] = feat[f"sma_{sma_slow}"]
-    if f"ema_{ema_fast}" in feat.columns:
-        feat["trend_ema_fast"] = feat[f"ema_{ema_fast}"]
-    if f"ema_{ema_slow}" in feat.columns:
-        feat["trend_ema_slow"] = feat[f"ema_{ema_slow}"]
-    if "macd" in feat.columns:
-        feat["trend_macd"] = feat["macd"]
-    if "rsi" in feat.columns:
-        feat["momentum_rsi"] = feat["rsi"]
-    return feat
-
-
-def resample_to_5m(df_1m: pd.DataFrame) -> pd.DataFrame:
-    df_1m = ensure_datetime_index(df_1m)
-    agg = {c: "last" for c in df_1m.columns}
-    if "volume" in df_1m.columns:
-        agg["volume"] = "sum"
-    df_5m = df_1m.resample("5T").agg(agg)
-    return df_5m.dropna(how="all")
-
-
-def build_features_5m_from_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
-    df_5m_base = resample_to_5m(df_1m)
-    feat_5m = build_features_1m(df_5m_base)
-    feat_5m = feat_5m.add_suffix("_5m")
-    # Volver a 1m vía forward-fill para alinear con timestamps 1m
-    feat_5m_aligned = feat_5m.reindex(df_1m.index, method="ffill")
-    return feat_5m_aligned
-
-
-def build_multitimeframe_features(df_1m: pd.DataFrame, df_5m: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    feat_1m = build_features_1m(df_1m)
-    if df_5m is None:
-        feat_5m = build_features_5m_from_1m(df_1m)
-    else:
-        feat_5m = build_features_1m(ensure_datetime_index(normalize_btc_columns(df_5m.copy()))).add_suffix("_5m")
-        feat_5m = feat_5m.reindex(feat_1m.index, method="ffill")
-    return pd.concat([feat_1m, feat_5m], axis=1)
-
-
-def temporal_train_test_split(df: pd.DataFrame, test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if not 0.0 < test_size < 1.0:
-        raise ValueError("test_size debe estar entre 0 y 1.")
-    df = df.dropna().sort_index()
-    split = int(len(df) * (1 - test_size))
-    train = df.iloc[:split]
-    test = df.iloc[split:]
+def temporal_train_test_split(
+    features: pd.DataFrame, 
+    test_size: float = 0.2
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Divide los datos en train/test temporal."""
+    split_idx = int(len(features) * (1 - test_size))
+    train = features.iloc[:split_idx]
+    test = features.iloc[split_idx:]
+    
+    logger.info(f"📊 Split temporal: Train={len(train)}, Test={len(test)}")
     return train, test
 
-
-def prepare_btc_features(
+def prepare_features(
     df_1m: pd.DataFrame,
     df_5m: Optional[pd.DataFrame] = None,
     test_size: float = 0.2,
+    symbol: str = ""
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Pipeline compacta: normaliza columnas, genera features 1m + 5m y divide train/test.
+    Pipeline completa: normaliza columnas, genera features 1m + 5m y divide train/test.
     """
-    features = build_multitimeframe_features(df_1m=df_1m, df_5m=df_5m)
+    features = build_multitimeframe_features(df_1m=df_1m, df_5m=df_5m, symbol=symbol)
     return temporal_train_test_split(features, test_size=test_size)
 
+class RealTimeDataLoader:
+    """Cargador de datos en tiempo real para todas las capas."""
+    
+    def __init__(self, real_time=True):
+        self.real_time = real_time
+        self.connector = BinanceConnector(testnet=True) if real_time else None
+        self.cache = {}
+    
+    async def get_market_data(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
+        """Obtiene datos de mercado en tiempo real."""
+        try:
+            if self.real_time and self.connector:
+                klines = self.connector.get_klines(symbol, timeframe, limit)
+                if klines:
+                    df = pd.DataFrame(klines, columns=[
+                        "timestamp", "open", "high", "low", "close", "volume",
+                        "close_time", "quote_asset_volume", "trades", "taker_buy_base",
+                        "taker_buy_quote", "ignored"
+                    ])
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df.set_index("timestamp", inplace=True)
+                    numeric_cols = ["open", "high", "low", "close", "volume"]
+                    df[numeric_cols] = df[numeric_cols].astype(float)
+                    return df
+            
+            # Fallback: datos simulados o cached
+            return self._get_cached_data(symbol, timeframe, limit)
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo datos para {symbol}: {e}")
+            return pd.DataFrame()
+    
+    def _get_cached_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """Datos de respaldo para testing."""
+        # Implementar lógica de cache o datos simulados
+        return pd.DataFrame()
+    
+    async def get_features_for_symbol(self, symbol: str, timeframes: list = ["1m", "5m"]) -> pd.DataFrame:
+        """Obtiene features completas para un símbolo."""
+        try:
+            df_1m = await self.get_market_data(symbol, "1m", 100)
+            df_5m = await self.get_market_data(symbol, "5m", 100)
+            
+            if df_1m.empty:
+                logger.warning(f"No hay datos para {symbol}")
+                return pd.DataFrame()
+            
+            features = build_multitimeframe_features(df_1m, df_5m, symbol)
+            return features
+            
+        except Exception as e:
+            logger.error(f"Error generando features para {symbol}: {e}")
+            return pd.DataFrame()

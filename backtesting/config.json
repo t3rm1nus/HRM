@@ -1,0 +1,21 @@
+{
+  "binance": {
+      "api_key": "",
+      "api_secret": "",
+      "testnet": false,
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "intervals": ["1m", "5m", "15m", "1h"]
+  },
+  "testing": {
+      "start_date": "2024-03-01",
+      "end_date": "2024-09-01",
+      "initial_capital": 100000.0,
+      "strategy_name": "FinRL_MultiAsset_Ensemble",
+      "output_dir": "backtesting/results"
+  },
+  "reporting": {
+      "generate_charts": true,
+      "detailed_logs": true,
+      "export_trades": true
+  }
+}

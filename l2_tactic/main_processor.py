@@ -14,7 +14,7 @@ from .position_sizer import PositionSizerManager
 from .technical.multi_timeframe import resample_and_consensus
 from .ensemble import VotingEnsemble, BlenderEnsemble
 from .metrics import L2Metrics
-
+from .models import TacticalSignal, PositionSize
 
 class L2MainProcessor:
     """
@@ -27,116 +27,91 @@ class L2MainProcessor:
     """
 
     def __init__(self, config, bus=None) -> None:
-        self.config  = config
-        self.bus     = bus
+        self.config = config
+        self.bus = bus
         self.generator = L2TacticProcessor(config)
-        self.composer  = SignalComposer(config)
-        self.sizer     = PositionSizerManager(config)
-        self.metrics   = L2Metrics()
+        self.composer = SignalComposer(config)
+        self.sizer = PositionSizerManager(config)
+        self.metrics = L2Metrics()
 
         # --- ENSAMBLE ---
         mode = getattr(config, "ensemble_mode", "blender")
         self.use_voting = (mode == "voting")
 
         if self.use_voting:
-            method   = getattr(config, "voting_method",   "hard")
-            threshold = getattr(config, "voting_threshold", 0.5)
-            self.ensemble = VotingEnsemble(method=method, threshold=threshold)
-            logger.info("[L2MainProcessor] Usando VotingEnsemble")
-        else:
-            weights = getattr(
-                config,
-                "blender_weights",
-                {"ai": 0.6, "technical": 0.3, "risk": 0.1}
+            self.ensemble = VotingEnsemble(
+                weights=getattr(config, "voting_weights", {}),
+                default=getattr(config, "voting_default_weight", 0.0),
+                threshold=getattr(config, "voting_threshold", 0.5)
             )
-            self.ensemble = BlenderEnsemble(weights=weights)
-            logger.info("[L2MainProcessor] Usando BlenderEnsemble")
+        else:
+            self.ensemble = BlenderEnsemble(
+                weights=getattr(config, "blender_weights", {}),
+                default=getattr(config, "blender_default_weight", 0.0)
+            )
 
     # ------------------------------------------------------------------ #
-    async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def process(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Procesa un ciclo completo de L2.
-        Devuelve un state actualizado con la clave 'ordenes'.
+        Flujo de procesamiento principal:
+        Generar -> Componer -> Ensamble -> Sizing -> Órdenes
         """
-        logger.info("[L2] Ejecutando capa Tactic...")
+        logger.info(f"[L2] Ejecutando capa Tactic...")
+        signals = await self._generate_signals(state)
+        logger.info(f"Generated {len(signals)} signals (AI=1, Tech=1, Risk=0)")
+        
+        # 2. Componer señales
+        composed_signals = self.composer.compose(signals)
 
-        # 1) Generar señales crudas
-        raw_signals = await self._generate_signals(state)
-        logger.debug(f"[L2] Señales crudas: {len(raw_signals)}")
+        # 3. Ensamblar
+        combined = self.ensemble.blend(composed_signals)
+        
+        # 4. Convertir a órdenes
+        orders = []
+        if combined:
+            ps = await self.sizer.calculate_position_size(
+                signal=combined,
+                portfolio_state=state['portfolio'],
+                market_features=state['mercado']
+            )
 
-        # 2) Combinar con ensemble
-        combined = self._combine(raw_signals)
-        if not combined:
-            logger.warning("[L2] Sin señal tras ensemble")
-            state["ordenes"] = []
-            return state
+            if ps and ps.size > 0:
+                orders.append(self._create_order_dict(ps))
 
-        # 3) Convertir señal a órdenes con SL
-        orders = self._signal_to_orders(combined, state)
         logger.info(f"[L2] Prepared {len(orders)} orders for L1 (all with SL)")
-        state["ordenes"] = orders
-        return state
+        return orders
 
     # ------------------------------------------------------------------ #
-    async def _generate_signals(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _generate_signals(self, state: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Llama al generador para que produzca señales.
-        Cada señal debe llevar 'symbol', 'side', 'prob', 'source'.
+        Delega la generación de señales a las fuentes (AI, Technical).
         """
-        signals = []
-
-        # -- AI (PPO) --
+        # Generar señales de AI, técnicas y de riesgo de forma independiente.
         ai_signals = await self.generator.ai_signals(state)
-        for sig in ai_signals:
-            sig["source"] = "ai"
-            signals.append(sig)
-
-        # -- Técnico --
         tech_signals = await self.generator.technical_signals(state)
-        for sig in tech_signals:
-            sig["source"] = "technical"
-            signals.append(sig)
-
-        # -- Risk overlay --
-        risk_signals = await self.generator.risk_overlay(state)
-        for sig in risk_signals:
-            sig["source"] = "risk"
-            signals.append(sig)
-
-        return signals
+        
+        # El ERROR está aquí. risk_overlay necesita mercado y portafolio por separado.
+        risk_signals = await self.generator.risk_overlay(state['mercado'], state['portfolio'])
+        
+        all_signals = [s for s in ai_signals] + [s for s in tech_signals] + [s for s in risk_signals]
+        
+        return all_signals
 
     # ------------------------------------------------------------------ #
-    def _combine(self, signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _create_order_dict(self, ps: PositionSize) -> Dict[str, Any]:
         """
-        Delega en el ensamble elegido.
+        Crea el diccionario de orden a partir de un objeto PositionSize.
         """
-        if self.use_voting:
-            return self.ensemble.vote(signals)
-        return self.ensemble.blend(signals)
-
-    # ------------------------------------------------------------------ #
-    def _signal_to_orders(self,
-                          signal: Dict[str, Any],
-                          state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Convierte la señal consensuada en lista de órdenes con SL.
-        """
-        symbol = signal["symbol"]
-        side = signal["side"]
-        size = self.sizer.calculate_position(signal, state)
-
-        base_order = {
-            "symbol": symbol,
+        return {
+            "symbol": ps.symbol,
             "type": "market",
-            "side": side,
-            "amount": size,
-            "params": {"sl": self._default_sl(symbol, state)}
+            "side": ps.side,
+            "amount": ps.size,
+            "params": {
+                "sl": ps.stop_loss,
+                "tp": ps.take_profit,
+                "notional": ps.notional,
+                "leverage": ps.leverage,
+                "risk_amount": ps.risk_amount
+            }
         }
-        return [base_order]
-
-    # ------------------------------------------------------------------ #
-    def _default_sl(self, symbol: str, state: Dict[str, Any]) -> float:
-        """
-        SL fijo o dinámico (ejemplo simple: 2 %).
-        """
-        return state["mercado"][symbol]["close"] * 0.98

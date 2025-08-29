@@ -1,3 +1,4 @@
+# l2_tactic/ensemble/blender.py
 """
 BlenderEnsemble
 Combina señales mediante pesos configurables
@@ -7,7 +8,7 @@ Combina señales mediante pesos configurables
 from typing import List, Dict, Any
 import numpy as np
 from core.logging import logger
-
+from ..models import TacticalSignal
 
 class BlenderEnsemble:
     """
@@ -30,41 +31,52 @@ class BlenderEnsemble:
 
     # ------------------------------------------------------------------ #
     def blend(self,
-              signals: List[Dict[str, Any]]
-              ) -> Dict[str, Any]:
+              signals: List[TacticalSignal]
+              ) -> TacticalSignal:
         """
         Entrada:
             signals = [
-                {"symbol": "BTC/USDT", "side": "buy", "prob": 0.9,
-                 "source": "model_ppo"},
-                {"symbol": "BTC/USDT", "side": "buy", "prob": 0.6,
-                 "source": "rsi"},
+                TacticalSignal(symbol="BTC/USDT", side="buy", ...),
+                TacticalSignal(symbol="BTC/USDT", side="buy", ...),
                 ...
             ]
         Salida:
-            dict con la señal final y su score.
+            Objeto TacticalSignal con la señal final y su score compuesto.
         """
         if not signals:
             logger.warning("[BlenderEnsemble] Lista vacía")
-            return {}
+            return None
 
         grouped = {}
+        winning_signal = None  # Almacenar la señal ganadora para tomar su precio
+
         for sig in signals:
-            key = (sig["symbol"], sig["side"])
-            weight = self.weights.get(sig.get("source", ""), self.default)
-            grouped.setdefault(key, 0.0)
-            grouped[key] += sig.get("prob", 1.0) * weight
+            key = (sig.symbol, sig.side)
+            weight = self.weights.get(sig.source, self.default)
+            grouped.setdefault(key, {"score": 0.0, "signal": sig})
+            
+            composite_score = sig.strength * sig.confidence
+            grouped[key]["score"] += composite_score * weight
+            
+            # Si el score actual es el mejor, guardar esta señal como candidata
+            if grouped[key]["score"] > grouped.get("best_score", -1):
+                grouped["best_score"] = grouped[key]["score"]
+                winning_signal = sig
 
-        if not grouped:
-            return {}
-
-        (symbol, side), score = max(grouped.items(), key=lambda x: x[1])
-        logger.debug(
-            f"[BlenderEnsemble] blended winner={symbol} {side} (score={score:.2f})"
+        if not winning_signal:
+            return None
+        
+        # Usar el símbolo, lado y precio de la señal ganadora
+        final_signal = TacticalSignal(
+            symbol=winning_signal.symbol,
+            side=winning_signal.side,
+            source="ensemble_blender",
+            confidence=grouped["best_score"],
+            strength=grouped["best_score"],
+            price=winning_signal.price, # <--- AQUI: Usar el precio de la señal ganadora
         )
-        return {
-            "symbol": symbol,
-            "side": side,
-            "score": score,
-            "origin": "blender",
-        }
+
+        logger.debug(
+            f"[BlenderEnsemble] blended winner={final_signal}"
+        )
+        return final_signal

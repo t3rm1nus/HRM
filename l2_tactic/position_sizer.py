@@ -28,7 +28,7 @@ class PositionSizerManager:
       2) Vol targeting (ajuste por volatilidad objetivo)
       3) Ajuste por liquidez (cap por % de ADV/turnover)
       4) Límite por riesgo de la operación y límites absolutos
-      5) Si hay SL → sizing ajustado a pérdida máxima tolerada
+      5) Si hay SL -> sizing ajustado a pérdida máxima tolerada
     """
 
     def compute_position_size(self, *args, **kwargs):
@@ -38,11 +38,11 @@ class PositionSizerManager:
         self.cfg = config
 
         # Kelly
-        self.kelly_cap = getattr(config, "kelly_cap", 0.25)                # Kelly máximo permitido
-        self.kelly_fraction = getattr(config, "kelly_fraction", 0.5)       # fracción de Kelly a aplicar
+        self.kelly_cap = getattr(config, "kelly_cap", 0.25)
+        self.kelly_fraction = getattr(config, "kelly_fraction", 0.5)
 
         # Vol targeting
-        self.vol_target = getattr(config, "vol_target", 0.20)              # vol objetivo
+        self.vol_target = getattr(config, "vol_target", 0.20)
 
         # Liquidez
         self.max_notional_pct_of_adv = getattr(config, "max_notional_pct_of_adv", 0.02)
@@ -51,7 +51,7 @@ class PositionSizerManager:
         # Límites absolutos
         self.min_position_notional = getattr(config, "min_position_notional", 100.0)
         self.max_position_notional = getattr(config, "max_position_notional", 1_000_000.0)
-        self.max_risk_per_trade = getattr(config, "max_risk_per_trade", 0.01)  # % del capital total
+        self.max_risk_per_trade = getattr(config, "max_risk_per_trade", 0.01)
 
     # ---------- Kelly ----------
 
@@ -84,17 +84,17 @@ class PositionSizerManager:
 
     # ---------- Liquidez ----------
 
-    def _cap_by_liquidity(self, desired_notional: float, features: MarketFeatures) -> float:
-        adv = getattr(features, "adv_notional", None) or getattr(features, "liquidity", None)
+    def _cap_by_liquidity(self, desired_notional: float, features: Dict[str, Any]) -> float:
+        adv = features.get("adv_notional") or features.get("liquidity")
         if adv and adv > 0:
             cap = float(self.max_notional_pct_of_adv) * float(adv)
             if desired_notional > cap:
                 logger.info(f"Liquidity cap applied: desired={desired_notional:.2f}, cap={cap:.2f}")
             return min(desired_notional, cap)
 
-        if getattr(features, "volume", None) and getattr(features, "price", None):
+        if features.get("volume") and features.get("price"):
             try:
-                proxy_adv = float(features.volume) * float(features.price)
+                proxy_adv = float(features["volume"]) * float(features["price"])
                 cap = float(self.max_notional_pct_of_adv) * proxy_adv
                 return min(desired_notional, cap)
             except Exception:
@@ -111,8 +111,8 @@ class PositionSizerManager:
     async def calculate_position_size(
         self,
         signal: TacticalSignal,
-        market_features: MarketFeatures,
-        portfolio_state: Dict
+        market_features: Dict[str, Any],
+        portfolio_state: Dict[str, Any]
     ) -> Optional[PositionSize]:
         total_capital = float(portfolio_state.get("total_capital", 0.0) or 0.0)
         available_capital = float(portfolio_state.get("available_capital", total_capital))
@@ -130,14 +130,14 @@ class PositionSizerManager:
         risk_fraction = min(f_kelly, risk_pct_cap)
 
         # 3) Vol targeting
-        realized_vol = market_features.volatility or self.vol_target
+        realized_vol = market_features.get(signal.symbol, {}).get('volatility', self.vol_target)
         vol_leverage = self._leverage_for_vol_target(realized_vol)
 
         # 4) Notional inicial
         base_notional = total_capital * risk_fraction * 10.0
         notional = base_notional * vol_leverage
 
-        # 5) Si hay stop_loss definido → recalcular tamaño en base al riesgo real
+        # 5) Si hay stop_loss definido -> recalcular tamaño en base al riesgo real
         stop_loss = signal.stop_loss
         if stop_loss and stop_loss > 0:
             stop_distance = abs(signal.price - stop_loss)
@@ -150,7 +150,7 @@ class PositionSizerManager:
                 notional = min(notional, notional_sl_based)
 
         # 6) Liquidez
-        notional = self._cap_by_liquidity(notional, market_features)
+        notional = self._cap_by_liquidity(notional, market_features.get(signal.symbol, {}))
 
         # 7) Límites absolutos + disponibilidad de capital
         notional = _bounded(
@@ -195,8 +195,8 @@ class PositionSizerManager:
                 "available_capital": available_capital,
                 "realized_vol": realized_vol,
                 "liquidity_cap_pct_of_adv": self.max_notional_pct_of_adv,
-                "adv_notional": getattr(market_features, "adv_notional", None)
-                    or getattr(market_features, "liquidity", None),
+                "adv_notional": market_features.get(signal.symbol, {}).get("adv_notional")
+                    or market_features.get(signal.symbol, {}).get("liquidity"),
                 "sizing_method": "SL_based" if stop_loss else "heuristic",
             },
         )

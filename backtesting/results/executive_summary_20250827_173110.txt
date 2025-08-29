@@ -1,0 +1,55 @@
+================================================================================
+HRM BACKTESTING - RESUMEN EJECUTIVO
+================================================================================
+Fecha: 2025-08-27 17:31:10
+
+📊 MÉTRICAS CLAVE:
+----------------------------------------
+Retorno Total: 74.50%
+Retorno Anualizado: 0.00%
+Sharpe Ratio: 0.000
+Drawdown Máximo: 0.00%
+Win Rate: 100.00%
+Profit Factor: inf
+Total Trades: 40
+
+🤖 MODELOS L1 (OPERACIONALES):
+----------------------------------------
+LOGISTICREGRESSION:
+  • Accuracy: 85.00%
+  • Precision: 0.800
+  • F1-Score: 0.820
+  • Contribución Profit: $1000.00
+  • Latencia Promedio: 50.0ms
+
+RANDOMFOREST:
+  • Accuracy: 85.00%
+  • Precision: 0.800
+  • F1-Score: 0.820
+  • Contribución Profit: $1000.00
+  • Latencia Promedio: 50.0ms
+
+LIGHTGBM:
+  • Accuracy: 85.00%
+  • Precision: 0.800
+  • F1-Score: 0.820
+  • Contribución Profit: $1000.00
+  • Latencia Promedio: 50.0ms
+
+🎯 MODELO L2 (TÁCTICO):
+----------------------------------------
+Signal Quality: 0.750
+Sizing Efficiency: 0.800
+Risk Effectiveness: 0.000
+Hit Rate: 65.00%
+Risk-Adjusted Return: $0.05
+
+🧠 MODELOS L3 (ESTRATÉGICOS):
+----------------------------------------
+STRATEGIC:
+  • Decision Accuracy: 90.00%
+  • Regime Detection: 85.00%
+  • Strategic Value: 0.950
+  • Allocation Efficiency: 0.880
+
+================================================================================
