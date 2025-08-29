@@ -1,282 +1,256 @@
-# 🎯 L3_Strategic - Plan Simplificado con 3 Modelos IA Ligeros
+# 📁 L1_Operational - Nivel de Ejecución de Órdenes (Actualizado)
 
-## 📊 Análisis del Plan Original
+## 🎯 Objetivo
 
-### Problemas Identificados:
-- **Exceso de complejidad**: 16+ modelos IA especializados
-- **Overhead computacional**: Múltiples ensembles y coordinación compleja
-- **Mantenimiento**: Demasiados modelos para entrenar/validar
-- **Latencia**: Procesamiento secuencial de muchos modelos
-
-### Objetivo Simplificado:
-Mantener las **3 decisiones core** de L3 con **máximo 3 modelos ligeros** que cubran las funcionalidades esenciales.
+L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA multiasset y reglas hard-coded para garantizar que solo se ejecuten órdenes seguras. Recibe señales consolidadas de L2/L3 y las ejecuta de forma determinista, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución para múltiples activos (BTC, ETH).
 
 ---
 
-## 🎯 Estructura Simplificada con 3 Modelos IA
+## 🚫 Lo que L1 NO hace
 
-```
-l3_strategic/
-├── 📄 __init__.py
-├── 📄 README.md  
-├── 📄 models.py                    # Estructuras de datos L3
-├── 📄 config.py                    # Configuración estratégica simplificada
-├── 📄 strategic_processor.py       # Procesador principal L3
-├── 📄 bus_integration.py           # Comunicación L4 ↔ L3 ↔ L2
-├── 📄 performance_tracker.py       # Tracking performance estratégico
-├── 📄 metrics.py                   # Métricas L3
-├── 📄 procesar_l3.py              # Entry-point local para pruebas
-├── 📄 ai_model_loader.py          # Cargador de los 3 modelos IA
-└── 📁 ai_models/                   # Solo 3 modelos ligeros
-    ├── 📄 __init__.py
-    ├── 📄 unified_decision_model.py # Modelo 1: Decisiones estratégicas unificadas
-    ├── 📄 regime_detector.py       # Modelo 2: Detección de régimen de mercado  
-    └── 📄 risk_assessor.py         # Modelo 3: Evaluación de riesgo integrada
-```
+❌ **No decide estrategias de trading**  
+❌ **No ajusta precios de señales estratégicas**  
+❌ **No toma decisiones tácticas fuera de seguridad y ejecución**  
+❌ **No actualiza portafolio completo (responsabilidad de L2/L3)**  
+❌ **No recolecta ni procesa datos de mercado (responsabilidad de L2/L3)**
 
 ---
 
-## 🤖 Los 3 Modelos IA Ligeros
+## ✅ Lo que L1 SÍ hace
 
-### Modelo 1: **Unified Decision Model** (Random Forest ligero)
-**Objetivo**: Decisión estratégica principal unificada
-```python
-# Entrada: Market features + L4 context
-# Salida: Strategic decision integrada
+| ✅ Funcionalidad              | Descripción                                                                 |
+|------------------------------|-----------------------------------------------------------------------------|
+| **Hard-coded Safety Layer**  | Bloquea operaciones peligrosas, aplica stop-loss obligatorio y chequeos de liquidez/saldo |
+| **Multiasset Trend AI**      | Evalúa probabilidad de movimientos para BTC y ETH, filtra señales de baja confianza |
+| **Execution Logic**          | Optimiza fraccionamiento de órdenes, timing y reduce slippage por símbolo |
+| **Risk Rules**               | Ajusta tamaño de trade y stops según reglas hard-coded basadas en volatilidad y exposición por activo |
+| **Ejecución determinista**   | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal |
+| **Reportes multiasset**      | Genera reportes detallados de todas las órdenes ejecutadas por símbolo |
+| **Gestión de errores**       | Maneja errores de ejecución de forma robusta |
+
+---
+
+## 🗂️ Arquitectura Actualizada
+
+```
+L2/L3 (Señales BTC/ETH)
+          ↓
+    Bus Adapter
+          ↓
+  Order Manager
+          ↓
+[Hard-coded Safety Layer]
+          ↓
+[Modelo 1: LogReg] → Feature 1 (BTC/ETH)
+          ↓
+[Modelo 2: Random Forest] → Feature 2 (BTC/ETH)
+          ↓
+[Modelo 3: LightGBM] → Feature 3 (BTC/ETH)
+          ↓
+[Decision Layer: Trend AI + Risk Rules + Execution Logic]
+          ↓
+   Executor → Exchange
+          ↓
+Execution Report → Bus Adapter → L2/L3
+```
+
+### 🔧 Componentes Principales
+
+- **models.py** - Estructuras de datos (Signal, ExecutionReport, RiskAlert, OrderIntent)
+- **bus_adapter.py** - Interfaz asíncrona con el bus de mensajes del sistema (tópicos: signals, reports, alerts)
+- **order_manager.py** - Orquesta el flujo de ejecución y validaciones IA/hard-coded multiasset
+- **risk_guard.py** - Valida límites de riesgo y exposición por símbolo
+- **executor.py** - Ejecuta órdenes en el exchange
+- **config.py** - Configuración centralizada de límites y parámetros por activo
+
+### 🤖 Modelos IA (desde raíz/models/L1):
+- modelo1_lr.pkl - Logistic Regression (BTC/ETH)
+- modelo2_rf.pkl - Random Forest (BTC/ETH)
+- modelo3_lgbm.pkl - LightGBM (BTC/ETH)
+
+---
+
+## 🔑 Validaciones de Riesgo (Multiasset)
+
+### 📋 Por Operación
+- Stop-loss obligatorio (coherente con side y price)
+- Tamaño mínimo/máximo por orden (USDT) y por símbolo específico
+- Límites por símbolo (BTC: 0.05 BTC max, ETH: 1.0 ETH max)
+- Validación de parámetros básicos
+
+### 📊 Por Portafolio
+- Exposición máxima por activo: BTC (20%), ETH (15%)
+- Drawdown diario máximo por símbolo
+- Saldo mínimo requerido por par (BTC/USDT, ETH/USDT)
+- Correlación BTC-ETH: Límites de exposición cruzada (calculados en L2/L3, aplicados en L1)
+
+### ⚡ Por Ejecución
+- Validación de saldo disponible por base asset
+- Verificación de conexión al exchange (pendiente en modo LIVE)
+- Timeout de órdenes y reintentos exponenciales
+- Slippage protection por símbolo (simulado en modo PAPER)
+
+---
+
+## 📊 Flujo de Ejecución (Determinista Multiasset)
+
+1. Recepción de Señal desde L2/L3 vía bus (BTC/USDT o ETH/USDT)
+2. Validación Hard-coded por símbolo (stop-loss, tamaño, liquidez/saldo, exposición, drawdown)
+3. Filtros IA multiasset:
+   - LogReg: Probabilidad de tendencia (threshold específico por símbolo)
+   - Random Forest: Confirmación robusta
+   - LightGBM: Decisión final con regularización
+4. Ejecución determinista (1 intento por señal)
+5. Reporte enviado a L2/L3 con métricas por símbolo
+
+---
+
+## 🎭 Modo de Operación
+
+- **PAPER**: Simulación sin ejecución real (por defecto) - soporta BTC/ETH
+- **LIVE**: Ejecución real en el exchange - binance BTC/USDT, ETH/USDT (pendiente de implementación)
+- **REPLAY**: Reproducción de datos históricos - soporte mediante datasets multiasset, requiere configuración adicional
+
+---
+
+## 📝 Logging Multiasset
+
+- Nivel INFO para operaciones normales con etiqueta [BTC] o [ETH]
+- Nivel WARNING para rechazos de órdenes por símbolo específico
+- Nivel ERROR para fallos de ejecución con contexto de asset
+- Logs incluyen contexto completo por símbolo y correlaciones
+
+---
+
+## 🤖 Entrenamiento de Modelos Multiasset
+
+```bash
+# Modelo 1: Logistic Regression (BTC + ETH)
+python ml_training/modelo1_train_lr.py
+
+# Modelo 2: Random Forest (BTC + ETH)  
+python ml_training/modelo2_train_rf.py
+
+# Modelo 3: LightGBM (BTC + ETH)
+python ml_training/modelo3_train_lgbm.py
+```
+
+**Salida por modelo:**
+- models/L1/modelo1_lr.pkl - Modelo entrenado (Logistic Regression)
+- models/L1/modelo2_rf.pkl - Modelo entrenado (Random Forest)
+- models/L1/modelo3_lgbm.pkl - Modelo entrenado (LightGBM)
+- Threshold óptimo separado para BTC y ETH
+- Feature importance con correlaciones cruzadas
+
+---
+
+## 🧠 Sistema IA Jerárquico (Multiasset)
+
+**Flujo de Decisión:**
+1. Hard-coded Safety: Validaciones básicas por símbolo
+2. LogReg: Filtro rápido de tendencia (BTC/ETH específico)  
+3. Random Forest: Confirmación con ensemble robusto
+4. LightGBM: Decisión final con regularización avanzada
+5. Decision Layer: Combinación ponderada de los 3 modelos
+
+**Features Multiasset:**
+- Por símbolo: RSI, MACD, Bollinger, volumen, etc.
+- Cruzadas: ETH/BTC ratio, correlación rolling, divergencias
+- Encoding: is_btc, is_eth para diferenciación
+- Temporales: Features específicas por timeframe de cada asset
+
+---
+
+## 📊 Dashboard de Métricas (Multiasset)
+
+**Ejemplo de métricas consolidadas generadas por L1:**
+
+```
+🎯 L1 OPERATIONAL DASHBOARD
+├── BTC/USDT
+│   ├── Señales procesadas: 45 ✅ | 3 ❌
+│   ├── Success rate: 93.8%
+│   ├── Slippage promedio: 0.12%
+│   └── Exposición actual: 18.5% / 20% max
+├── ETH/USDT  
+│   ├── Señales procesadas: 32 ✅ | 2 ❌
+│   ├── Success rate: 94.1%
+│   ├── Slippage promedio: 0.15%
+│   └── Exposición actual: 12.3% / 15% max
+└── Correlación BTC-ETH: 0.73 (límite: 0.80)
+```
+
+> Nota: El dashboard representa métricas calculadas internamente; la visualización es manejada por componentes externos.
+
+---
+
+## 🔄 Integración con Capas Superiores
+
+**L2/L3 → L1 (Input esperado):**
+```json
 {
-    "allocation": {"BTC": 0.65, "ETH": 0.35},
-    "target_exposure": 0.75,
-    "strategy_mode": "aggressive_trend",
-    "confidence": 0.82
+  "signal_id": "btc_signal_123",
+  "symbol": "BTC/USDT",        // O "ETH/USDT"
+  "side": "buy",
+  "qty": 0.01,                 // Respetando límites por símbolo
+  "stop_loss": 49000.0,
+  "strategy_context": {
+    "regime": "bull_market",
+    "correlation_btc_eth": 0.65
+  }
 }
 ```
-**Arquitectura**: Random Forest con 50 árboles máximo
-**Features**: ~15 features clave (precios, volatilidad, momentum, correlación)
-**Training**: Datos históricos de decisiones óptimas por régimen
 
-### Modelo 2: **Regime Detector** (Gaussian Mixture Model)
-**Objetivo**: Clasificación de régimen de mercado
-```python
-# Entrada: Multi-timeframe market features
-# Salida: Régimen actual + probabilidades
+**L1 → L2/L3 (Output generado):**
+```json
 {
-    "regime": "bull_trend",  # bull_trend, bear_trend, sideways, volatile
-    "probabilities": {
-        "bull_trend": 0.72,
-        "bear_trend": 0.15,
-        "sideways": 0.08,
-        "volatile": 0.05
-    },
-    "confidence": 0.72
-}
-```
-**Arquitectura**: GMM con 4 componentes (regímenes)
-**Features**: ~10 features (volatilidad rolling, momentum, volumen relativo)
-**Training**: Clustering no supervisado + validación histórica
-
-### Modelo 3: **Risk Assessor** (Logistic Regression)
-**Objetivo**: Evaluación integrada de riesgo
-```python
-# Entrada: Portfolio state + market conditions + regime
-# Salida: Risk assessment completo
-{
-    "risk_level": "moderate",  # low, moderate, high, extreme
-    "risk_score": 0.34,       # 0-1 normalized
-    "max_position_size": 0.08,
-    "stop_loss_level": 0.05,
-    "correlation_warning": false
-}
-```
-**Arquitectura**: Logistic Regression con regularización L2
-**Features**: ~8 features (exposición, drawdown, correlación, volatilidad)
-**Training**: Clasificación supervisada de niveles de riesgo históricos
-
----
-
-## 🏗️ Arquitectura de Integración
-
-```
-L4 Context + Market Data
-         ↓
-┌─────────────────────────────────────────┐
-│          L3 Strategic Processor         │
-│                                         │
-│  ┌──────────────┐  ┌─────────────────┐  │
-│  │ Regime       │  │ Unified         │  │
-│  │ Detector     │→ │ Decision Model  │  │
-│  │ (GMM)        │  │ (RandomForest)  │  │
-│  └──────────────┘  └─────────────────┘  │
-│         │                    ↓          │
-│         │           ┌─────────────────┐  │
-│         └─────────→ │ Risk Assessor   │  │
-│                     │ (LogRegression) │  │
-│                     └─────────────────┘  │
-│                              ↓          │
-│                    Strategic Decision   │
-└─────────────────────────────────────────┘
-         ↓
-    L2 Tactical Signals
-```
-
----
-
-## 📋 Flujo de Procesamiento Simplificado
-
-```python
-def process_strategic_decision(market_data, l4_context):
-    """
-    Flujo simplificado de 3 pasos con 3 modelos IA
-    """
-    
-    # 1️⃣ REGIME DETECTION (GMM)
-    regime_result = regime_detector.predict(market_features)
-    # → Output: regime type + confidence
-    
-    # 2️⃣ UNIFIED DECISION (Random Forest) 
-    decision_features = combine_features(market_data, regime_result, l4_context)
-    strategic_decision = unified_model.predict(decision_features)
-    # → Output: allocation + exposure + strategy_mode
-    
-    # 3️⃣ RISK ASSESSMENT (Logistic Regression)
-    risk_features = combine_risk_features(strategic_decision, market_data, regime_result)
-    risk_assessment = risk_assessor.predict(risk_features)
-    # → Output: risk adjustments + position limits
-    
-    # 4️⃣ COMBINE & VALIDATE
-    final_decision = combine_with_risk_limits(strategic_decision, risk_assessment)
-    
-    return final_decision
-```
-
----
-
-## ⚙️ Configuración Simplificada
-
-```python
-# AI Models Configuration
-AI_CONFIG = {
-    "models_path": "../../models/L3",
-    "enable_ai": True,
-    "fallback_to_traditional": True,
-    
-    # Solo 3 modelos
-    "models": {
-        "unified_decision": {
-            "type": "RandomForest",
-            "max_depth": 10,
-            "n_estimators": 50,
-            "confidence_threshold": 0.6
-        },
-        "regime_detector": {
-            "type": "GaussianMixture", 
-            "n_components": 4,
-            "confidence_threshold": 0.5
-        },
-        "risk_assessor": {
-            "type": "LogisticRegression",
-            "C": 1.0,
-            "confidence_threshold": 0.7
-        }
-    },
-    
-    # Pesos para decisión final
-    "decision_weights": {
-        "unified_decision": 0.6,
-        "regime_context": 0.25, 
-        "risk_adjustment": 0.15
-    }
+  "execution_id": "exec_456", 
+  "signal_id": "btc_signal_123",
+  "symbol": "BTC/USDT",
+  "status": "filled",
+  "executed_qty": 0.01,
+  "avg_price": 50125.30,
+  "slippage": 0.11,
+  "ai_scores": {
+    "logreg": 0.745,
+    "random_forest": 0.821, 
+    "lightgbm": 0.798
+  },
+  "risk_metrics": {
+    "portfolio_exposure_btc": 0.185,
+    "correlation_impact": 0.023
+  }
 }
 ```
 
 ---
 
-## 📁 Estructura de Modelos Simplificada
+## ✨ Novedades de la Versión Multiasset
 
-```
-HRM/models/L3/                       # Carpeta modelos L3
-├── 📄 unified_decision_model.pkl   # Random Forest - Decisiones unificadas
-├── 📄 regime_detector_model.pkl    # GMM - Detección de régimen
-├── 📄 risk_assessor_model.pkl      # LogReg - Evaluación de riesgo
-└── 📄 feature_scaler.pkl           # Scaler único para todos los modelos
-```
+### 🆕 Nuevas características:
+- ✅ Soporte nativo BTC + ETH en todos los componentes
+- ✅ 3 modelos IA entrenados con features cruzadas
+- ✅ Thresholds optimizados por F1-score específicos por símbolo  
+- ✅ Gestión de riesgo avanzada con límites de exposición
+- ✅ Métricas granulares por activo y globales
+- ✅ Configuración flexible para añadir más assets (e.g., ADA en config)
 
----
+### 🔧 Componentes actualizados:
+- order_manager.py → Flujo multiasset con 3 IA
+- risk_guard.py → Límites específicos por símbolo
+- config.py → Configuración granular BTC/ETH
+- ai_models/ → Modelos entrenados listos para producción
 
-## 🔄 Beneficios de la Simplificación
-
-### ✅ Ventajas:
-- **Menor complejidad**: 3 modelos vs 16+ originales
-- **Menor latencia**: Procesamiento más rápido y eficiente
-- **Fácil mantenimiento**: Entrenar/validar solo 3 modelos
-- **Menor overhead**: Menos memoria y procesamiento
-- **Mayor robustez**: Menos puntos de fallo
-- **Interpretabilidad**: Cada modelo tiene rol claro y específico
-
-### ⚡ Performance Esperado:
-- **Latencia**: <30ms por decisión estratégica
-- **Memory**: <100MB para todos los modelos cargados
-- **Accuracy**: 70-80% en decisiones estratégicas (vs 85-90% del plan complejo)
-- **Throughput**: >200 decisiones/segundo
+### 📈 Rendimiento esperado:
+- BTC: Accuracy ~66%, F1 ~64%, AUC ~72%
+- ETH: Accuracy ~65%, F1 ~61%, AUC ~70%  
+- Latencia: <50ms por señal (incluyendo 3 modelos IA)
+- Throughput: >100 señales/segundo
 
 ---
 
-## 🧪 Strategy de Entrenamiento
+## 🎉 Conclusión
 
-```python
-# 1. Unified Decision Model (Random Forest)
-# Target: Decisiones estratégicas óptimas históricas
-# Features: market + regime + l4_context
-# Supervisado: Classification/Regression híbrido
+L1 está ahora completamente preparado para operar con múltiples activos, combinando la robustez de reglas deterministas con la inteligencia de 3 modelos IA especializados en BTC y ETH. El sistema garantiza ejecución segura, eficiente y optimizada para cada símbolo mientras mantiene control de riesgo a nivel de portafolio.
 
-# 2. Regime Detector (GMM)  
-# Target: Clustering automático de condiciones de mercado
-# Features: volatilidad, momentum, volumen
-# No supervisado: Clustering + validación posterior
-
-# 3. Risk Assessor (Logistic Regression)
-# Target: Niveles de riesgo históricos
-# Features: portfolio + market + regime
-# Supervisado: Classification (low/moderate/high/extreme)
-```
-
----
-
-## 📊 Fallback Strategy
-
-```python
-def process_with_fallback(market_data, l4_context):
-    """
-    Strategy de fallback si algún modelo IA falla
-    """
-    try:
-        # Intentar procesamiento IA completo
-        return process_strategic_decision_ai(market_data, l4_context)
-        
-    except AIModelError as e:
-        logger.warning(f"AI model failed: {e}, using hybrid approach")
-        
-        # Fallback híbrido: 1 modelo IA + reglas tradicionales
-        regime = detect_regime_traditional(market_data)  # Reglas básicas
-        decision = unified_model.predict_if_available(market_data, regime)
-        risk = assess_risk_traditional(decision, market_data)
-        
-        return combine_hybrid_decision(decision, risk, confidence=0.5)
-        
-    except Exception as e:
-        logger.error(f"Full fallback to traditional: {e}")
-        
-        # Fallback completo: Solo reglas tradicionales
-        return process_strategic_decision_traditional(market_data, l4_context)
-```
-
----
-
-## 🎯 Conclusión
-
-Este plan simplificado mantiene las capacidades core de L3_Strategic con **solo 3 modelos IA ligeros**:
-
-1. **Unified Decision Model**: Toma la decisión estratégica principal
-2. **Regime Detector**: Proporciona contexto de mercado 
-3. **Risk Assessor**: Aplica ajustes de riesgo
-
-La arquitectura es **más simple, más rápida y más mantenible** mientras conserva el 80% de la funcionalidad del plan original con 20% de la complejidad.
+**¿Listo para el trading multiasset inteligente? 🚀**
