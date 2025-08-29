@@ -155,13 +155,7 @@ HRM/
 │   ├── portfolio_allocator.py
 │   └── __init__.py
 │
-├── l3_strategy/               
-│   ├── regime_classifier.py
-│   ├── universe_filter.py
-│   ├── exposure_manager.py
-│   └── __init__.py
-│
-├── l3_strategic/              
+├── l3_strategy/              
 │   ├── __init__.py
 │   ├── README.md  
 │   ├── models.py
