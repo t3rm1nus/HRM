@@ -4,3 +4,4 @@ data/historico.db
 data/
 models/
 logs/
+.env
