@@ -52,21 +52,23 @@ class L2MainProcessor:
 
     # ------------------------------------------------------------------ #
     async def process(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Flujo de procesamiento principal:
-        Generar -> Componer -> Ensamble -> Sizing -> Órdenes
-        """
-        logger.info(f"[L2] Ejecutando capa Tactic...")
-        signals = await self._generate_signals(state)
-        logger.info(f"Generated {len(signals)} signals (AI=1, Tech=1, Risk=0)")
-        
-        # 2. Componer señales
-        composed_signals = self.composer.compose(signals)
+        logger.info("[L2] Ejecutando capa Tactic...")
 
-        # 3. Ensamblar
+        # Generar señales de AI, técnicas y de riesgo de forma independiente
+        ai_signals = await self.generator.ai_signals(state)
+        tech_signals = await self.generator.technical_signals(state)
+        risk_signals = await self.generator.risk_overlay(state['mercado'], state['portfolio'])
+
+        # Combinar señales
+        all_signals = [s for s in ai_signals] + [s for s in tech_signals] + [s for s in risk_signals]
+
+        # Componer señales
+        composed_signals = self.composer.compose(all_signals)
+
+        # Ensamblar señales
         combined = self.ensemble.blend(composed_signals)
-        
-        # 4. Convertir a órdenes
+
+        # Convertir a órdenes
         orders = []
         if combined:
             ps = await self.sizer.calculate_position_size(
@@ -78,7 +80,7 @@ class L2MainProcessor:
             if ps and ps.size > 0:
                 orders.append(self._create_order_dict(ps))
 
-        logger.info(f"[L2] Prepared {len(orders)} orders for L1 (all with SL)")
+        logger.info(f"[L2] Preparadas {len(orders)} órdenes para L1 (todas con SL)")
         return orders
 
     # ------------------------------------------------------------------ #

@@ -16,7 +16,11 @@ class BlenderEnsemble:
     """
 
     def __init__(self,
-                 weights: Dict[str, float],
+                 weights = {
+                    'ai': 0.5,
+                    'technical': 0.3, 
+                    'risk': 0.2
+                },
                  default: float = 0.0):
         """
         weights: dict {source_name: peso}

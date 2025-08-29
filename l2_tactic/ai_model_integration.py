@@ -77,6 +77,9 @@ class AIModelWrapper:
         except Exception as e:
             logger.exception("Error en predict()")
             raise
+    
+
+    
 
     async def predict_async(
         self,
@@ -88,6 +91,7 @@ class AIModelWrapper:
         """
         Predicción asíncrona con optimizer (cache + batch).
         """
+        logger.info(f"[L2] AI prediction para {symbol}: {prediction}, threshold: {self.config.ai_model.prediction_threshold}")
         return await self.opt_model.predict_async(
             symbol=symbol, horizon=horizon, features=features
         )
@@ -100,5 +104,7 @@ class AIModelWrapper:
     def optimized(self):
         """Acceso directo al modelo optimizado (OptimizedModel)."""
         return self.opt_model
+
+    
 
 AIModelIntegration = AIModelWrapper
