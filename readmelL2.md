@@ -117,13 +117,22 @@ l2_tactical/
 │   ├── 📄 voting.py              # VotingEnsemble
 │   └── 📄 blender.py             # BlenderEnsemble
 └── 📁 risk_controls/             # Módulo modularizado de gestión de riesgo
-    ├── 📄 __init__.py
-    ├── 📄 alerts.py
-    ├── 📄 manager.py
-    ├── 📄 portfolio.py
-    ├── 📄 positions.py
-    └── 📄 stop_losses.py
+│   ├── 📄 __init__.py
+│   ├── 📄 alerts.py
+│   ├── 📄 manager.py
+│   ├── 📄 portfolio.py
+│   ├── 📄 positions.py
+│   └── 📄 stop_losses.py
+└── generators/                # Generadores de señales (inferido)
+    ├── __init__.py
+    ├── technical_analyzer.py  # TechnicalAnalyzer
+    ├── mean_reversion.py      # MeanReversion
+    └── finrl.py               # FinRLProcessor
 ```
+El archivo mean_reversion.py implementará un generador de señales basado en la estrategia de reversión a la media. Esta estrategia se basa en la idea de que los precios de los activos tienden a regresar a su media histórica.
+
+El archivo finrl.py implementará un generador de señales utilizando el modelo FinRL. Este modelo utiliza aprendizaje profundo para generar señales de trading.
+
 
 ---
 

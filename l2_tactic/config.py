@@ -300,6 +300,9 @@ class L2Config:
 
         return config
 
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
     def validate(self) -> List[str]:
         """Valida la configuración y retorna lista de errores"""
         errors = []

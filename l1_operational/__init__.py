@@ -9,7 +9,7 @@ import asyncio
 import time
 from loguru import logger
 from .models import Signal, ExecutionReport, RiskAlert, OrderIntent
-from .order_manager import order_manager
+from .order_manager import OrderManager
 from .bus_adapter import bus_adapter
 
 async def procesar_l1(state: dict) -> dict:
@@ -56,7 +56,7 @@ async def procesar_l1(state: dict) -> dict:
                 )
                 logger.info(f"[L1] Señal convertida a orden simulada: {sim_signal.signal_id}")
 
-                report = await order_manager.handle_signal(sim_signal)
+                report = await OrderManager.handle_signal(sim_signal)
                 nuevas_ordenes.append({
                     "id": sim_signal.signal_id,
                     "status": _map_status_to_legacy(report.status),
@@ -104,7 +104,7 @@ async def procesar_l1(state: dict) -> dict:
             )
             logger.info(f"[L1] Señal convertida: {signal.signal_id} - {signal.side} {signal.qty} {signal.symbol}")
 
-            report = await order_manager.handle_signal(signal)
+            report = await OrderManager.handle_signal(signal)
             nuevas_ordenes.append({
                 "id": signal.signal_id,
                 "status": _map_status_to_legacy(report.status),
@@ -136,7 +136,7 @@ async def procesar_l1(state: dict) -> dict:
 
     state["ordenes"] = nuevas_ordenes
 
-    metrics = order_manager.get_metrics()
+    metrics = OrderManager.get_metrics()
     state["l1_metrics"] = {
         "active_orders": metrics["total_signals_processed"],
         "pending_reports": 0,
@@ -171,7 +171,7 @@ def get_l1_status() -> dict:
     """
     Retorna el estado actual de L1 usando nuestro sistema mejorado.
     """
-    metrics = order_manager.get_metrics()
+    metrics = OrderManager.get_metrics()
     
     status = {
         "active_orders": metrics["total_signals_processed"],
@@ -190,6 +190,6 @@ def get_l1_status() -> dict:
 
 def get_l1_metrics():
     """Alias para compatibilidad - obtiene métricas consolidadas de L1"""
-    return order_manager.get_metrics()
+    return OrderManager.get_metrics()
 
 __all__ = ['procesar_l1', 'get_l1_status', 'get_l1_metrics', 'Signal', 'ExecutionReport', 'RiskAlert', 'OrderIntent']

@@ -3,19 +3,19 @@
 Configuración centralizada de L1_operational.
 Contiene todos los límites de riesgo y parámetros de ejecución.
 """
+import os
 
 # Modo de operación
 OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
 
 # Límites de riesgo por operación
 RISK_LIMITS = {
-    "MAX_ORDER_SIZE_BTC": 0.1,     # Era 0.05
-    "MAX_ORDER_SIZE_USDT": 1000,     # máximo valor en USDT por orden
-    "MIN_ORDER_SIZE_USDT": 50,       # mínimo valor en USDT por orden
-    "MAX_ORDER_SIZE_ETH": 1.0,       # máximo ETH por orden
-    "MAX_ORDER_SIZE_ADA": 1000,      # máximo ADA por orden
+    "MAX_ORDER_SIZE_BTC": 0.01,      # ~$1,084 por orden - RAZONABLE
+    "MAX_ORDER_SIZE_USDT": 500,      # Reducir máximo
+    "MIN_ORDER_SIZE_USDT": 30,       # Reducir mínimo
+    "MAX_ORDER_SIZE_ETH": 0.1,       # ~$437 por orden - RAZONABLE  
+    "MAX_ORDER_SIZE_ADA": 100,       # Reducir
 }
-
 # Límites de riesgo por portafolio
 PORTFOLIO_LIMITS = {
     "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,  # máximo 20% del portafolio en BTC
@@ -50,4 +50,103 @@ LOGGING_CONFIG = {
 }
 
 # Umbrales IA
-TREND_THRESHOLD = 0.3
+TREND_THRESHOLD = 0.1
+
+# Rutas de modelos IA
+AI_MODELS = {
+    "MODELO1_PATH": "models/L1/modelo1_lr.pkl",
+    "MODELO2_PATH": "models/L1/modelo2_rf.pkl", 
+    "MODELO3_PATH": "models/L1/modelo3_lgbm.pkl",
+    "AI_CONFIDENCE_THRESHOLD": 0.4,
+    "ENSEMBLE_THRESHOLD": TREND_THRESHOLD,  # Usar tu TREND_THRESHOLD existente
+}
+
+# ============================================================================
+# SOLUCIÓN AL ERROR DE IMPORTACIÓN - MEJORADA
+# ============================================================================
+
+class ConfigObject:
+    """
+    Objeto de configuración que encapsula todas las constantes.
+    Soporta acceso tanto como clase como instancia.
+    """
+    
+    # Atributos de clase (para acceso directo tipo ConfigObject.RISK_LIMITS)
+    OPERATION_MODE = OPERATION_MODE
+    RISK_LIMITS = RISK_LIMITS
+    PORTFOLIO_LIMITS = PORTFOLIO_LIMITS
+    EXECUTION_CONFIG = EXECUTION_CONFIG
+    ALERT_CONFIG = ALERT_CONFIG
+    LOGGING_CONFIG = LOGGING_CONFIG
+    TREND_THRESHOLD = TREND_THRESHOLD
+    AI_MODELS = AI_MODELS
+    
+    def __init__(self):
+        # Atributos de instancia (para acceso tipo config.RISK_LIMITS)
+        self.OPERATION_MODE = OPERATION_MODE
+        self.RISK_LIMITS = RISK_LIMITS
+        self.PORTFOLIO_LIMITS = PORTFOLIO_LIMITS
+        self.EXECUTION_CONFIG = EXECUTION_CONFIG
+        self.ALERT_CONFIG = ALERT_CONFIG
+        self.LOGGING_CONFIG = LOGGING_CONFIG
+        self.TREND_THRESHOLD = TREND_THRESHOLD
+        self.AI_MODELS = AI_MODELS
+        
+        # Configuración de Binance para compatibilidad
+        self.BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
+        self.BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET', '')
+        self.BINANCE_MODE = os.getenv('BINANCE_MODE', OPERATION_MODE.upper())
+        self.USE_TESTNET = os.getenv('USE_TESTNET', 'true').lower() == 'true'
+        
+        # También como atributos de clase para compatibilidad total
+        ConfigObject.BINANCE_API_KEY = self.BINANCE_API_KEY
+        ConfigObject.BINANCE_API_SECRET = self.BINANCE_API_SECRET
+        ConfigObject.BINANCE_MODE = self.BINANCE_MODE
+        ConfigObject.USE_TESTNET = self.USE_TESTNET
+    
+    def get_risk_limit(self, asset, limit_type=None):
+        """Obtener límite de riesgo específico"""
+        key = f"MAX_ORDER_SIZE_{asset.upper()}"
+        return self.RISK_LIMITS.get(key, 0)
+    
+    def get_portfolio_limit(self, asset):
+        """Obtener límite de portafolio específico"""
+        key = f"MAX_PORTFOLIO_EXPOSURE_{asset.upper()}"
+        return self.PORTFOLIO_LIMITS.get(key, 0)
+    
+    def is_paper_mode(self):
+        """Verificar si estamos en modo paper"""
+        return self.OPERATION_MODE.upper() == "PAPER" or self.EXECUTION_CONFIG["PAPER_MODE"]
+    
+    @classmethod
+    def get_class_risk_limit(cls, asset, limit_type=None):
+        """Método de clase para obtener límites"""
+        key = f"MAX_ORDER_SIZE_{asset.upper()}"
+        return cls.RISK_LIMITS.get(key, 0)
+    
+    @classmethod 
+    def get_class_portfolio_limit(cls, asset):
+        """Método de clase para obtener límites de portafolio"""
+        key = f"MAX_PORTFOLIO_EXPOSURE_{asset.upper()}"
+        return cls.PORTFOLIO_LIMITS.get(key, 0)
+
+# Crear la instancia que será importada
+config = ConfigObject()
+
+# IMPORTANTE: También exportar la clase para acceso directo
+Config = ConfigObject
+
+# Mantener compatibilidad: exportar todo lo que ya existía
+__all__ = [
+    'config',        # Instancia (config.RISK_LIMITS)
+    'Config',        # Clase (Config.RISK_LIMITS)
+    'ConfigObject',  # Alias para la clase
+    'OPERATION_MODE',
+    'RISK_LIMITS', 
+    'PORTFOLIO_LIMITS',
+    'EXECUTION_CONFIG',
+    'ALERT_CONFIG',
+    'LOGGING_CONFIG',
+    'TREND_THRESHOLD',
+    'AI_MODELS'
+]

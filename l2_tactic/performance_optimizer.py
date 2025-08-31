@@ -1,4 +1,3 @@
-
 # performance_optimizer.py
 """
 L2 Tactical — Performance Optimizer
@@ -47,6 +46,7 @@ await optimizer.aclose()
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import math
 import os
@@ -57,7 +57,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from hashlib import sha1
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple,Hashable, Union
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Hashable, Union
+
 try:
     import pandas as pd  # opcional
 except Exception:  # pragma: no cover - compat si no hay pandas
@@ -111,12 +112,16 @@ def _normalize_scalar(v: Any, precision: int = 8) -> Any:
                 return 0.0
             return round(v, precision)
         if isinstance(v, (int, str, bool)):
+            # Ensure ASCII strings for pickle compatibility
+            if isinstance(v, str):
+                return v.encode('ascii', errors='ignore').decode('ascii')
             return v
         if isinstance(v, datetime):
             return int(v.timestamp())
-        return float(v)
+        # Convert to string and ensure ASCII
+        return str(v).encode('ascii', errors='ignore').decode('ascii')
     except Exception:
-        return str(v)
+        return str(v).encode('ascii', errors='ignore').decode('ascii')
 
 
 def stable_hash(obj: Any, precision: int = 8) -> str:
@@ -125,6 +130,7 @@ def stable_hash(obj: Any, precision: int = 8) -> str:
     - Dict: ordenado por clave.
     - Lista/tupla: elemento a elemento.
     - Escalares: normalizados con precisión.
+    - ASCII-only for pickle compatibility
     """
     def _walk(o: Any) -> str:
         if isinstance(o, dict):
@@ -134,8 +140,11 @@ def stable_hash(obj: Any, precision: int = 8) -> str:
         elif isinstance(o, (list, tuple)):
             return f"[{','.join(_walk(x) for x in o)}]"
         else:
-            return str(_normalize_scalar(o, precision))
-    s = _walk(obj).encode("utf-8")
+            normalized = str(_normalize_scalar(o, precision))
+            # Ensure ASCII for pickle compatibility
+            return normalized.encode('ascii', errors='ignore').decode('ascii')
+    
+    s = _walk(obj).encode("ascii", errors='ignore')  # Force ASCII
     return sha1(s).hexdigest()
 
 
@@ -655,6 +664,7 @@ def get_or_predict_sync(
     features: Any,
 ) -> Any:
     return opt_model.predict(symbol=symbol, horizon=horizon, features=features)
+
 
 # ------------------------------------------------------------------ #
 # Decorador para cachear predicciones del modelo (LRU + TTL)

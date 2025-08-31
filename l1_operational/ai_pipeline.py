@@ -42,23 +42,29 @@ class AIModelPipeline:
         }
         self.load_models()
     
+
+    
     def load_models(self):
         """Carga todos los modelos entrenados"""
+
+        import pickle
+        import joblib
+        import warnings
         try:
-            # Modelo 1: Logistic Regression
-            self.models['logistic_regression'] = joblib.load(
-                f"{self.models_path}/logistic_regression_modelo1.pkl"
-            )
-            
-            # Modelo 2: Random Forest
-            self.models['random_forest'] = joblib.load(
-                f"{self.models_path}/random_forest_modelo2.pkl"
-            )
-            
-            # Modelo 3: LightGBM
-            self.models['lightgbm'] = joblib.load(
-                f"{self.models_path}/lightgbm_modelo3.pkl"
-            )
+            # Método 1: joblib (preferido)
+            return joblib.load(path)
+        except Exception as e1:
+            try:
+                # Método 2: pickle puro
+                with open(path, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as e2:
+                try:
+                    # Método 3: joblib con protocolo específico
+                    return joblib.load(path, allow_pickle=True)
+                except Exception as e3:
+                    logger.error(f"❌ Error cargando {model_name}: joblib={e1}, pickle={e2}, joblib_allow={e3}")
+                    return None
             
             # Cargar metadatos de modelos
             self._load_model_metadata()

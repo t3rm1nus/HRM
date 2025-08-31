@@ -1,7 +1,47 @@
-#!/usr/bin/env python3
+# run_overnight.py (PICKLE PATCH ARREGLADO)
 """
 Script para ejecutar el sistema toda la noche con logging persistente.
+ARREGLADO: Pickle patch sin deprecation warnings
 """
+
+import pickle
+import numpy as np
+import warnings
+
+# Suprimir warnings específicos de NumPy/Pickle
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="numpy")
+warnings.filterwarnings("ignore", message=".*numpy.*_core.*", category=DeprecationWarning)
+
+# PICKLE PATCH ARREGLADO - sin usar APIs deprecadas
+_original_pickle_load = pickle.load
+_original_pickle_loads = pickle.loads
+
+def debug_pickle_load(file, *args, **kwargs):
+    try:
+        return _original_pickle_load(file, *args, **kwargs)
+    except Exception as e:
+        if "persistent" in str(e).lower() or "numpy" in str(e).lower():
+            print(f"🔥 ERROR PICKLE DETECTADO EN LOAD:")
+            print(f"   Archivo: {getattr(file, 'name', 'unknown')}")
+            print(f"   Error: {str(e)[:200]}")
+            import traceback
+            traceback.print_exc()
+        raise
+
+def debug_pickle_loads(data, *args, **kwargs):
+    try:
+        return _original_pickle_loads(data, *args, **kwargs)
+    except Exception as e:
+        if "persistent" in str(e).lower() or "numpy" in str(e).lower():
+            print(f"🔥 ERROR PICKLE DETECTADO EN LOADS:")
+            print(f"   Error: {str(e)[:200]}")
+        raise
+
+# Aplicar monkey patch mejorado
+pickle.load = debug_pickle_load
+pickle.loads = debug_pickle_loads
+
+# Resto del código sin cambios
 import asyncio
 import logging
 from datetime import datetime
@@ -39,7 +79,9 @@ async def run_overnight():
     except KeyboardInterrupt:
         logger.info("🛑 Ejecución interrumpida por usuario")
     except Exception as e:
-        logger.error(f"❌ Error crítico: {e}")
+        logger.error(f"⚠ Error crítico: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
     finally:
         logger.info("🌅 EJECUCIÓN NOCTURNA FINALIZADA")
 
@@ -50,4 +92,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n🛑 Ejecución cancelada por usuario")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"⚠ Error: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
