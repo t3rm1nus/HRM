@@ -7,8 +7,9 @@ class InterceptHandler(logging.Handler):
     """Handler para interceptar logs de logging estándar y redirigirlos a loguru."""
     def emit(self, record):
         # Obtener el nivel de loguru correspondiente
+        log_entry = self.format(record)
         level = logger.level(record.levelname).name
-        logger.log(level, record.getMessage())
+        logger.opt(depth=6, exception=record.exc_info).log(level, log_entry)
 
 def setup_logger(level: int = logging.INFO):
     """

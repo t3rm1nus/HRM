@@ -29,6 +29,12 @@ class BlenderEnsemble:
         """
         self.weights = weights
         self.default = default
+        self.strategies = {
+            'technical': 0.4,      # Peso para señales técnicas
+            'finrl_ppo': 0.4,      # Peso para modelo FinRL PPO
+            'mean_reversion': 0.2   # Peso para mean reversion
+        }
+        logger.info(f"[BlenderEnsemble] inicializado: {self.strategies}")
         logger.info(
             f"[BlenderEnsemble] inicializado: {weights} (default={default})"
         )

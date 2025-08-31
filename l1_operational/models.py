@@ -1,7 +1,49 @@
 # l1_operational/models.py
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
+from enum import Enum
 import time
+
+# ============================================================================
+# NUEVAS CLASES AGREGADAS (para compatibilidad con imports)
+# ============================================================================
+
+class SignalType(Enum):
+    """Tipos de señales de trading"""
+    BUY = "BUY"
+    SELL = "SELL"
+    HOLD = "HOLD"
+    CLOSE = "CLOSE"
+    
+    # Compatibilidad con tu sistema actual
+    buy = "buy"
+    sell = "sell"
+
+class SignalSource(Enum):
+    """Fuentes de las señales"""
+    L2_TACTIC = "L2_TACTIC"
+    L3_STRATEGY = "L3_STRATEGY"
+    MANUAL = "MANUAL"
+    RISK_MANAGER = "RISK_MANAGER"
+
+class OrderStatus(Enum):
+    """Estados de órdenes"""
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+class ExecutionStatus(Enum):
+    """Estados de ejecución para reportes"""
+    EXECUTED = "EXECUTED"
+    REJECTED_SAFETY = "REJECTED_SAFETY"
+    REJECTED_AI = "REJECTED_AI"
+    EXECUTION_ERROR = "EXECUTION_ERROR"
+
+# ============================================================================
+# TUS CLASES EXISTENTES (mantenidas tal como están)
+# ============================================================================
 
 @dataclass
 class Signal:
@@ -22,6 +64,28 @@ class Signal:
     def __post_init__(self):
         if self.technical_indicators is None:
             self.technical_indicators = {}
+    
+    # Métodos de compatibilidad con los enums
+    def get_signal_type(self) -> SignalType:
+        """Convertir side a SignalType"""
+        if self.side.lower() == 'buy':
+            return SignalType.BUY
+        elif self.side.lower() == 'sell':
+            return SignalType.SELL
+        else:
+            return SignalType.HOLD
+    
+    def get_asset_from_symbol(self) -> str:
+        """Extraer el asset base del símbolo (ej: BTCUSDT -> BTC)"""
+        if self.symbol.endswith('USDT'):
+            return self.symbol[:-4]
+        elif self.symbol.endswith('BUSD'):
+            return self.symbol[:-4]
+        elif self.symbol.endswith('USD'):
+            return self.symbol[:-3]
+        else:
+            # Fallback: tomar los primeros 3-4 caracteres
+            return self.symbol[:3] if len(self.symbol) >= 6 else self.symbol[:4]
 
 @dataclass
 class OrderIntent:
@@ -93,3 +157,56 @@ class ValidationResult:
     def __post_init__(self):
         if self.warnings is None:
             self.warnings = []
+
+# ============================================================================
+# FUNCIONES HELPER PARA COMPATIBILIDAD
+# ============================================================================
+
+def create_signal(
+    signal_id: str,
+    symbol: str,
+    side: str,  # 'buy' o 'sell'
+    qty: float,
+    strategy_id: str = "L2_TACTIC",
+    order_type: str = "market",
+    price: Optional[float] = None,
+    confidence: float = 0.5,
+    timestamp: Optional[float] = None
+) -> Signal:
+    """
+    Función helper para crear señales fácilmente
+    """
+    return Signal(
+        signal_id=signal_id,
+        strategy_id=strategy_id,
+        timestamp=timestamp or time.time(),
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        order_type=order_type,
+        price=price,
+        confidence=confidence
+    )
+
+# ============================================================================
+# EXPORTACIONES
+# ============================================================================
+
+__all__ = [
+    # Enums nuevos
+    'SignalType',
+    'SignalSource', 
+    'OrderStatus',
+    'ExecutionStatus',
+    
+    # Clases existentes
+    'Signal',
+    'OrderIntent',
+    'ExecutionResult',
+    'ExecutionReport',
+    'RiskAlert',
+    'ValidationResult',
+    
+    # Helper functions
+    'create_signal',
+]

@@ -15,6 +15,8 @@ from .technical.multi_timeframe import resample_and_consensus
 from .ensemble import VotingEnsemble, BlenderEnsemble
 from .metrics import L2Metrics
 from .models import TacticalSignal, PositionSize
+from .finrl_integration import FinRLProcessor
+# from finrl_final_fix import FinRLPredictor  # REMOVIDO: usar AIModelWrapper
 
 class L2MainProcessor:
     """
@@ -33,6 +35,7 @@ class L2MainProcessor:
         self.composer = SignalComposer(config)
         self.sizer = PositionSizerManager(config)
         self.metrics = L2Metrics()
+        # self.finrl = FinRLProcessor("models/L2/ai_model_data_multiasset.zip")  # REMOVIDO: usar generator.ai_model
 
         # --- ENSAMBLE ---
         mode = getattr(config, "ensemble_mode", "blender")
@@ -57,7 +60,7 @@ class L2MainProcessor:
         # Generar señales de AI, técnicas y de riesgo de forma independiente
         ai_signals = await self.generator.ai_signals(state)
         tech_signals = await self.generator.technical_signals(state)
-        risk_signals = await self.generator.risk_overlay(state['mercado'], state['portfolio'])
+        risk_signals = await self.generator.risk_overlay.generate_risk_signals(state['mercado'], state['portfolio'])
 
         # Combinar señales
         all_signals = [s for s in ai_signals] + [s for s in tech_signals] + [s for s in risk_signals]
@@ -88,16 +91,28 @@ class L2MainProcessor:
         """
         Delega la generación de señales a las fuentes (AI, Technical).
         """
-        # Generar señales de AI, técnicas y de riesgo de forma independiente.
-        ai_signals = await self.generator.ai_signals(state)
-        tech_signals = await self.generator.technical_signals(state)
-        
-        # El ERROR está aquí. risk_overlay necesita mercado y portafolio por separado.
-        risk_signals = await self.generator.risk_overlay(state['mercado'], state['portfolio'])
-        
-        all_signals = [s for s in ai_signals] + [s for s in tech_signals] + [s for s in risk_signals]
-        
-        return all_signals
+        try:
+            # Generar señales con mejor manejo de errores
+            ai_signals = await self.generator.ai_signals(state.get('mercado', {}))
+            tech_signals = await self.generator.technical_signals(state.get('mercado', {}))
+            
+            # FIX: Separar mercado y portfolio correctamente
+            mercado = state.get('mercado', {})
+            portfolio = state.get('portfolio', {})
+            
+            risk_signals = await self.generator.risk_overlay.generate_risk_signals(mercado, portfolio)
+            
+            # Combinar todas las señales
+            all_signals = ai_signals + tech_signals + risk_signals
+            
+            # Log detallado para debugging
+            logger.info(f"[L2] Señales generadas: AI={len(ai_signals)}, Tech={len(tech_signals)}, Risk={len(risk_signals)}, Total={len(all_signals)}")
+            
+            return all_signals
+            
+        except Exception as e:
+            logger.error(f"[L2] ❌ Error generando señales: {e}")
+            return []
 
     # ------------------------------------------------------------------ #
     def _create_order_dict(self, ps: PositionSize) -> Dict[str, Any]:

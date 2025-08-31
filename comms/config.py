@@ -13,3 +13,10 @@ RISK_LIMIT_ETH = float(os.getenv("RISK_LIMIT_ETH", 1.0))
 EXPOSURE_MAX_BTC = float(os.getenv("EXPOSURE_MAX_BTC", 0.20))
 EXPOSURE_MAX_ETH = float(os.getenv("EXPOSURE_MAX_ETH", 0.15))
 CORRELATION_LIMIT = float(os.getenv("CORRELATION_LIMIT", 0.80))
+
+# Ejemplo de definición en comms/config.py
+TECHNICAL_THRESHOLD = float(os.getenv("TECHNICAL_THRESHOLD", 0.1))
+FINRL_THRESHOLD = float(os.getenv("FINRL_THRESHOLD", 0.2))
+MEAN_REVERSION_THRESHOLD = float(os.getenv("MEAN_REVERSION_THRESHOLD", 0.3))
+MIN_SIGNAL_STRENGTH = float(os.getenv("MIN_SIGNAL_STRENGTH", 0.4))
+ENABLED_GENERATORS = os.getenv("ENABLED_GENERATORS", "technical,finrl,mean_reversion").split(',')

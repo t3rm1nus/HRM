@@ -1,189 +1,150 @@
-# l2_tactic/signal_generator.py
-# Orquestador L2: integra IA/tech/pattern -> composición -> sizing -> riesgo -> orden para L1
+"""
+L2TacticProcessor - Generador de señales tácticas ARREGLADO
+==========================================================
+ARREGLADO: Integración correcta con FinRL y manejo de errores mejorado
+"""
 
-from __future__ import annotations
-import logging
+import asyncio
 from typing import Dict, List, Any, Optional
-
 import pandas as pd
+import numpy as np
 
-from .config import L2Config
-from .models import TacticalSignal, MarketFeatures
-from .signal_composer import SignalComposer
-from .position_sizer import PositionSizerManager
-from .risk_controls import RiskControlManager
-from .performance_optimizer import PerformanceOptimizer
-from .ai_model_integration import AIModelIntegration
-
-from l2_tactic.indicators.technical import TechnicalIndicators, IndicatorWindows
-from l2_tactic.models import MarketFeatures
-
-logger = logging.getLogger(__name__)
-
+from core.logging import logger
+from .models import TacticalSignal
+from .ai_model_integration import AIModelWrapper
+from .finrl_integration import FinRLProcessor
+from .technical.multi_timeframe import MultiTimeframeTechnical
+from .risk_overlay import RiskOverlay
 
 class L2TacticProcessor:
     """
-    Flujo:
-      1) Genera señales (IA + técnicas).
-      2) Filtra por calidad.
-      3) Ajusta pesos según régimen (L3).
-      4) Devuelve lista de TacticalSignal.
+    Generador de señales tácticas para L2
+    ARREGLADO: Usa AIModelWrapper correctamente integrado con FinRL
     """
-
-    def __init__(
-        self,
-        config: Optional[L2Config] = None,
-        ai_model: Optional[AIModelIntegration] = None,
-    ):
-        self.config = config or L2Config()
-        self.composer = SignalComposer(self.config)
-        self.sizer = PositionSizerManager(self.config)
-        self.risk = RiskControlManager(self.config)
-        self.ai = ai_model or AIModelIntegration(config)
-        self.tech_indicators = TechnicalIndicators()
-        self.risk_manager = RiskControlManager(config)
-
-    async def _generate_signals(
-        self,
-        portfolio: Dict,
-        market_data: Dict,
-        features_by_symbol: Dict[str, MarketFeatures],
-    ) -> List[TacticalSignal]:
-        logger.info(f"[L2] Datos recibidos: {len(market_data)} símbolos")
-        for symbol, data in market_data.items():
-            logger.info(f"[L2] Último precio {symbol}: {data.get('close', 'N/A')}")
-        raw_signals = []
-        # 🔧 Forzar señales válidas sin riesgo
-        btc_signal = TacticalSignal(
-            symbol="BTCUSDT",
-            side="buy",
-            confidence=1.0,
-            strength=1.0,
-            source="ai",
-            price=market_data["BTCUSDT"].get("close", 0),
-            stop_loss=market_data["BTCUSDT"].get("close", 0) * 0.98,
-        )
-        raw_signals.append(btc_signal)
-        return raw_signals
-
-    def _prepare_features(self, market_data: Dict) -> np.ndarray:
-        """Prepara features para FinRL"""
-        # IMPLEMENTAR: conversión de market_data a features que espera FinRL
-        return np.array([
-            market_data.get('close', 0),
-            market_data.get('volume', 0),
-            # Añadir más features según entrenamiento FinRL
-        ])
-
+    
+    def __init__(self, config):
+        self.config = config
+        
+        # Inicializar componentes
+        self.ai_model = AIModelWrapper(config)
+        self.technical = MultiTimeframeTechnical(config)
+        self.risk_overlay = RiskOverlay(config)
+        
+        logger.info("🎯 L2TacticProcessor inicializado correctamente")
+    
     async def ai_signals(self, market_data: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Genera señales provenientes del modelo PPO (ahora con valores de prueba).
+        Genera señales usando el modelo de IA (FinRL)
+        ARREGLADO: Manejo correcto de FinRL async/sync
         """
-        """USA EL MODELO FINRL REAL"""
         signals = []
         
-        for symbol in ["BTCUSDT", "ETHUSDT"]:
-            if symbol in market_data:
-                # USAR EL MODELO REAL, no hardcoded
-                features = self._prepare_features(market_data[symbol])
-                prediction = await self.ai.predict(features)  # Llamada real a FinRL
+        try:
+            # Procesar cada símbolo en el universo
+            universe = self.config.signals.universe
+            logger.debug(f"🤖 Generando señales IA para universo: {universe}")
+            
+            for symbol in universe:
+                if symbol == "USDT":  # Skip stablecoin
+                    continue
+                    
+                # Preparar features para el modelo
+                features = self._prepare_features(market_data, symbol)
                 
-                confidence = prediction.confidence
-                logger.info(f"[L2] AI score REAL para {symbol}: {confidence:.2f}")
+                if not features:
+                    logger.warning(f"⚠️  Sin features para {symbol}")
+                    continue
                 
-                if confidence > self.config.ai_model.prediction_threshold:
-                    signals.append(TacticalSignal(
+                # Obtener predicción del modelo
+                prediction = await self.ai_model.predict_async(features)
+                
+                if prediction and abs(prediction.prediction) > self.config.ai_model.prediction_threshold:
+                    # Convertir predicción a señal táctica
+                    signal = TacticalSignal(
                         symbol=symbol,
-                        side=prediction.action,  # Del modelo real
-                        confidence=confidence,
-                        strength=prediction.strength,
-                        source="ai",
-                        price=market_data[symbol]["close"],
-                        stop_loss=market_data[symbol]["close"] * (0.98 if prediction.action == "buy" else 1.02),
-                    ))
-        
-        return signals
-
+                        signal_type="ai_model",
+                        strength=prediction.prediction,  # -1 a 1
+                        confidence=prediction.confidence,  # 0 a 1
+                        side="buy" if prediction.prediction > 0 else "sell",
+                        features=features,
+                        timestamp=prediction.timestamp,
+                        metadata={
+                            "model_type": prediction.model_type,
+                            "features_count": prediction.features_used,
+                            "threshold": self.config.ai_model.prediction_threshold
+                        }
+                    )
+                    
+                    signals.append(signal)
+                    logger.info(f"🎯 Señal IA generada: {symbol} {signal.side} strength={signal.strength:.3f}")
+                else:
+                    logger.debug(f"🤖 Sin señal para {symbol} (pred={prediction.prediction if prediction else None})")
+            
+            logger.info(f"🤖 Señales IA generadas: {len(signals)}")
+            return signals
+            
+        except Exception as e:
+            logger.error(f"❌ Error generando señales IA: {e}")
+            return []
+    
     async def technical_signals(self, market_data: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Genera señales técnicas (ahora con valores de prueba).
+        Genera señales usando análisis técnico multi-timeframe
         """
-        signals = []
-        confidence = 0.9  # ✅ Valor que usas en la señal
-        logger.info(f"[L2] Technical score para ETH: {confidence:.2f}, threshold: {self.config.signals.min_signal_strength}")
-        if "ETHUSDT" in market_data:
-            logger.debug("Generando señal técnica para ETHUSDT...")
-            current_price = market_data["ETHUSDT"].get("close")
-            if current_price:
-                signals.append(
-                    TacticalSignal(
-                        symbol="ETHUSDT",
-                        side="sell",
-                        confidence=0.9,
-                        strength=0.8,
-                        source="technical",
-                        price=current_price,
-                        stop_loss=current_price * 1.02,
-                    )
-                )
-        return signals
-
-
-    def debug_signal_flow():
-        from l1_operational.data_feed import DataFeed
-        df = DataFeed().fetch_data('BTCUSDT')
-        print(f"[DEBUG] Filas: {len(df)}")
-        print(f"[DEBUG] Último close: {df['close'].iloc[-1]}")
-
-
-    async def risk_overlay(self, market_data: Dict[str, Any], portfolio: Dict[str, Any]) -> List[TacticalSignal]:
+        try:
+            signals = await self.technical.generate_signals(market_data)
+            logger.info(f"📊 Señales técnicas generadas: {len(signals)}")
+            return signals
+        except Exception as e:
+            logger.error(f"❌ Error generando señales técnicas: {e}")
+            return []
+    
+    async def risk_overlay(self, market_data: Dict[str, Any], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Genera señales de riesgo.
+        Genera señales de ajuste de riesgo
         """
-        exposicion_btc = portfolio.get("exposicion", {}).get("BTCUSDT", 0)
-        
-        signals = []
-        if exposicion_btc > 0.5:
-            current_price = market_data.get("BTCUSDT", {}).get("close")
-            if current_price:
-                signals.append(
-                    TacticalSignal(
-                        symbol="BTCUSDT",
-                        side="sell",
-                        confidence=1.0,
-                        strength=1.0,
-                        source="risk",
-                        price=current_price,
-                    )
-                )
-        return signals
-
-async def debug_signal_flow():
-    """Función temporal para debuggear flujo L2"""
-    from l1_operational.data_feed import DataFeed
-    from l2_tactic.config import L2Config
-    from l2_tactic.signal_generator import L2TacticProcessor
-
-    config = L2Config.from_env()
-    processor = L2TacticProcessor(config)
-    data_feed = DataFeed()
-
-    df = data_feed.fetch_data('BTCUSDT')
-    market_data = {"BTCUSDT": df.iloc[-1].to_dict() if not df.empty else {}}
-
-    logger.info(f"[DEBUG] Filas BTC: {len(df)}")
-    logger.info(f"[DEBUG] Último close BTC: {market_data['BTCUSDT'].get('close', 'N/A')}")
-
-    signals = await processor._generate_signals(
-        portfolio={"exposicion": {"BTCUSDT": 0.1}},
-        market_data=market_data,
-        features_by_symbol={}
-    )
-
-    logger.info(f"[DEBUG] Señales generadas: {len(signals)}")
-    for s in signals:
-        logger.info(f"[DEBUG] Señal: {s.symbol} | {s.side} | conf={s.confidence}")
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(debug_signal_flow())
+        try:
+            signals = await self.risk_overlay.generate_risk_signals(market_data, portfolio_data)
+            logger.info(f"🛡️ Señales de riesgo generadas: {len(signals)}")
+            return signals
+        except Exception as e:
+            logger.error(f"❌ Error generando señales de riesgo: {e}")
+            return []
+    
+    def _prepare_features(self, market_data: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Prepara features para el modelo de IA
+        ARREGLADO: Mejor estructura de features para FinRL
+        """
+        try:
+            # Obtener datos del símbolo
+            symbol_data = market_data.get(symbol, {})
+            
+            if not symbol_data:
+                return None
+            
+            # Estructura de features compatible con FinRL
+            features = {
+                "symbol": symbol,
+                "market_data": symbol_data,
+                "ohlcv": symbol_data.get("ohlcv", {}),
+                "technical_indicators": symbol_data.get("indicators", {}),
+                "volume_profile": symbol_data.get("volume", {}),
+                "orderbook": symbol_data.get("orderbook", {}),
+                "metadata": {
+                    "timestamp": symbol_data.get("timestamp"),
+                    "source": "L2_tactic"
+                }
+            }
+            
+            return features
+            
+        except Exception as e:
+            logger.error(f"❌ Error preparando features para {symbol}: {e}")
+            return None
+    
+    async def get_model_status(self) -> Dict[str, Any]:
+        """
+        Estado del modelo de IA
+        """
+        return self.ai_model.get_model_info()

@@ -1,9 +1,10 @@
-# main.py - Versión corregida con logging persistente
+# main.py - Versión corregida con features técnicas
 import os
 import time
 import logging
 import asyncio
 import pandas as pd
+import numpy as np
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -47,14 +48,118 @@ state = {
     "ciclo_id": 0,
 }
 
+def calculate_technical_indicators(df: pd.DataFrame) -> dict:
+    """
+    Calcula indicadores técnicos desde OHLCV data
+    """
+    try:
+        if df.empty or len(df) < 20:
+            return {}
+        
+        # Asegurar que tenemos las columnas necesarias
+        if not all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+            logger.warning("DataFrame no tiene todas las columnas OHLCV necesarias")
+            return {}
+        
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        volume = df['volume']
+        
+        # RSI (14 períodos)
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        # MACD (12, 26, 9)
+        ema_12 = close.ewm(span=12).mean()
+        ema_26 = close.ewm(span=26).mean()
+        macd = ema_12 - ema_26
+        macd_signal = macd.ewm(span=9).mean()
+        macd_hist = macd - macd_signal
+        
+        # Bollinger Bands (20, 2)
+        sma_20 = close.rolling(window=20).mean()
+        std_20 = close.rolling(window=20).std()
+        bb_upper = sma_20 + (std_20 * 2)
+        bb_lower = sma_20 - (std_20 * 2)
+        
+        # Medias móviles adicionales
+        sma_10 = close.rolling(window=10).mean()
+        ema_10 = close.ewm(span=10).mean()
+        
+        # Volatilidad
+        returns = close.pct_change()
+        volatility = returns.rolling(window=20).std() * np.sqrt(252)  # Anualizada
+        
+        # Volume indicators
+        vol_sma = volume.rolling(window=20).mean()
+        vol_ratio = volume / vol_sma
+        
+        # Obtener valores más recientes (evitar NaN)
+        latest_idx = len(df) - 1
+        
+        indicators = {
+            'rsi': float(rsi.iloc[latest_idx]) if not pd.isna(rsi.iloc[latest_idx]) else 50.0,
+            'macd': float(macd.iloc[latest_idx]) if not pd.isna(macd.iloc[latest_idx]) else 0.0,
+            'macd_signal': float(macd_signal.iloc[latest_idx]) if not pd.isna(macd_signal.iloc[latest_idx]) else 0.0,
+            'macd_hist': float(macd_hist.iloc[latest_idx]) if not pd.isna(macd_hist.iloc[latest_idx]) else 0.0,
+            'bb_upper': float(bb_upper.iloc[latest_idx]) if not pd.isna(bb_upper.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'bb_lower': float(bb_lower.iloc[latest_idx]) if not pd.isna(bb_lower.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'sma_20': float(sma_20.iloc[latest_idx]) if not pd.isna(sma_20.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'sma_10': float(sma_10.iloc[latest_idx]) if not pd.isna(sma_10.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'ema_12': float(ema_12.iloc[latest_idx]) if not pd.isna(ema_12.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'ema_10': float(ema_10.iloc[latest_idx]) if not pd.isna(ema_10.iloc[latest_idx]) else float(close.iloc[latest_idx]),
+            'volatility': float(volatility.iloc[latest_idx]) if not pd.isna(volatility.iloc[latest_idx]) else 0.0,
+            'vol_ratio': float(vol_ratio.iloc[latest_idx]) if not pd.isna(vol_ratio.iloc[latest_idx]) else 1.0
+        }
+        
+        # Calcular cambio 24h si tenemos suficientes datos
+        if len(df) >= 24:
+            price_24h_ago = close.iloc[-24]
+            change_24h = (close.iloc[-1] - price_24h_ago) / price_24h_ago
+            indicators['change_24h'] = float(change_24h)
+        else:
+            indicators['change_24h'] = 0.0
+        
+        # Validar que no hay valores infinitos
+        for key, value in indicators.items():
+            if np.isinf(value) or np.isnan(value):
+                indicators[key] = 0.0
+                
+        return indicators
+        
+    except Exception as e:
+        logger.error(f"Error calculando indicadores técnicos: {e}")
+        return {}
+
+def prepare_market_features(ohlcv_data: dict, indicators: dict) -> dict:
+    """
+    Prepara estructura de datos completa para L2
+    """
+    try:
+        return {
+            'ohlcv': ohlcv_data,
+            'indicators': indicators,
+            'change_24h': indicators.get('change_24h', 0.0),
+            'volatility': indicators.get('volatility', 0.0),
+            'volume_ratio': indicators.get('vol_ratio', 1.0),
+            'timestamp': datetime.now().timestamp()
+        }
+    except Exception as e:
+        logger.error(f"Error preparando features de mercado: {e}")
+        return {}
+
 async def log_cycle_data(state: dict, cycle_id: int, start_time: float):
     """Loggear todos los datos del ciclo."""
     try:
         cycle_duration = (time.time() - start_time) * 1000
         
         # Datos de mercado
-        btc_price = state['mercado'].get('BTCUSDT', {}).get('close', 0)
-        eth_price = state['mercado'].get('ETHUSDT', {}).get('close', 0)
+        btc_price = state['mercado'].get('BTCUSDT', {}).get('ohlcv', {}).get('close', 0)
+        eth_price = state['mercado'].get('ETHUSDT', {}).get('ohlcv', {}).get('close', 0)
         
         # Log ciclo
         await persistent_logger.log_cycle({
@@ -74,43 +179,47 @@ async def log_cycle_data(state: dict, cycle_id: int, start_time: float):
         # Log señales
         signals = state.get('senales', {}).get('signals', [])
         for signal in signals:
-            await persistent_logger.log_signal({
-                'timestamp': datetime.now().isoformat(),
-                'cycle_id': cycle_id,
-                'symbol': signal.get('symbol', ''),
-                'side': signal.get('side', ''),
-                'confidence': signal.get('confidence', 0),
-                'quantity': signal.get('qty', 0),
-                'stop_loss': signal.get('stop_loss', 0),
-                'take_profit': signal.get('take_profit', 0),
-                'signal_id': signal.get('signal_id', f'cycle_{cycle_id}'),
-                'strategy': signal.get('strategy', ''),
-                'ai_score': signal.get('ai_score', 0),
-                'tech_score': signal.get('tech_score', 0),
-                'risk_score': signal.get('risk_score', 0),
-                'ensemble_decision': signal.get('ensemble_decision', ''),
-                'market_regime': state.get('estrategia', 'neutral')
-            })
+            if hasattr(signal, 'symbol'):
+                await persistent_logger.log_signal({
+                    'timestamp': datetime.now().isoformat(),
+                    'cycle_id': cycle_id,
+                    'symbol': signal.symbol,
+                    'side': signal.side,
+                    'confidence': signal.confidence,
+                    'quantity': getattr(signal, 'qty', 0),
+                    'stop_loss': getattr(signal, 'stop_loss', 0),
+                    'take_profit': getattr(signal, 'take_profit', 0),
+                    'signal_id': f'cycle_{cycle_id}_{signal.symbol}',
+                    'strategy': getattr(signal, 'signal_type', ''),
+                    'ai_score': 0,
+                    'tech_score': 0,
+                    'risk_score': 0,
+                    'ensemble_decision': '',
+                    'market_regime': state.get('estrategia', 'neutral')
+                })
         
         # Log datos de mercado
         for symbol in SYMBOLS:
             market_data = state['mercado'].get(symbol, {})
-            if market_data:
+            ohlcv = market_data.get('ohlcv', {})
+            indicators = market_data.get('indicators', {})
+            
+            if ohlcv:
                 await persistent_logger.log_market_data({
                     'symbol': symbol,
-                    'price': market_data.get('close', 0),
-                    'volume': market_data.get('volume', 0),
-                    'high': market_data.get('high', 0),
-                    'low': market_data.get('low', 0),
-                    'open': market_data.get('open', 0),
-                    'close': market_data.get('close', 0),
-                    'spread': 0,  # Puedes calcularlo si tienes bid/ask
+                    'price': ohlcv.get('close', 0),
+                    'volume': ohlcv.get('volume', 0),
+                    'high': ohlcv.get('high', 0),
+                    'low': ohlcv.get('low', 0),
+                    'open': ohlcv.get('open', 0),
+                    'close': ohlcv.get('close', 0),
+                    'spread': 0,
                     'liquidity': 0,
-                    'volatility': 0,
-                    'rsi': 0,
-                    'macd': 0,
-                    'bollinger_upper': 0,
-                    'bollinger_lower': 0
+                    'volatility': indicators.get('volatility', 0),
+                    'rsi': indicators.get('rsi', 0),
+                    'macd': indicators.get('macd', 0),
+                    'bollinger_upper': indicators.get('bb_upper', 0),
+                    'bollinger_lower': indicators.get('bb_lower', 0)
                 })
         
         # Log performance cada 10 ciclos
@@ -153,28 +262,56 @@ async def _run_loop():
             
             logger.info(f"[TICK] Iniciando ciclo {current_cycle}")
             
-            # PASO 0: Recolectar datos de mercado para cada símbolo
+            # PASO 0: Recolectar y procesar datos de mercado con indicadores técnicos
             for symbol in SYMBOLS:
-                df = data_feed.fetch_data(symbol)
-                if not df.empty:
-                    # Guardar el último precio y datos
-                    last_row = df.iloc[-1]
-                    state['mercado'][symbol] = {
-                        'close': last_row['close'],
-                        'open': last_row['open'],
-                        'high': last_row['high'],
-                        'low': last_row['low'],
-                        'volume': last_row['volume']
-                    }
-                    logger.debug(f"Datos mercado {symbol}: {last_row['close']}")
-                else:
-                    logger.warning(f"No se pudieron obtener datos para {symbol}")
+                try:
+                    # Obtener datos históricos (necesarios para indicadores)
+                    df = data_feed.fetch_data(symbol, limit=100)  # Obtener más datos para indicadores
+                    
+                    if not df.empty and len(df) > 20:  # Necesitamos al menos 20 períodos
+                        # Datos OHLCV básicos
+                        last_row = df.iloc[-1]
+                        ohlcv_data = {
+                            'close': float(last_row['close']),
+                            'open': float(last_row['open']),
+                            'high': float(last_row['high']),
+                            'low': float(last_row['low']),
+                            'volume': float(last_row['volume'])
+                        }
+                        
+                        # Calcular indicadores técnicos
+                        indicators = calculate_technical_indicators(df)
+                        
+                        # Preparar estructura completa de features
+                        market_features = prepare_market_features(ohlcv_data, indicators)
+                        
+                        # Guardar en state
+                        state['mercado'][symbol] = market_features
+                        
+                        logger.debug(f"✅ Features generadas para {symbol}: RSI={indicators.get('rsi', 0):.1f}, "
+                                   f"MACD={indicators.get('macd', 0):.3f}, VOL={indicators.get('vol_ratio', 0):.2f}")
+                        
+                    else:
+                        logger.warning(f"⚠️ Datos insuficientes para {symbol} (len={len(df)})")
+                        # Datos mínimos para evitar crashes
+                        state['mercado'][symbol] = {
+                            'ohlcv': {'close': 0, 'open': 0, 'high': 0, 'low': 0, 'volume': 0},
+                            'indicators': {},
+                            'change_24h': 0.0,
+                            'volatility': 0.0,
+                            'volume_ratio': 1.0,
+                            'timestamp': datetime.now().timestamp()
+                        }
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error procesando datos para {symbol}: {e}")
+                    continue
 
             logger.info("[L4] Ejecutando capa Meta...")
             logger.info("[L3] Ejecutando capa Strategy...")
             logger.info("[L2] Ejecutando capa Tactic...")
             
-            # PASO 1: Generar señales tácticas con L2
+            # PASO 1: Generar señales tácticas con L2 (ahora con features completas)
             signals = await l2_processor.process(state)
             state["senales"] = {"signals": signals, "orders": []}
             
