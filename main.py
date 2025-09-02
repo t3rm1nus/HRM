@@ -5,6 +5,7 @@ import logging
 import asyncio
 import pandas as pd
 import numpy as np
+import csv
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -13,10 +14,11 @@ from l2_tactic.main_processor import L2MainProcessor
 from l1_operational.order_manager import OrderManager
 from comms.config import SYMBOLS, USE_TESTNET
 from core.logging import setup_logger
+from core.persistent_logger import PersistentLogger
 from l2_tactic.config import L2Config
 from l2_tactic.models import TacticalSignal
 from l1_operational.order_manager import Signal
-
+from l2_tactic.signal_generator import L2TacticProcessor
 # Importar el logger persistente
 from core.persistent_logger import persistent_logger
 
@@ -31,14 +33,14 @@ load_dotenv()
 
 # Inicializar componentes
 data_feed = DataFeed()
-l2_processor = L2MainProcessor(config=config_l2)
+l2_processor = L2TacticProcessor(config=config_l2)
 l1_order_manager = OrderManager()
 
 # Estado global
 state = {
     "mercado": {symbol: {} for symbol in SYMBOLS}, 
     "estrategia": "neutral",
-    "portfolio": {symbol: 0.0 for symbol in SYMBOLS + ["USDT"]},
+    "portfolio": {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0},  # Inicializar con 3000 USDT
     "universo": SYMBOLS,
     "exposicion": {symbol: 0.0 for symbol in SYMBOLS},
     "senales": {},
@@ -280,6 +282,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
 def prepare_features_for_l2(state):
     """
     Prepara las features de los indicadores técnicos para que L2 las pueda usar.
+    Expandido a 52 features para compatibilidad con LightGBM.
     """
     try:
         features_by_symbol = {}
@@ -293,54 +296,108 @@ def prepare_features_for_l2(state):
         for symbol, indicators in state['indicadores_tecnicos'].items():
             symbol_features = {}
             
-            # Features de precio y tendencia
+            # Features de precio y tendencia (8 features)
             symbol_features.update({
                 'price_rsi': indicators.get('rsi', 50.0),
                 'price_macd': indicators.get('macd', 0.0),
                 'price_macd_signal': indicators.get('macd_signal', 0.0),
                 'price_macd_hist': indicators.get('macd_hist', 0.0),
                 'price_change_24h': indicators.get('change_24h', 0.0),
-            })
-            
-            # Features de medias móviles
-            current_price = state.get('mercado', {}).get(symbol, {}).get('price', 0)
-            if current_price and current_price > 0:
-                sma_20 = indicators.get('sma_20', current_price)
-                sma_10 = indicators.get('sma_10', current_price)
-                ema_10 = indicators.get('ema_10', current_price)
-                
-                symbol_features.update({
-                    'price_vs_sma20': (current_price - sma_20) / sma_20 if sma_20 > 0 else 0,
-                    'price_vs_sma10': (current_price - sma_10) / sma_10 if sma_10 > 0 else 0,
-                    'price_vs_ema10': (current_price - ema_10) / ema_10 if ema_10 > 0 else 0,
-                    'sma10_vs_sma20': (sma_10 - sma_20) / sma_20 if sma_20 > 0 else 0,
-                })
-            
-            # Features de volatilidad y volumen
-            symbol_features.update({
-                'volatility': indicators.get('volatility', 0.5),
+                'price_volatility': indicators.get('volatility', 0.5),
                 'volume_ratio': indicators.get('vol_ratio', 1.0),
+                'price_momentum': indicators.get('macd_hist', 0.0) * 100  # Momentum derivado
             })
             
-            # Features de Bollinger Bands
-            bb_upper = indicators.get('bb_upper', current_price * 1.05)
-            bb_lower = indicators.get('bb_lower', current_price * 0.95)
-            if current_price and bb_upper > bb_lower:
-                bb_position = (current_price - bb_lower) / (bb_upper - bb_lower)
-                symbol_features['bb_position'] = max(0, min(1, bb_position))
-            else:
-                symbol_features['bb_position'] = 0.5
+            # Features de medias móviles (12 features)
+            current_price = state.get('mercado', {}).get(symbol, {}).get('price', 50000)
+            sma_20 = indicators.get('sma_20', current_price)
+            sma_10 = indicators.get('sma_10', current_price)
+            ema_10 = indicators.get('ema_10', current_price)
+            ema_12 = indicators.get('ema_12', current_price)
             
-            # Señales básicas derivadas
             symbol_features.update({
-                'signal_rsi_oversold': 1.0 if indicators.get('rsi', 50) < 30 else 0.0,
-                'signal_rsi_overbought': 1.0 if indicators.get('rsi', 50) > 70 else 0.0,
-                'signal_macd_bullish': 1.0 if indicators.get('macd_hist', 0) > 0 else 0.0,
-                'signal_volume_high': 1.0 if indicators.get('vol_ratio', 1) > 1.5 else 0.0,
+                'sma_10': sma_10,
+                'sma_20': sma_20,
+                'ema_10': ema_10,
+                'ema_12': ema_12,
+                'price_vs_sma20': (current_price - sma_20) / sma_20 if sma_20 > 0 else 0,
+                'price_vs_sma10': (current_price - sma_10) / sma_10 if sma_10 > 0 else 0,
+                'price_vs_ema10': (current_price - ema_10) / ema_10 if ema_10 > 0 else 0,
+                'price_vs_ema12': (current_price - ema_12) / ema_12 if ema_12 > 0 else 0,
+                'sma10_vs_sma20': (sma_10 - sma_20) / sma_20 if sma_20 > 0 else 0,
+                'ema10_vs_ema12': (ema_10 - ema_12) / ema_12 if ema_12 > 0 else 0,
+                'ma_convergence': abs((sma_10 - ema_10) / current_price) if current_price > 0 else 0,
+                'ma_strength': (sma_10 + ema_10) / (2 * current_price) if current_price > 0 else 1
             })
+            
+            # Features de Bollinger Bands (8 features)
+            bb_upper = indicators.get('bb_upper', current_price * 1.02)
+            bb_lower = indicators.get('bb_lower', current_price * 0.98)
+            bb_middle = (bb_upper + bb_lower) / 2
+            bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0
+            
+            symbol_features.update({
+                'bb_upper': bb_upper,
+                'bb_lower': bb_lower,
+                'bb_middle': bb_middle,
+                'bb_width': bb_width,
+                'bb_position': (current_price - bb_lower) / (bb_upper - bb_lower) if bb_upper > bb_lower else 0.5,
+                'bb_squeeze': 1.0 if bb_width < 0.1 else 0.0,
+                'bb_breakout_upper': 1.0 if current_price > bb_upper else 0.0,
+                'bb_breakout_lower': 1.0 if current_price < bb_lower else 0.0
+            })
+            
+            # Señales básicas derivadas (10 features)
+            rsi_val = indicators.get('rsi', 50.0)
+            symbol_features.update({
+                'signal_rsi_oversold': 1.0 if rsi_val < 30 else 0.0,
+                'signal_rsi_overbought': 1.0 if rsi_val > 70 else 0.0,
+                'signal_rsi_neutral': 1.0 if 30 <= rsi_val <= 70 else 0.0,
+                'signal_macd_bullish': 1.0 if indicators.get('macd_hist', 0) > 0 else 0.0,
+                'signal_macd_bearish': 1.0 if indicators.get('macd_hist', 0) < 0 else 0.0,
+                'signal_volume_high': 1.0 if indicators.get('vol_ratio', 1) > 1.5 else 0.0,
+                'signal_volume_low': 1.0 if indicators.get('vol_ratio', 1) < 0.8 else 0.0,
+                'signal_trend_up': 1.0 if sma_10 > sma_20 and current_price > sma_10 else 0.0,
+                'signal_trend_down': 1.0 if sma_10 < sma_20 and current_price < sma_10 else 0.0,
+                'signal_consolidation': 1.0 if abs((sma_10 - sma_20) / sma_20) < 0.01 else 0.0
+            })
+            
+            # Features adicionales de volatilidad y momentum (8 features)
+            volatility_val = indicators.get('volatility', 0.5)
+            symbol_features.update({
+                'volatility_norm': min(volatility_val / 2.0, 1.0),  # Normalizada
+                'volatility_high': 1.0 if volatility_val > 1.0 else 0.0,
+                'volatility_low': 1.0 if volatility_val < 0.3 else 0.0,
+                'momentum_rsi': (rsi_val - 50) / 50,  # RSI normalizado
+                'momentum_macd': indicators.get('macd', 0.0) / max(abs(indicators.get('macd', 0.001)), 0.001),
+                'price_acceleration': indicators.get('macd_hist', 0.0) - indicators.get('macd', 0.0),
+                'trend_strength': abs(indicators.get('macd_hist', 0.0)),
+                'market_pressure': (indicators.get('vol_ratio', 1.0) - 1.0) * (rsi_val - 50) / 50
+            })
+            
+            # Features de contexto de mercado (6 features)
+            symbol_features.update({
+                'current_price': current_price,
+                'price_normalized': current_price / max(current_price, 1000),  # Normalizado
+                'session_progress': 0.5,  # Progreso de la sesión (placeholder)
+                'market_cap_factor': 1.0 if 'BTC' in symbol else 0.5,  # Factor de capitalización
+                'liquidity_score': min(indicators.get('vol_ratio', 1.0), 3.0) / 3.0,
+                'risk_score': min(volatility_val, 2.0) / 2.0
+            })
+            
+            # Verificar que tenemos exactamente 52 features
+            current_count = len(symbol_features)
+            if current_count < 52:
+                # Añadir features de relleno si es necesario
+                for i in range(52 - current_count):
+                    symbol_features[f'feature_padding_{i}'] = 0.0
+                    
+            elif current_count > 52:
+                # Limitar a 52 features si tenemos más
+                symbol_features = dict(list(symbol_features.items())[:52])
             
             features_by_symbol[symbol] = symbol_features
-            logger.info(f"✅ Features preparadas para {symbol}: {len(symbol_features)} features")
+            logger.info(f"✅ Features preparadas para {symbol}: {len(symbol_features)} features (objetivo: 52)")
         
         return features_by_symbol
         
@@ -537,6 +594,219 @@ def validate_state_structure(state):
                 state[key] = False
     
     return state
+
+async def save_portfolio_to_csv(state, total_value, btc_balance, btc_value, eth_balance, eth_value, usdt_balance, cycle_id):
+    """
+    Guarda la línea del portfolio en un CSV externo para seguimiento histórico.
+    
+    Args:
+        state: Estado del sistema
+        total_value: Valor total del portfolio en USDT
+        btc_balance: Balance de BTC
+        btc_value: Valor de BTC en USDT
+        eth_balance: Balance de ETH  
+        eth_value: Valor de ETH en USDT
+        usdt_balance: Balance de USDT
+        cycle_id: ID del ciclo actual
+    """
+    try:
+        # Crear directorio si no existe
+        csv_dir = "data/portfolio"
+        os.makedirs(csv_dir, exist_ok=True)
+        
+        # Nombre del archivo CSV con fecha
+        today_date = datetime.now().strftime("%Y%m%d")
+        csv_file = os.path.join(csv_dir, f"portfolio_history_.csv")
+        
+        # Datos a guardar
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Obtener precios actuales para referencia
+        btc_price = state['mercado'].get('BTCUSDT', {}).get('price', 0)
+        eth_price = state['mercado'].get('ETHUSDT', {}).get('price', 0)
+        
+        portfolio_data = {
+            'timestamp': timestamp,
+            'cycle_id': cycle_id,
+            'total_value_usdt': round(total_value, 2),
+            'btc_balance': round(btc_balance, 8),
+            'btc_value_usdt': round(btc_value, 2),
+            'btc_price': round(btc_price, 2),
+            'eth_balance': round(eth_balance, 6),
+            'eth_value_usdt': round(eth_value, 2),
+            'eth_price': round(eth_price, 2),
+            'usdt_balance': round(usdt_balance, 2),
+            'portfolio_line': f"PORTFOLIO TOTAL: {total_value:.2f} USDT | BTC: {btc_balance:.5f} ({btc_value:.2f}$) | ETH: {eth_balance:.3f} ({eth_value:.2f}$) | USDT: {usdt_balance:.2f}$"
+        }
+        
+        # Verificar si el archivo existe para añadir headers
+        file_exists = os.path.exists(csv_file)
+        
+        # Escribir al CSV
+        with open(csv_file, 'a', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=portfolio_data.keys())
+            
+            # Escribir header solo si el archivo es nuevo
+            if not file_exists:
+                writer.writeheader()
+                logger.info(f"Archivo CSV creado: {csv_file}")
+            
+            # Escribir datos
+            writer.writerow(portfolio_data)
+        
+        # Log cada 10 ciclos para no saturar
+        if cycle_id % 10 == 0:
+            logger.info(f"Portfolio guardado en CSV: {csv_file}")
+            
+    except Exception as e:
+        logger.error(f"Error guardando portfolio en CSV: {e}")
+
+
+async def update_portfolio_from_orders(state, orders):
+    """
+    Actualiza el portfolio basado en las órdenes ejecutadas.
+    
+    Args:
+        state: Estado del sistema
+        orders: Lista de órdenes procesadas
+    """
+    try:
+        if not orders:
+            logger.debug("No hay órdenes para procesar")
+            return
+        
+        logger.info(f"Procesando {len(orders)} órdenes para actualizar portfolio...")
+        
+        portfolio_changes = {}
+        orders_processed = 0
+        
+        for order in orders:
+            # Debug: mostrar estructura de la orden
+            logger.debug(f"Procesando orden: {type(order)} - {order}")
+            
+            # Diferentes formas de acceder a los atributos según el tipo de objeto
+            try:
+                # Intentar obtener atributos de diferentes maneras
+                if hasattr(order, 'symbol'):
+                    symbol = order.symbol
+                elif hasattr(order, 'get') and callable(order.get):
+                    symbol = order.get('symbol')
+                else:
+                    symbol = str(order).split()[1] if len(str(order).split()) > 1 else None
+                
+                if hasattr(order, 'status'):
+                    status = order.status
+                elif hasattr(order, 'get') and callable(order.get):
+                    status = order.get('status')
+                else:
+                    # Buscar "filled" en la representación string
+                    status = 'filled' if 'filled' in str(order) else 'unknown'
+                
+                if hasattr(order, 'side'):
+                    side = order.side
+                elif hasattr(order, 'get') and callable(order.get):
+                    side = order.get('side')
+                else:
+                    # Buscar "buy" o "sell" en la representación string
+                    order_str = str(order).lower()
+                    if 'buy' in order_str:
+                        side = 'buy'
+                    elif 'sell' in order_str:
+                        side = 'sell'
+                    else:
+                        side = 'unknown'
+                
+                # Obtener cantidad de diferentes formas
+                quantity = 0
+                for attr_name in ['qty', 'quantity', 'amount', 'size']:
+                    if hasattr(order, attr_name):
+                        quantity = getattr(order, attr_name, 0)
+                        break
+                
+                # Si no encontramos quantity, buscar en string
+                if quantity == 0:
+                    import re
+                    match = re.search(r'(\d+\.?\d*)', str(order))
+                    if match:
+                        quantity = float(match.group(1))
+                
+                # Obtener precio del mercado actual
+                price = 0
+                if symbol and symbol in state.get('mercado', {}):
+                    price = state['mercado'][symbol].get('price', 0)
+                    if price == 0:
+                        price = state['mercado'][symbol].get('ohlcv', {}).get('close', 0)
+                
+                logger.info(f"Orden extraída: symbol={symbol}, status={status}, side={side}, "
+                           f"quantity={quantity}, price={price}")
+                
+            except Exception as extract_error:
+                logger.error(f"Error extrayendo datos de orden: {extract_error}")
+                continue
+            
+            # Validar datos extraídos
+            if not all([symbol, status, side, quantity > 0, price > 0]):
+                logger.warning(f"Orden incompleta ignorada: symbol={symbol}, status={status}, "
+                              f"side={side}, qty={quantity}, price={price}")
+                continue
+            
+            # Solo procesar órdenes completadas exitosamente
+            if status.lower() != 'filled':
+                logger.debug(f"Orden no completada, status: {status}")
+                continue
+            
+            # Calcular cambios en el portfolio
+            if side.lower() == 'buy':
+                # Comprar: reducir USDT, aumentar activo base
+                usdt_cost = quantity * price
+                
+                # Verificar que tenemos suficiente USDT
+                current_usdt = state['portfolio'].get('USDT', 0)
+                if current_usdt >= usdt_cost:
+                    portfolio_changes['USDT'] = portfolio_changes.get('USDT', 0) - usdt_cost
+                    portfolio_changes[symbol] = portfolio_changes.get(symbol, 0) + quantity
+                    
+                    logger.info(f"✅ COMPRA ejecutada: {quantity:.5f} {symbol} a {price:.2f}$ "
+                               f"(costo: {usdt_cost:.2f} USDT)")
+                    orders_processed += 1
+                else:
+                    logger.warning(f"❌ Compra cancelada: USDT insuficiente "
+                                 f"({current_usdt:.2f} < {usdt_cost:.2f})")
+            
+            elif side.lower() == 'sell':
+                # Vender: aumentar USDT, reducir activo base
+                current_asset = state['portfolio'].get(symbol, 0)
+                if current_asset >= quantity:
+                    usdt_received = quantity * price
+                    portfolio_changes['USDT'] = portfolio_changes.get('USDT', 0) + usdt_received
+                    portfolio_changes[symbol] = portfolio_changes.get(symbol, 0) - quantity
+                    
+                    logger.info(f"✅ VENTA ejecutada: {quantity:.5f} {symbol} a {price:.2f}$ "
+                               f"(recibido: {usdt_received:.2f} USDT)")
+                    orders_processed += 1
+                else:
+                    logger.warning(f"❌ Venta cancelada: {symbol} insuficiente "
+                                 f"({current_asset:.5f} < {quantity:.5f})")
+        
+        # Aplicar cambios al portfolio
+        if portfolio_changes:
+            logger.info(f"Aplicando cambios al portfolio: {portfolio_changes}")
+            for asset, change in portfolio_changes.items():
+                current_balance = state['portfolio'].get(asset, 0)
+                new_balance = max(0, current_balance + change)  # No permitir saldos negativos
+                state['portfolio'][asset] = new_balance
+                
+                if change != 0:
+                    change_str = f"{'+'if change > 0 else ''}{change:.6f}"
+                    logger.info(f"📊 Portfolio actualizado: {asset} {current_balance:.6f} -> {new_balance:.6f} ({change_str})")
+        else:
+            logger.info("No se realizaron cambios en el portfolio")
+        
+        logger.info(f"Portfolio update completado: {orders_processed} órdenes procesadas")
+    
+    except Exception as e:
+        logger.error(f"❌ Error actualizando portfolio: {e}", exc_info=True)
+
 async def log_cycle_data(state: dict, cycle_id: int, start_time: float):
     """Loggear todos los datos del ciclo."""
     try:
@@ -758,9 +1028,9 @@ async def _run_loop(state):
                     }
                     continue
 
-            logger.info(f"✅ Datos de mercado actualizados para {len(processed_symbols)} símbolos")
             
-            # ===== PASO 0.5: PREPARAR INDICADORES TÉCNICOS PARA STATE =====
+            
+            # ===== PASO 0.5: PREPARAR INDICADORES TÉCNICOS STATE =====
             # Crear estructura de indicadores técnicos separada para compatibilidad
             state['indicadores_tecnicos'] = {}
             for symbol in state['mercado'].keys():
@@ -769,7 +1039,9 @@ async def _run_loop(state):
                 else:
                     state['indicadores_tecnicos'][symbol] = {}
             
+            logger.info(f"✅ Datos de mercado actualizados para {len(processed_symbols)} símbolos")
             logger.info(f"✅ Indicadores técnicos preparados para {len(state['indicadores_tecnicos'])} símbolos")
+            logger.debug(f"📊 Contenido de indicadores: {state['indicadores_tecnicos']}")
             
             # ===== PASO 1: PREPARAR FEATURES PARA L2 =====
             logger.info("[FEATURES] Preparando features para L2...")
@@ -802,16 +1074,16 @@ async def _run_loop(state):
             
             # PASO 2.1: Generar señales tácticas con L2 (ahora con features completas)
             try:
-                signals = await l2_processor.process(state)
-                state["senales"] = {"signals": signals, "orders": []}
+                l2_result = await l2_processor.process(state=state, market_data=state["mercado"], features_by_symbol=state.get("features", {}))
+                signals = l2_result.get("signals", [])  # Extraer señales del diccionario
                 
-                logger.info(f"[L2] Señales generadas: {len(signals)}")
+                # Guardar señales y órdenes en el estado
+                state["senales"] = {"signals": signals, "orders": l2_result.get("orders_for_l1", [])}
                 
-                # Log adicional sobre las señales generadas
                 if signals:
                     signal_types = {}
                     for signal in signals:
-                        signal_type = getattr(signal, 'action', 'unknown')
+                        signal_type = getattr(signal, 'side', 'unknown')  # Usar 'side' en lugar de 'action'
                         symbol = getattr(signal, 'symbol', 'unknown')
                         signal_types[f"{symbol}_{signal_type}"] = signal_types.get(f"{symbol}_{signal_type}", 0) + 1
                     
@@ -820,7 +1092,7 @@ async def _run_loop(state):
                     logger.info("[L2] No se generaron señales tácticas")
                     
             except Exception as l2_error:
-                logger.error(f"❌ Error en L2 Processor: {l2_error}")
+                logger.error(f"❌ Error en L2 Processor: {l2_error}", exc_info=True)
                 signals = []
                 state["senales"] = {"signals": [], "orders": []}
 
@@ -830,7 +1102,7 @@ async def _run_loop(state):
             
             # Validar portfolio existe
             if 'portfolio' not in state:
-                state['portfolio'] = {'BTC': 0.0, 'ETH': 0.0, 'USDT': 10000.0}
+                state['portfolio'] = {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0}
                 logger.info("✅ Portfolio inicializado con valores por defecto")
             
             logger.info("[L1] Ejecutando capa Operational...")
@@ -846,7 +1118,7 @@ async def _run_loop(state):
                         orders.append(order_report)
                         processed_signals += 1
                         
-                        logger.debug(f"✅ Señal procesada: {signal.symbol} {signal.action}")
+                        logger.debug(f"✅ Señal procesada: {signal.symbol} {signal.side}")
                         
                     else:
                         logger.warning(f"⚠️ Se ignoró objeto no válido: {type(signal)}")
@@ -858,6 +1130,47 @@ async def _run_loop(state):
             state["ordenes"] = orders
             logger.info(f"[L1] Órdenes procesadas: {len(orders)} de {len(signals)} señales")
             
+            # DEBUG: Mostrar detalles de las órdenes antes de actualizar portfolio
+            if orders:
+                logger.info("=== DEBUG ÓRDENES ===")
+                for i, order in enumerate(orders):
+                    logger.info(f"Orden {i}: {type(order)} - {order}")
+                    # Intentar mostrar atributos disponibles
+                    if hasattr(order, '__dict__'):
+                        logger.info(f"  Atributos: {order.__dict__}")
+                logger.info("=== END DEBUG ÓRDENES ===")
+            
+            # Actualizar portfolio basado en órdenes ejecutadas
+            await update_portfolio_from_orders(state, orders)
+            
+            # Log del Portfolio con color azul oscuro
+            btc_balance = state['portfolio'].get('BTCUSDT', 0)
+            eth_balance = state['portfolio'].get('ETHUSDT', 0)
+            usdt_balance = state['portfolio'].get('USDT', 0)
+
+            # Obtener precios actuales
+            btc_price = state['mercado'].get('BTCUSDT', {}).get('price', 0)
+            eth_price = state['mercado'].get('ETHUSDT', {}).get('price', 0)
+
+            # Calcular valor total
+            btc_value_usdt = btc_balance * btc_price
+            eth_value_usdt = eth_balance * eth_price
+            total_portfolio_value = btc_value_usdt + eth_value_usdt + usdt_balance
+
+            # Log con color azul oscuro
+            logger.info(f"\033[34m\033[1mPORTFOLIO TOTAL: {total_portfolio_value:.2f} USDT | "
+                    f"BTC: {btc_balance:.5f} ({btc_value_usdt:.2f}$) | "
+                    f"ETH: {eth_balance:.3f} ({eth_value_usdt:.2f}$) | "
+                    f"USDT: {usdt_balance:.2f}$\033[0m")
+            
+            # Guardar portfolio en CSV
+            try:
+                await save_portfolio_to_csv(
+                    state, total_portfolio_value, btc_balance, btc_value_usdt, 
+                    eth_balance, eth_value_usdt, usdt_balance, current_cycle
+                )
+            except Exception as csv_error:
+                logger.error(f"Error guardando portfolio en CSV: {csv_error}")
             if orders:
                 # Log resumen de órdenes
                 order_summary = {}
@@ -924,7 +1237,7 @@ async def _run_loop(state):
                 if 'mercado' not in state:
                     state['mercado'] = {}
                 if 'portfolio' not in state:
-                    state['portfolio'] = {'BTC': 0.0, 'ETH': 0.0, 'USDT': 10000.0}
+                    state['portfolio'] = {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0}
                     
                 logger.info("✅ State básico reinicializado después del error")
                 
@@ -951,7 +1264,7 @@ async def main():
         state = {
             'mercado': {symbol: {} for symbol in SYMBOLS},
             'estrategia': 'neutral',
-            'portfolio': {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 0.0},
+            'portfolio': {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0},  # Inicializar con 3000 USDT
             'universo': SYMBOLS,
             'exposicion': {symbol: 0.0 for symbol in SYMBOLS},
             'senales': {},
@@ -969,11 +1282,11 @@ async def main():
         
         # DataFeed
         data_feed = DataFeed()
-        await data_feed.initialize()
+        await data_feed.start()
         logger.info("✅ DataFeed iniciado")
         
         # L2 Processor
-        l2_processor = L2TacticProcessor()
+        l2_processor = L2TacticProcessor(config=L2Config())
         logger.info("✅ L2 Processor iniciado")
         
         # L1 Order Manager

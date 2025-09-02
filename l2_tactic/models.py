@@ -22,19 +22,28 @@ class SignalSource(Enum):
 
 @dataclass
 class TacticalSignal:
-    symbol: str
-    side: str
-    strength: float
-    confidence: float
-    price: float
-    timestamp: datetime = field(default_factory=lambda: pd.Timestamp.now(tz="UTC"))
-    horizon: str = "1h"
-    source: str = "l2_tactical"
-    model_name: Optional[str] = None
-    features_used: Dict[str, float] = field(default_factory=dict)
-    reasoning: Optional[str] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
+    def __init__(self, 
+                 symbol: str,
+                 strength: float,
+                 confidence: float,
+                 side: str,
+                 signal_type: str = None,
+                 features: dict = None,
+                 timestamp = None,                 
+                 metadata: dict = None,
+                 **kwargs):  # Agregar **kwargs para argumentos adicionales
+        self.symbol = symbol
+        self.strength = strength
+        self.confidence = confidence
+        self.side = side
+        self.signal_type = signal_type or side
+        self.features = features or {}
+        self.timestamp = timestamp or pd.Timestamp.now()
+        self.metadata = metadata or {}
+        
+        # Manejar argumentos adicionales como signal_type
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def is_long(self) -> bool:
         return self.side.lower() == "buy"
@@ -112,7 +121,14 @@ class L2State:
     signals: List[TacticalSignal] = field(default_factory=list)
     metrics: Dict = field(default_factory=dict)
     last_update: Optional[datetime] = None
-
+    def __post_init__(self):
+        if self.signals is None:
+            self.signals = []
+        if self.metrics is None:
+            self.metrics = {}
+        # Nuevo: evitar fallo si se instancia sin señales
+        if not hasattr(self, "signals") or self.signals is None:
+            self.signals = []
     def add_signal(self, signal: TacticalSignal) -> None:
         self.signals.append(signal)
         self.last_update = datetime.utcnow()

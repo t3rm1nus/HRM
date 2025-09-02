@@ -14,9 +14,10 @@ from .position_sizer import PositionSizerManager
 from .technical.multi_timeframe import resample_and_consensus
 from .ensemble import VotingEnsemble, BlenderEnsemble
 from .metrics import L2Metrics
-from .models import TacticalSignal, PositionSize
+from .models import TacticalSignal, PositionSize, L2State
 from .finrl_integration import FinRLProcessor
 # from finrl_final_fix import FinRLPredictor  # REMOVIDO: usar AIModelWrapper
+from datetime import datetime
 
 class L2MainProcessor:
     """
@@ -54,37 +55,92 @@ class L2MainProcessor:
             )
 
     # ------------------------------------------------------------------ #
-    async def process(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        logger.info("[L2] Ejecutando capa Tactic...")
+    async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ejecuta la capa Tactic:
+        - Genera señales (AI, técnico, riesgo)
+        - Combina señales con composer + ensemble
+        - Calcula tamaño de posición y convierte a órdenes
+        - Guarda señales y órdenes en state['l2']
+        - Devuelve dict: {"signals", "orders", "metadata"}
+        """
+        try:
+            logger.info("[L2] Ejecutando capa Tactic...")
 
-        # Generar señales de AI, técnicas y de riesgo de forma independiente
-        ai_signals = await self.generator.ai_signals(state)
-        tech_signals = await self.generator.technical_signals(state)
-        risk_signals = await self.generator.risk_overlay.generate_risk_signals(state['mercado'], state['portfolio'])
+            # --- Generar señales ---
+            try:
+                ai_signals = await self.generator.ai_signals(state) or []
+            except Exception as e:
+                logger.error(f"[L2] Error en ai_signals: {e}")
+                ai_signals = []
 
-        # Combinar señales
-        all_signals = [s for s in ai_signals] + [s for s in tech_signals] + [s for s in risk_signals]
+            try:
+                tech_signals = await self.generator.technical_signals(state) or []
+            except Exception as e:
+                logger.error(f"[L2] Error en technical_signals: {e}")
+                tech_signals = []
 
-        # Componer señales
-        composed_signals = self.composer.compose(all_signals)
+            try:
+                risk_signals = await self.generator.risk_overlay.generate_risk_signals(
+                    state.get('mercado', {}), state.get('portfolio', {})
+                ) or []
+            except Exception as e:
+                logger.error(f"[L2] Error en risk_signals: {e}")
+                risk_signals = []
 
-        # Ensamblar señales
-        combined = self.ensemble.blend(composed_signals)
+            # --- Combinar señales ---
+            all_signals = ai_signals + tech_signals + risk_signals
+            composed_signals = self.composer.compose(all_signals) if all_signals else []
+            combined = self.ensemble.blend(composed_signals) if composed_signals else []
 
-        # Convertir a órdenes
-        orders = []
-        if combined:
-            ps = await self.sizer.calculate_position_size(
-                signal=combined,
-                portfolio_state=state['portfolio'],
-                market_features=state['mercado']
-            )
+            # --- Convertir a órdenes ---
+            orders = []
+            if combined:
+                try:
+                    ps = await self.sizer.calculate_position_size(
+                        signal=combined,
+                        portfolio_state=state.get('portfolio', {}),
+                        market_features=state.get('mercado', {})
+                    )
+                    if ps and getattr(ps, "size", 0) > 0:
+                        orders.append(self._create_order_dict(ps))
+                except Exception as e:
+                    logger.error(f"[L2] Error calculando tamaño de posición: {e}")
 
-            if ps and ps.size > 0:
-                orders.append(self._create_order_dict(ps))
+            # --- Guardar estado L2 ---
+            now = datetime.utcnow()
+            try:
+                l2_state = state.get('l2')
+                if l2_state is None:
+                    state['l2'] = {"signals": combined, "orders": orders, "last_update": now}
+                else:
+                    if hasattr(l2_state, "signals"):
+                        l2_state.signals = combined
+                        l2_state.orders = orders
+                        l2_state.last_update = now
+                    else:
+                        state['l2'] = {"signals": combined, "orders": orders, "last_update": now}
+            except Exception as e:
+                logger.error(f"[L2] Error sincronizando señales: {e}")
+                state['l2'] = {"signals": combined, "orders": orders, "last_update": now}
 
-        logger.info(f"[L2] Preparadas {len(orders)} órdenes para L1 (todas con SL)")
-        return orders
+            logger.info(f"[L2] Preparadas {len(orders)} órdenes para L1, total señales={len(combined)}")
+
+            return {
+                "signals": combined,
+                "orders": orders,
+                "metadata": {
+                    "ai_signals": len(ai_signals),
+                    "technical_signals": len(tech_signals),
+                    "risk_signals": len(risk_signals),
+                    "total_signals": len(all_signals)
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"[L2] Error crítico en process(): {e}")
+            state['l2'] = {"signals": [], "orders": [], "last_update": datetime.utcnow()}
+            return {"signals": [], "orders": [], "metadata": {"error": str(e)}}
 
     # ------------------------------------------------------------------ #
     async def _generate_signals(self, state: Dict[str, Any]) -> List[TacticalSignal]:
@@ -107,7 +163,10 @@ class L2MainProcessor:
             
             # Log detallado para debugging
             logger.info(f"[L2] Señales generadas: AI={len(ai_signals)}, Tech={len(tech_signals)}, Risk={len(risk_signals)}, Total={len(all_signals)}")
-            
+            signals = getattr(state.get('l2'), 'signals', []) or []
+            logger.info(f"main_processor.py: [L2] Señales generadas: {len(signals)}")
+            if not signals:
+                logger.info("[L2] No se generaron señales tácticas")
             return all_signals
             
         except Exception as e:

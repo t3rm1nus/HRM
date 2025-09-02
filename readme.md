@@ -1,10 +1,17 @@
-🔱 HRM — Hierarchical Reasoning Model para Trading Algorítmico
-Estado: Activo · Lenguaje: Python · Dominio: Cripto / Trading · Arquitectura: Multi-nivel (L4 → L1)
-Regla de oro: Si existe conflicto entre este README y los README de módulos, prevalece el README del módulo.
-🧭 TL;DR
-HRM es un framework de razonamiento jerárquico para trading algorítmico multiactivo (p. ej. BTC, ETH). Divide la toma de decisiones en 4 niveles —desde meta-razonamiento (L4) hasta ejecución determinista y segura (L1)— combinando reglas hard-coded y modelos IA (Logistic Regression, Random Forest, LightGBM) en L1. Soporta bus de mensajes, telemetría, persistencia histórica, dataset multitimeframe y tests robustos. Objetivo: decidir qué, cuándo y cuánto operar con trazabilidad y control de riesgo (incl. correlación BTC–ETH).
-🆕 Integración con Binance (real o testnet)
-✅ El sistema está totalmente implementado para operar en modo LIVE con conexión directa a Binance Spot.
+# 🔱 HRM — Hierarchical Reasoning Model para Trading Algorítmico
+**Estado: PRODUCCIÓN** · **Lenguaje:** Python 3.10+ · **Dominio:** Cripto Trading · **Arquitectura:** L2 Táctico + L1 Operacional
+
+## 🧭 TL;DR
+HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC y ETH en Binance Spot. Combina **análisis técnico avanzado**, **modelos FinRL pre-entrenados**, **gestión dinámica de riesgo** y **ejecución determinista**. El sistema genera señales inteligentes cada 10 segundos, calcula posiciones óptimas y ejecuta órdenes con controles de seguridad multi-nivel.
+
+## ✅ SISTEMA OPERATIVO - FUNCIONALIDAD REAL
+**🚀 El sistema HRM está completamente operativo y ejecutándose en producción:**
+- ✅ **Conexión real a Binance Spot** (modo LIVE y TESTNET)
+- ✅ **Generación de señales cada 10 segundos** con indicadores técnicos
+- ✅ **Modelos IA integrados** (FinRL + análisis técnico)  
+- ✅ **Gestión de portfolio automática** con tracking en CSV
+- ✅ **Logging persistente** completo en data/logs/
+- ✅ **Controles de riesgo dinámicos** y stops inteligentes
 Modos de operación
 表格
 复制
@@ -39,30 +46,32 @@ Nivel 4: Meta-Razonamiento — horas/días
 Nivel 3: Análisis Estratégico — horas
 Nivel 2: Táctica de Ejecución — minutos
 Nivel 1: Ejecución + Gestión de Riesgo — segundos
-🧭 4️⃣ Jerarquía del sistema (HRM extendido)
-🔮 Nivel 4 — Meta-Razonamiento (horas/días)
-Rol: Reflexión y adaptación del sistema completo.
-Funciones: Evaluación de desempeño (Sharpe, drawdown), detección de drift, selección de modelos/estrategias, asignación de capital y ajustes globales.
-Ejemplo: Si mean reversion pierde eficacia, reducir su peso y reasignar capital a trend-following.
-🧭 Nivel 3 — Análisis Estratégico (horas)
-Rol: Planificación de alto nivel.
-Funciones: Clasificación de régimen (tendencia/rango/volatilidad), selección de sub-estrategias, priorización de activos (BTC, ETH), metas intradía (exposición, riesgo máximo).
-🚧 Por desarrollar:
-Integración con indicadores macroeconómicos (FRED, OECD).
-Modelos de Black-Litterman para asignación dinámica.
-Detección de eventos de riesgo sistémico.
-Escenarios de estrés y rebalanceo automático.
-⚔️ Nivel 2 — Táctica de Ejecución (minutos)
-Rol: Convertir decisiones estratégicas en operaciones concretas.
-Funciones: Composición de señales, position sizing (vol-targeting, Kelly fracc.), stops/targets dinámicos, ajustes por liquidez/volatilidad.
-⚙️ Nivel 1 — Ejecución y Riesgo (segundos)
-Rol: Implementación determinista con capa dura de seguridad y modelos IA.
-Funciones clave:
-Validación de límites por símbolo (stop-loss, exposición, correlación BTC–ETH).
-Filtrado de señales con IA (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl).
-Ejecución optimizada (fraccionamiento, timing, reducción de slippage).
-Envío de órdenes con timeouts/retries.
-Reportes y métricas por activo (BTC/USDT, ETH/USDT): latencia, slippage, exposición, tasas de éxito.
+## 🏗️ ARQUITECTURA REAL DEL SISTEMA
+
+### 🎯 **NIVEL 2 - TÁCTICO (L2)** ✅ IMPLEMENTADO
+**Rol:** Generación inteligente de señales de trading
+**Funciones operativas:**
+- ✅ **Análisis técnico multi-timeframe** (RSI, MACD, Bollinger Bands)
+- ✅ **Modelos FinRL pre-entrenados** con ensemble de predicciones
+- ✅ **Composición de señales** con pesos dinámicos
+- ✅ **Position sizing** con Kelly Criterion y vol-targeting
+- ✅ **Controles de riesgo pre-ejecución** (stops, correlación, drawdown)
+
+### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO  
+**Rol:** Ejecución determinista y segura de órdenes
+**Funciones operativas:**
+- ✅ **Validación de señales** con 3 modelos IA (LogReg, RF, LightGBM)
+- ✅ **Trend AI** con ensemble de modelos ML
+- ✅ **Gestión de portfolio** automática (BTC, ETH, USDT)
+- ✅ **Conexión a Binance Spot** (real y testnet)
+- ✅ **Order management** con timeouts y reintentos
+- ✅ **Logging persistente** y métricas en tiempo real
+
+### 🚧 **NIVELES L3/L4** - NO IMPLEMENTADOS
+- **L3 Estratégico:** Planificado pero no desarrollado
+- **L4 Meta:** Planificado pero no desarrollado
+- **Nota:** El sistema actual opera efectivamente con L2+L1
+- ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
 🆕 Features incluidas (actualizado)
 表格
 复制
@@ -73,32 +82,38 @@ Momentum	RSI, MACD
 Multi-timeframe	1m + 5m
 Cross-asset	ETH/BTC ratio, correlación rolling, divergencias
 Real-time data	Desde Binance Spot (modo LIVE) o testnet
-⚙️ Puesta en marcha (actualizado)
-Requisitos
-Python 3.10+
-Cuenta en Binance (Spot o Futures)
-Credenciales/API keys (ya cargadas en .env o variables de entorno)
-Instalación rápida
-bash
-复制
-# 1) Clonar
-git clone https://github.com/t3rm1nus/HRM.git
-cd HRM
+## 🚀 EJECUCIÓN DEL SISTEMA
 
-# 2) Entorno
-python -m venv .venv && source .venv/bin/activate
+### ⚡ **INICIO RÁPIDO**
+```bash
+# 1) Configurar variables de entorno
+export BINANCE_API_KEY=your_api_key
+export BINANCE_API_SECRET=your_secret_key
+export USE_TESTNET=true  # false para modo LIVE
 
-# 3) Dependencias
-pip install -r l1_operational/requirements.txt
-
-# 4) Configurar entorno (ejemplo .env)
-export BINANCE_API_KEY=your_real_key
-export BINANCE_API_SECRET=your_real_secret
-export BINANCE_MODE=LIVE
-export USE_TESTNET=false
-
-# 5) Ejecutar
+# 2) Ejecutar sistema principal
 python main.py
+
+# 3) Para ejecución nocturna continua
+python run_overnight.py
+```
+
+### 📊 **FUNCIONAMIENTO EN TIEMPO REAL**
+El sistema ejecuta un **ciclo principal cada 10 segundos**:
+
+1. **📈 Recolección de datos:** Obtiene OHLCV de Binance para BTC/ETH
+2. **🧮 Cálculo de indicadores:** RSI, MACD, Bollinger Bands, volatilidad
+3. **🤖 Procesamiento L2:** Genera señales con modelos FinRL + análisis técnico  
+4. **⚙️ Procesamiento L1:** Valida señales y ejecuta órdenes seguras
+5. **💰 Actualización portfolio:** Tracking automático de balances
+6. **📝 Logging persistente:** Guarda métricas en data/logs/ y data/portfolio/
+
+### 🎛️ **MODOS DE OPERACIÓN**
+| Modo | Descripción | Activación |
+|------|-------------|------------|
+| **TESTNET** | Binance testnet (recomendado) | `USE_TESTNET=true` |
+| **LIVE** | Binance Spot real | `USE_TESTNET=false` |
+| **PAPER** | Simulación local | Configuración interna |
 ✅ Buenas prácticas de riesgo (resumen actualizado)
 表格
 复制

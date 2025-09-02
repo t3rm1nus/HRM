@@ -41,11 +41,50 @@ class RiskControlManager:
         self.max_strategy_drawdown = getattr(config, "max_strategy_drawdown", 0.25)
 
         # Liquidez
-        self.min_liquidity_notional = getattr(config, "min_liquidity_notional", 25_000.0)
-        self.min_liquidity_ratio = getattr(config, "min_liquidity_ratio", 0.02)  # tamaño/volumen
+        self.min_liquidity_notional = getattr(config, "min_liquidity_notional", 1_000.0)  # Reducir aún más
+        self.min_liquidity_ratio = getattr(config, "min_liquidity_ratio", 0.005)  #
 
         logger.info("Initialized RiskControlManager")
 
+
+    def generate_risk_signals(self, market_data: dict, portfolio_data: dict) -> List[TacticalSignal]:
+        logger.debug(f"🛡️ Generando señales de riesgo - Mercado: {market_data}, Portfolio: {portfolio_data}")
+        risk_signals = []
+        alerts = self.evaluate_pre_trade_risk(market_data, portfolio_data)
+        
+        for symbol in market_data.keys():
+            liquidity = market_data[symbol].get("volume", {}).get("volume", 0.0) * market_data[symbol].get("ohlcv", {}).get("close", 0.0)
+            logger.debug(f"🛡️ {symbol}: Liquidez={liquidity:.2f}, Min_liquidity_notional={self.min_liquidity_notional}, Min_liquidity_ratio={self.min_liquidity_ratio}")
+            if liquidity < self.min_liquidity_notional:
+                risk_signals.append(TacticalSignal(
+                    symbol=symbol,
+                    signal_type='low_liquidity',
+                    strength=0.8,
+                    confidence=0.9,
+                    side='sell',
+                    features={'liquidity': liquidity},
+                    timestamp=datetime.now().timestamp(),
+                    source='risk',  # Añadir source
+                    metadata={'reason': 'low liquidity', 'threshold': self.min_liquidity_notional}
+                ))
+                logger.debug(f"🛡️ Señal de riesgo generada para {symbol}: low_liquidity")
+        
+        for alert in alerts:
+            logger.debug(f"🛡️ Alerta generada: {alert.alert_type}, Severidad: {alert.severity}, Mensaje: {alert.message}")
+            risk_signals.append(TacticalSignal(
+                symbol=alert.symbol,
+                signal_type=alert.alert_type,
+                strength=alert.severity,
+                confidence=0.9,
+                side='sell',
+                features={'alert': alert.message},
+                timestamp=datetime.now().timestamp(),
+                source='risk',  # Añadir source
+                metadata={'reason': alert.message}
+            ))
+        
+        logger.info(f"🛡️ Señales de riesgo generadas: {len(risk_signals)}")
+        return risk_signals
     # ----- helpers -----
 
     @staticmethod

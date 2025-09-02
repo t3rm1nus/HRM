@@ -51,7 +51,7 @@ class SignalConfig:
     max_conflicting_signals: int = 2
 
     # Nuevo: Universo de símbolos
-    universe: List[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT", "USDT"])
+    universe: List[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT", "USDT"])
 
 
 @dataclass

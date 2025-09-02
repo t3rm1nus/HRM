@@ -28,29 +28,39 @@ class MultiTimeframeTechnical:
         Genera señales técnicas para múltiples timeframes
         """
         signals = []
-        
-        try:
-            # Procesar cada símbolo
-            universe = getattr(self.config.signals, 'universe', ['BTC/USDT', 'ETH/USDT'])
-            
-            for symbol in universe:
-                if symbol == 'USDT':  # Skip stablecoin
-                    continue
-                    
-                symbol_data = market_data.get(symbol, {})
-                if not symbol_data:
-                    continue
+        for symbol in market_data:
+            try:
+                indicators = market_data[symbol].get('indicators', {})
+                rsi = indicators.get('rsi', 50.0)
+                macd = indicators.get('macd', 0.0)
+                macd_signal = indicators.get('macd_signal', 0.0)
                 
-                # Generar señales por timeframe
-                tf_signals = await self._analyze_timeframes(symbol, symbol_data)
-                signals.extend(tf_signals)
-            
-            logger.info(f"📊 Señales técnicas multi-timeframe generadas: {len(signals)}")
-            return signals
-            
-        except Exception as e:
-            logger.error(f"❌ Error en análisis técnico multi-timeframe: {e}")
-            return []
+                side = None
+                strength = 0.7
+                confidence = 0.7
+                
+                if rsi < 50:
+                    side = 'buy'
+                elif rsi > 50:
+                    side = 'sell'
+                
+                if side:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        strength=strength,
+                        confidence=confidence,
+                        side=side,
+                        features={'rsi': rsi, 'macd': macd, 'macd_signal': macd_signal},
+                        timestamp=datetime.now().timestamp(),
+                        source='technical',  # Añadir source
+                        metadata={'indicators': ['rsi', 'macd']}
+                    ))
+                    logger.debug(f"📊 Señal técnica para {symbol}: side={side}, rsi={rsi}")
+            except Exception as e:
+                logger.error(f"❌ Error generando señal técnica para {symbol}: {e}", exc_info=True)
+        
+        logger.info(f"📊 Señales técnicas multi-timeframe generadas: {len(signals)}")
+        return signals
     
     async def _analyze_timeframes(self, symbol: str, data: Dict[str, Any]) -> List[TacticalSignal]:
         """
@@ -62,6 +72,9 @@ class MultiTimeframeTechnical:
             # Obtener datos OHLCV
             ohlcv = data.get('ohlcv', {})
             indicators = data.get('indicators', {})
+            logger.debug(f"📊 Datos para {symbol}: OHLCV={ohlcv}, Indicadores={indicators}")
+            if not indicators:
+                logger.warning(f"⚠️ No hay indicadores para {symbol}, no se generarán señales técnicas")
             
             if not ohlcv:
                 return signals
@@ -102,31 +115,30 @@ class MultiTimeframeTechnical:
                 return None
             
             # Señal de sobrecompra/sobreventa
-            if rsi < 30:  # Sobreventa
+            if rsi < 50:  # Relajar umbral de sobreventa
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='rsi_oversold',
-                    strength=min((30 - rsi) / 10, 1.0),  # Strength based on how oversold
+                    strength=min((50 - rsi) / 20, 1.0),
                     confidence=0.7,
                     side='buy',
+                    source="technical",
                     features={'rsi': rsi, 'condition': 'oversold'},
                     timestamp=datetime.now().timestamp(),
-                    metadata={'indicator': 'RSI', 'threshold': 30}
+                    metadata={'indicator': 'RSI', 'threshold': 50}
                 )
-            elif rsi > 70:  # Sobrecompra
+            elif rsi > 50:  # Relajar umbral de sobrecompra
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='rsi_overbought',
-                    strength=min((rsi - 70) / 20, 1.0),  # Strength based on how overbought
+                    strength=min((rsi - 50) / 20, 1.0),
                     confidence=0.7,
                     side='sell',
+                    source="technical",
                     features={'rsi': rsi, 'condition': 'overbought'},
                     timestamp=datetime.now().timestamp(),
-                    metadata={'indicator': 'RSI', 'threshold': 70}
+                    metadata={'indicator': 'RSI', 'threshold': 50}
                 )
-            
-            return None
-            
         except Exception as e:
             logger.error(f"❌ Error en análisis RSI: {e}")
             return None
@@ -139,12 +151,12 @@ class MultiTimeframeTechnical:
             macd = indicators.get('macd')
             macd_signal = indicators.get('macd_signal')
             macd_histogram = indicators.get('macd_histogram')
-            
+            logger.debug(f"📊 MACD para {symbol}: macd={macd}, signal={macd_signal}, histogram={macd_histogram}")
             if None in [macd, macd_signal, macd_histogram]:
                 return None
             
             # Señal de cruce MACD
-            if macd > macd_signal and macd_histogram > 0:  # Bullish crossover
+            if macd > macd_signal:  # Bullish crossover
                 strength = min(abs(macd - macd_signal) * 100, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
@@ -152,11 +164,12 @@ class MultiTimeframeTechnical:
                     strength=strength,
                     confidence=0.6,
                     side='buy',
+                    source="technical",  # Añadir atributo source
                     features={'macd': macd, 'signal': macd_signal, 'histogram': macd_histogram},
                     timestamp=datetime.now().timestamp(),
                     metadata={'indicator': 'MACD', 'type': 'bullish_crossover'}
                 )
-            elif macd < macd_signal and macd_histogram < 0:  # Bearish crossover
+            elif macd < macd_signal:  # Bearish crossover
                 strength = min(abs(macd - macd_signal) * 100, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
@@ -164,6 +177,7 @@ class MultiTimeframeTechnical:
                     strength=strength,
                     confidence=0.6,
                     side='sell',
+                    source="technical",  # Añadir atributo source
                     features={'macd': macd, 'signal': macd_signal, 'histogram': macd_histogram},
                     timestamp=datetime.now().timestamp(),
                     metadata={'indicator': 'MACD', 'type': 'bearish_crossover'}
@@ -184,7 +198,7 @@ class MultiTimeframeTechnical:
             bb_lower = indicators.get('bb_lower')
             bb_middle = indicators.get('bb_middle')
             close = ohlcv.get('close')
-            
+            logger.debug(f"📊 Bollinger para {symbol}: close={close}, bb_upper={bb_upper}, bb_lower={bb_lower}, bb_middle={bb_middle}")
             if None in [bb_upper, bb_lower, bb_middle, close]:
                 return None
             
@@ -197,6 +211,7 @@ class MultiTimeframeTechnical:
                     strength=strength,
                     confidence=0.5,
                     side='buy',
+                    source="technical",  # Añadir atributo source
                     features={'close': close, 'bb_lower': bb_lower, 'bb_middle': bb_middle},
                     timestamp=datetime.now().timestamp(),
                     metadata={'indicator': 'Bollinger', 'type': 'lower_touch'}
@@ -209,6 +224,7 @@ class MultiTimeframeTechnical:
                     strength=strength,
                     confidence=0.5,
                     side='sell',
+                    source="technical",  # Añadir atributo source
                     features={'close': close, 'bb_upper': bb_upper, 'bb_middle': bb_middle},
                     timestamp=datetime.now().timestamp(),
                     metadata={'indicator': 'Bollinger', 'type': 'upper_touch'}
@@ -230,7 +246,7 @@ class MultiTimeframeTechnical:
             ema_12 = indicators.get('ema_12')
             ema_26 = indicators.get('ema_26')
             close = ohlcv.get('close')
-            
+            logger.debug(f"📊 Tendencia para {symbol}: close={close}, sma_20={sma_20}, sma_50={sma_50}, ema_12={ema_12}, ema_26={ema_26}")
             if close is None:
                 return None
             
@@ -244,6 +260,7 @@ class MultiTimeframeTechnical:
                         strength=strength,
                         confidence=0.6,
                         side='buy',
+                        source="technical",  # Añadir atributo source
                         features={'close': close, 'sma_20': sma_20, 'sma_50': sma_50},
                         timestamp=datetime.now().timestamp(),
                         metadata={'indicator': 'SMA_Cross', 'type': 'golden_cross'}
@@ -256,6 +273,7 @@ class MultiTimeframeTechnical:
                         strength=strength,
                         confidence=0.6,
                         side='sell',
+                        source="technical",  # Añadir atributo source
                         features={'close': close, 'sma_20': sma_20, 'sma_50': sma_50},
                         timestamp=datetime.now().timestamp(),
                         metadata={'indicator': 'SMA_Cross', 'type': 'death_cross'}
@@ -264,13 +282,14 @@ class MultiTimeframeTechnical:
             # Señal EMA
             if ema_12 and ema_26:
                 if ema_12 > ema_26 and close > ema_12:  # EMA bullish
-                    strength = min((close - ema_12) / ema_12 * 50, 0.8)  # Moderate strength
+                    strength = min((close - ema_12) / ema_12 * 50, 0.8)
                     return TacticalSignal(
                         symbol=symbol,
                         signal_type='ema_bullish',
                         strength=strength,
                         confidence=0.5,
                         side='buy',
+                        source="technical",  # Añadir atributo source
                         features={'close': close, 'ema_12': ema_12, 'ema_26': ema_26},
                         timestamp=datetime.now().timestamp(),
                         metadata={'indicator': 'EMA_Cross', 'type': 'bullish'}

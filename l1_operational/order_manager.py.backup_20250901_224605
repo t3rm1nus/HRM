@@ -171,8 +171,7 @@ class OrderManager:
                 return max(pred) if len(pred) > 1 else pred[0]
             elif hasattr(model, 'predict'):
                 # Para LightGBM y otros
-                return model.predict([features], predict_disable_shape_check=True)[0]
-
+                return model.predict([features])[0]
             else:
                 return 0.5  # Neutral
         except Exception:

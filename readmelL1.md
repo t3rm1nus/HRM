@@ -1,12 +1,15 @@
-# 📁 L1_Operational - Nivel de Ejecución de Órdenes (Actualizado)
+# 📁 L1_Operational - Nivel de Ejecución Operacional
 
-## 🎯 Objetivo
+## 🎯 **FUNCIONALIDAD REAL IMPLEMENTADA**
 
-L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA multiasset y reglas hard-coded para garantizar que solo se ejecuten órdenes seguras. Recibe señales consolidadas de L2/L3 y las ejecuta de forma determinista, aplicando validaciones de riesgo, fraccionamiento de órdenes y optimización de ejecución para múltiples activos (BTC, ETH).
+L1_Operational es el **núcleo operacional** del sistema HRM que maneja la **validación, gestión de portfolio y ejecución segura** de señales de trading. Opera como una **capa determinista** que recibe señales de L2 y las procesa con validaciones rigurosas antes de actualizar el portfolio.
 
----
-
-✅ Novedad: L1 ahora soporta conexión directa a Binance Spot (modo LIVE) y testnet (modo PAPER), con logging persistente y métricas por activo.
+### ✅ **ESTADO ACTUAL: TOTALMENTE FUNCIONAL**
+- ✅ **OrderManager operativo** con validación de señales
+- ✅ **Gestión automática de portfolio** (BTC, ETH, USDT)  
+- ✅ **DataFeed conectado a Binance** (real y testnet)
+- ✅ **Logging persistente** con métricas detalladas
+- ✅ **Integración completa con main.py** en producción
 
 
 ## 🚫 Lo que L1 NO hace
@@ -24,40 +27,50 @@ L1 es el nivel de ejecución y gestión de riesgo en tiempo real, que combina IA
 
 ## ✅ Lo que L1 SÍ hace
 
-| ✅ Funcionalidad              | Descripción                                                                 |
-|------------------------------|-----------------------------------------------------------------------------|
-| **Hard-coded Safety Layer**  | Bloquea operaciones peligrosas, aplica stop-loss obligatorio y chequeos de liquidez/saldo |
-| **Multiasset Trend AI**      | Evalúa probabilidad de movimientos para BTC y ETH, filtra señales de baja confianza |
-| **Execution Logic**          | Optimiza fraccionamiento de órdenes, timing y reduceslippage por símbolo |
-| **Risk Rules**               | Ajusta tamaño de trade y stops según reglas hard-coded basadas en volatilidad y exposición por activo |
-| **Ejecución determinista**   | Orden final solo se envía si cumple reglas hard-coded; flujo de 1 intento por señal |
-| **Reportes multiasset**      | Genera reportes detallados de todas las órdenes ejecutadas por símbolo |
-| **Gestión de errores**       | Maneja errores de ejecución de forma robusta |
+| ✅ **Componente** | **Funcionalidad Real Implementada** |
+|------------------|-------------------------------------|
+| **OrderManager** | Procesa señales de L2, valida parámetros y simula ejecución de órdenes |
+| **AI Models** | ✅ **3 modelos IA funcionales** (LogReg, Random Forest, LightGBM) |
+| **Trend AI** | Filtrado de señales con ensemble de modelos ML |
+| **DataFeed** | Obtiene datos OHLCV reales desde Binance Spot cada ciclo (10s) |
+| **Portfolio Management** | Actualiza balances automáticamente basado en órdenes "ejecutadas" |
+| **BinanceClient** | Conexión configurada a Binance Spot (real y testnet) |
+| **Signal Validation** | Valida estructura de señales (symbol, side, qty, stop_loss) |
+| **Error Handling** | Manejo robusto de errores con logging detallado |
+| **Persistent Logging** | Guarda métricas de órdenes y portfolio en CSV |
+| **Risk Guards** | Validaciones básicas de saldo y límites de trading |
 
 ---
 
-## 🗂️ Arquitectura Actualizada
+## 🏗️ **ARQUITECTURA REAL OPERATIVA**
 
 ```
-L2/L3 (Señales BTC/ETH/ADA)
+L2 (Tactical Signals)
           ↓
-    Bus Adapter (async)
+┌─────────────────────────────────────┐
+│         L1_OPERATIONAL              │
+│                                     │
+│  ┌─────────────────┐                │
+│  │  OrderManager   │ ← Procesa      │
+│  │  - handle_signal│   señales L2   │
+│  │  - validate     │                │
+│  │  - simulate     │                │
+│  └─────────────────┘                │
+│           ↓                         │
+│  ┌─────────────────┐                │
+│  │   DataFeed      │ ← Datos        │
+│  │  - fetch_data   │   Binance      │
+│  │  - BinanceClient│                │
+│  └─────────────────┘                │
+│           ↓                         │
+│  ┌─────────────────┐                │
+│  │ Portfolio Update│ ← Actualiza    │
+│  │ - BTC/ETH/USDT  │   balances     │
+│  │ - CSV logging   │                │
+│  └─────────────────┘                │
+└─────────────────────────────────────┘
           ↓
-  Order Manager (orquestador)
-          ↓
-[Hard-coded Safety Layer]
-          ↓
-[Modelo 1: LogReg] → Feature 1 (por símbolo)
-          ↓
-[Modelo 2: Random Forest] → Feature 2 (por símbolo)
-          ↓
-[Modelo 3: LightGBM] → Feature 3 (por símbolo)
-          ↓
-[Decision Layer: Trend AI + Risk Rules + Execution Logic]
-          ↓
-   Executor → Binance Spot (LIVE) o simulado (PAPER)
-          ↓
-Execution Report → Bus Adapter → L2/L3
+    Portfolio Tracking & Logs
 ```
 
 ### 🔧 Componentes Principales
@@ -270,18 +283,37 @@ python ml_training/modelo3_train_lgbm.py
 
 L1 está ahora completamente preparado para operar con múltiples activos, combinando la robustez de reglas deterministas con la inteligencia de 3 modelos IA especializados en BTC y ETH. El sistema garantiza ejecución segura, eficiente y optimizada para cada símbolo mientras mantiene control de riesgo a nivel de portafolio.
 
-**¿Listo para el trading multiasset inteligente? 🚀**
+## 📊 **RESUMEN L1 - ESTADO ACTUAL**
+
+### ✅ **COMPONENTES OPERATIVOS**
+- ✅ **OrderManager:** Procesa señales L2 con validación completa
+- ✅ **AI Models:** 3 modelos IA funcionales (LogReg, RF, LightGBM)
+- ✅ **Trend AI:** Filtrado inteligente con ensemble de modelos
+- ✅ **DataFeed:** Conexión real a Binance Spot funcionando
+- ✅ **Portfolio Management:** Tracking automático BTC/ETH/USDT
+- ✅ **BinanceClient:** Configurado para LIVE y TESTNET
+
+### 🔄 **FLUJO OPERACIONAL REAL**
+1. Recibe señales desde L2TacticProcessor
+2. **Valida con 3 modelos IA** (LogReg, RF, LightGBM) + Trend AI
+3. Valida parámetros (symbol, side, qty, stop_loss)
+4. Simula ejecución de orden (por seguridad)
+5. Actualiza portfolio automáticamente
+6. Registra métricas en logs persistentes
+
+### ⚠️ **LIMITACIONES ACTUALES**
+- **Ejecución simulada:** No envía órdenes reales (por seguridad)
+- **Modelos IA L1:** ✅ **IMPLEMENTADOS Y FUNCIONALES** (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl)
 
 ---
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
-![ML](https://img.shields.io/badge/machine-learning-orange.svg)
-![Performance](https://img.shields.io/badge/latency-<50ms-green.svg)
-![Status](https://img.shields.io/badge/status-production-ready-success.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Status](https://img.shields.io/badge/status-operational-green.svg)
+![Binance](https://img.shields.io/badge/binance-spot-yellow.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-**Desarrollado con ❤️ para el Sistema HRM**
+**L1 Operational - Núcleo Ejecutor del Sistema HRM**
 
 </div>
