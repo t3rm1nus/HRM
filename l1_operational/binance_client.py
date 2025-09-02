@@ -36,6 +36,14 @@ class BinanceClient:
             return None
     
     def _get_real_klines(self, symbol, interval, limit):
-        """Lógica para modo LIVE"""
-        # Implementar cuando estés listo para trading real
-        pass
+        """Obtener datos OHLCV reales de Binance en modo LIVE"""
+        try:
+            klines = self.client.get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+            return klines
+        except Exception as e:
+            logger.error(f"Error en _get_real_klines({symbol}): {e}")
+            return []

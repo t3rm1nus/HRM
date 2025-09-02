@@ -5,3 +5,4 @@ data/
 models/
 logs/
 .env
+node_modules/

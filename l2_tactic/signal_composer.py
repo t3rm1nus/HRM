@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple, Iterable
 
 from .config import L2Config
 from .models import TacticalSignal
+from datetime import datetime
 
 logger = logging.getLogger("l2_tactic.signal_composer")
 
@@ -37,24 +38,52 @@ class SignalComposer:
     
     # --- MÉTODO CORREGIDO ---
     def compose(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
-        """
-        Método principal para componer una lista de señales en una única señal por símbolo.
-        """
         if not signals:
+            logger.warning("⚠️ No hay señales para componer")
             return []
         
-        # 1. Agrupar y ponderar señales por símbolo y lado
-        grouped_by_symbol_side = self._group_and_weight_signals(signals)
-
-        # 2. Convertir a una señal compuesta por símbolo y lado
-        composed_signals = [self._create_composed_signal(key, weighted_signals)
-                            for key, weighted_signals in grouped_by_symbol_side.items()]
+        signals_by_symbol = {}
+        for signal in signals:
+            if not hasattr(signal, 'symbol') or not hasattr(signal, 'side') or not hasattr(signal, 'source'):
+                logger.error(f"❌ Señal inválida: {signal.__dict__}")
+                continue
+            symbol = signal.symbol
+            signals_by_symbol.setdefault(symbol, []).append(signal)
         
-        # 3. Resolver conflictos (buy vs sell) y filtrar por calidad
-        final_signals = self._resolve_conflicts_and_filter(composed_signals)
+        composed_signals = []
+        for symbol, sym_signals in signals_by_symbol.items():
+            total_weight = 0.0
+            weighted_strength = 0.0
+            weighted_confidence = 0.0
+            features = {}
+            
+            for signal in sym_signals:
+                weight = self._get_dynamic_weight(signal)
+                total_weight += weight
+                weighted_strength += signal.strength * weight
+                weighted_confidence += signal.confidence * weight
+                features.update(signal.features)
+            
+            if total_weight > 0:
+                avg_strength = weighted_strength / total_weight
+                avg_confidence = weighted_confidence / total_weight
+                dominant_signal = max(sym_signals, key=lambda s: self._get_dynamic_weight(s))
+                
+                composed_signal = TacticalSignal(
+                    symbol=symbol,
+                    strength=avg_strength,
+                    confidence=avg_confidence,
+                    side=dominant_signal.side,
+                    features=features,
+                    timestamp=datetime.now().timestamp(),
+                    source='composed',
+                    metadata={'composed_from': [s.source for s in sym_signals]}
+                )
+                composed_signals.append(composed_signal)
+                logger.debug(f"✅ Señal compuesta para {symbol}: side={dominant_signal.side}, strength={avg_strength:.3f}, confidence={avg_confidence:.3f}")
         
-        logger.info(f"Composed {len(final_signals)} final signals from {len(signals)} raw signals.")
-        return final_signals
+        logger.info(f"✅ Señales compuestas generadas: {len(composed_signals)}")
+        return composed_signals
 
     # --- Métodos auxiliares ---
     def _group_and_weight_signals(self, signals: List[TacticalSignal]) -> Dict[Tuple, List[Tuple[TacticalSignal, float]]]:
@@ -91,11 +120,17 @@ class SignalComposer:
         )
 
     def _get_dynamic_weight(self, signal: TacticalSignal) -> float:
-        """Asigna un peso a la señal basado en su fuente y, si está disponible, su performance histórica."""
-        base_weight = getattr(self, f"w_{signal.source}", 0.0)
-        # Lógica para ajustar por métricas de performance si estuviera disponible.
-        # Por ahora, devolvemos solo el peso base.
-        return base_weight
+        logger.debug(f"Calculando peso para señal: source={signal.source}, confidence={signal.confidence}")
+        base_weight = 1.0
+        if signal.source == 'ai':
+            base_weight *= 1.5
+        elif signal.source == 'technical':
+            base_weight *= 1.0
+        elif signal.source == 'risk':
+            base_weight *= 2.0
+        weight = base_weight * signal.confidence
+        logger.debug(f"Peso calculado: {weight}")
+        return max(weight, 0.01)
 
     def _resolve_conflicts_and_filter(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
         """

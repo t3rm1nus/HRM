@@ -32,21 +32,36 @@ class DataFeed:
         logger.info("[DataFeed] Desconexión completa.")
 
     def fetch_data(self, symbol, timeframe="1m", limit=100):
-        """Obtener datos en tiempo real y convertirlos a DataFrame."""
+        """Obtener datos OHLCV y convertir a DataFrame"""
+        columns = [
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "trades",
+            "taker_buy_base", "taker_buy_quote", "ignored"
+        ]
         try:
             klines = self.binance.get_klines(symbol, timeframe, limit)
             if not klines:
-                return pd.DataFrame()
+                return pd.DataFrame(columns=columns)
             
-            df = pd.DataFrame(klines, columns=[
-                "timestamp", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "trades", "taker_buy_base",
-                "taker_buy_quote", "ignored"
-            ])
+            df = pd.DataFrame(klines, columns=columns)
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
-            df["close"] = df["close"].astype(float)
+
+            # Convertir todas las columnas numéricas
+            for col in ["open", "high", "low", "close", "volume",
+                        "quote_asset_volume", "taker_buy_base", "taker_buy_quote"]:
+                df[col] = df[col].astype(float)
+            df["trades"] = df["trades"].astype(int)
             return df
         except Exception as e:
             logger.error(f"Error al obtener datos para {symbol}: {e}")
-            return pd.DataFrame()
+            return pd.DataFrame(columns=columns)
+
+    def get_latest_data(self, symbol=None):
+        """Devuelve la última vela disponible para un símbolo o todos los símbolos."""
+        if symbol is None:
+            return {s: self.fetch_data(s, limit=1).iloc[-1] for s in self.symbols if not self.fetch_data(s, limit=1).empty}
+        df = self.fetch_data(symbol, limit=1)
+        if df.empty:
+            return None
+        return df.iloc[-1]
