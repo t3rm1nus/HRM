@@ -1,344 +1,385 @@
+# l2_tactic/finrl_integration.py
 """
-FinRL Integration para L2_tactic - CORREGIDO con gymnasium
-=========================================================
+FinRL signal generator - FIXED for MultiInputActorCriticPolicy and PyTorch
 """
-
-import os
-import sys
-from pathlib import Path
+import pickle
+import joblib
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, Union
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
-
+from typing import Dict, Any, Optional, List
+import os
+import torch
 from core.logging import logger
 from .models import TacticalSignal
+from datetime import datetime
 
 class FinRLProcessor:
-    """
-    Procesador FinRL REAL - carga modelo con gymnasium
-    """
-    
     def __init__(self, model_path: str):
-        self.model_path = Path(str(model_path).replace('\\', '/'))  # Fix Windows paths
+        self.model_path = model_path
         self.model = None
-        self.observation_space = None
-        self.action_space = None
         self.is_loaded = False
+        self.observation_space_info = None
         
-        # Cargar el modelo real
-        self._load_real_model()
-    
-    def _load_real_model(self):
-        """
-        Carga el modelo FinRL real con gymnasium
-        """
-        try:
-            logger.info(f"🤖 Cargando modelo FinRL desde: {self.model_path}")
-            
-            # Verificar directorio
-            if not self.model_path.exists():
-                raise FileNotFoundError(f"Directorio no encontrado: {self.model_path}")
-            
-            # Verificar archivos críticos
-            policy_file = self.model_path / "policy.pth"
-            if not policy_file.exists():
-                raise FileNotFoundError(f"policy.pth no encontrado en {self.model_path}")
-            
-            logger.info(f"✅ Archivos del modelo encontrados")
-            
-            # Importar dependencias
-            try:
-                from stable_baselines3 import PPO
-                import gymnasium as gym
-                import torch
-                logger.info("✅ stable_baselines3 y gymnasium importados")
-            except ImportError as e:
-                logger.error(f"❌ Error importando dependencias: {e}", exc_info=True)
-                raise ImportError(f"Falta dependencia: {e}")
-            
-            # Cargar policy state
-            logger.info("🔧 Cargando modelo desde policy.pth...")
-            policy_state = torch.load(str(policy_file), map_location='cpu', weights_only=True)
-            logger.info("✅ Estado del modelo cargado desde policy.pth")
-            
-            # Inferir dimensiones del modelo
-            obs_dim, action_dim = self._infer_model_dimensions(policy_state)
-            if obs_dim is None or action_dim is None:
-                logger.warning("⚠️ No se pudieron inferir dimensiones, usando valores por defecto: obs=28, actions=2")
-                obs_dim = 28
-                action_dim = 2
-            logger.info(f"📊 Dimensiones inferidas: obs={obs_dim}, actions={action_dim}")
-            
-            # Crear spaces con gymnasium
-            from gymnasium import spaces
-            self.observation_space = spaces.Box(
-                low=-np.inf,
-                high=np.inf,
-                shape=(obs_dim,),
-                dtype=np.float32
-            )
-            self.action_space = spaces.Discrete(action_dim)
-            
-            # Crear entorno dummy
-            class DummyEnv(gym.Env):
-                def __init__(self, obs_dim, action_dim):
-                    super().__init__()
-                    self.observation_space = spaces.Box(
-                        low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
-                    )
-                    self.action_space = spaces.Discrete(action_dim)
-                
-                def step(self, action):
-                    return np.zeros(self.observation_space.shape), 0, False, False, {}
-                
-                def reset(self, seed=None, **kwargs):
-                    return np.zeros(self.observation_space.shape), {}
-            
-            dummy_env = DummyEnv(obs_dim, action_dim)
-            
-            # Configurar arquitectura de red
-            policy_kwargs = dict(
-                net_arch=dict(
-                    pi=[256, 128],  # Policy network
-                    vf=[256, 128]   # Value network
-                )
-            )
-            
-            # Crear modelo PPO
-            try:
-                self.model = PPO(
-                    'MlpPolicy',
-                    env=dummy_env,
-                    policy_kwargs=policy_kwargs,
-                    verbose=0,
-                    device='cpu'
-                )
-                logger.info("✅ Modelo PPO creado exitosamente")
-            except Exception as e:
-                logger.error(f"❌ Error creando modelo PPO: {e}", exc_info=True)
-                raise
-            
-            # Cargar el policy state filtrado
-            try:
-                if 'policy' in policy_state:
-                    policy_dict = policy_state['policy']
-                else:
-                    policy_dict = policy_state
-                filtered_policy_dict = {k: v for k, v in policy_dict.items() if k != 'log_std'}
-                self.model.policy.load_state_dict(filtered_policy_dict, strict=False)
-                logger.info("✅ Modelo cargado manualmente desde policy.pth (con keys filtradas)")
-            except Exception as e:
-                logger.error(f"❌ Error cargando estado del modelo: {e}", exc_info=True)
-                self.model = None
-                raise
-            
-            # Verificar inicialización
-            if self.model is None or not hasattr(self.model, 'predict'):
-                logger.error("❌ Modelo PPO no inicializado o no tiene método predict")
-                raise ValueError("Modelo PPO no inicializado")
-            
-            self.is_loaded = True
-            logger.info("✅ Modelo FinRL REAL cargado exitosamente")
-            logger.info(f"📊 Observation space: {self.observation_space}")
-            logger.info(f"🎯 Action space: {self.action_space}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error cargando modelo real: {e}", exc_info=True)
-            logger.error("❌ MODELO REAL NO SE PUDO CARGAR")
-            self.model = None
-            self.is_loaded = False
-            raise Exception(f"Falló carga del modelo real: {e}")
-    def _infer_model_dimensions(self, policy_state):
-        """
-        Infiere dimensiones del modelo desde el state dict
-        """
-        try:
-            obs_dim = None
-            action_dim = None
-            
-            # Buscar en el diccionario del policy
-            policy_dict = policy_state.get('policy', policy_state)
-            
-            # Buscar dimensión de observación
-            for key, tensor in policy_dict.items():
-                if 'mlp_extractor' in key and 'weight' in key and tensor.dim() == 2:
-                    obs_dim = tensor.shape[1]  # Input dimension
-                    logger.debug(f"Obs dim desde {key}: {obs_dim}")
-                    break
-            
-            # Buscar dimensión de acción
-            for key, tensor in policy_dict.items():
-                if 'action_net' in key and 'weight' in key:
-                    action_dim = tensor.shape[0]  # Output dimension
-                    logger.debug(f"Action dim desde {key}: {action_dim}")
-                    break
-            
-            # Fallback: buscar en otras capas
-            if obs_dim is None:
-                for key, tensor in policy_dict.items():
-                    if 'weight' in key and tensor.dim() == 2:
-                        obs_dim = tensor.shape[1]
-                        logger.debug(f"Obs dim fallback desde {key}: {obs_dim}")
-                        break
-            
-            if action_dim is None:
-                # Asumir 3 acciones por defecto (buy, hold, sell)
-                action_dim = 3
-                logger.debug(f"Action dim por defecto: {action_dim}")
-            
-            return obs_dim, action_dim
-            
-        except Exception as e:
-            logger.error(f"Error inferiendo dimensiones: {e}")
-            return None, None
-    
-    # En finrl_integration.py, reemplazar el método generate_signal:
-
-    def generate_signal(self, market_data: dict, symbol: str) -> Optional[TacticalSignal]:
-        if not self.is_loaded or self.model is None:
-            logger.error(f"❌ Modelo no cargado para generar señal de {symbol}")
-            return None
+        if not self.load_real_model(model_path):
+            raise RuntimeError(f"FAILED TO LOAD FINRL MODEL: {model_path}")
         
-        try:
-            # Corregir: acceder directamente a market_data, no market_data[symbol]
-            obs = self._prepare_observation(market_data, symbol)
-            if obs is None:
-                logger.warning(f"⚠️ Observación no válida para {symbol}")
-                return None
-            
-            action, _states = self.model.predict(obs, deterministic=True)
-            logger.debug(f"Action raw: {action}, type: {type(action)}, shape: {getattr(action, 'shape', 'no shape')}")
-            
-            side = 'buy' if action == 0 else 'sell'
-            
-            # Corregir acceso a indicators
-            indicators = market_data.get('indicators', {})
-            
-            return TacticalSignal(
-                symbol=symbol,
-                strength=0.7,
-                confidence=0.85,
-                side=side,
-                features=indicators,  # Cambiar de market_data[symbol] a indicators
-                timestamp=pd.Timestamp.now(),  # Usar pd.Timestamp directamente
-                signal_type='finrl',
-                metadata={'model': 'finrl', 'action': int(action)}
-            )
-        except Exception as e:
-            logger.error(f"❌ Error generando señal FinRL: {e}")
-            return None 
-    # En finrl_integration.py, reemplazar el método _prepare_observation:
+        self.inspect_observation_space()
+        logger.info(f"✅ FinRL model loaded successfully from {model_path}")
 
-    def _prepare_observation(self, market_data: Dict[str, Any], symbol: str) -> Optional[np.ndarray]:
-        """
-        Prepara observación para el modelo - CORREGIDO
-        """
+    def inspect_observation_space(self):
+        """Inspect the model's observation space to understand expected format"""
         try:
-            # market_data ahora viene directamente como los datos del símbolo
-            ohlcv = market_data.get('ohlcv', {})
-            indicators = market_data.get('indicators', {})
-            
-            if not ohlcv:
-                logger.warning(f"No hay datos OHLCV para {symbol}")
-                return None
-            
-            # Features básicas
-            close = float(ohlcv.get('close', 0))
-            volume = float(ohlcv.get('volume', 0))
-            high = float(ohlcv.get('high', close))
-            low = float(ohlcv.get('low', close))
-            
-            # Evitar división por cero
-            close_safe = max(close, 0.001)
-            
-            features = [
-                close / 50000,  # Precio normalizado (ajustar según tu rango)
-                volume / 1000,  # Volumen normalizado
-                high / close_safe,  # High/Close ratio
-                low / close_safe,   # Low/Close ratio
-                indicators.get('rsi', 50) / 100,
-                indicators.get('macd', 0) / 100,  # Normalizar MACD
-                indicators.get('macd_signal', 0) / 100,
-                indicators.get('bb_upper', close) / close_safe,
-                indicators.get('bb_lower', close) / close_safe,
-                indicators.get('sma_20', close) / close_safe,
-                indicators.get('ema_12', close) / close_safe,
-                market_data.get('change_24h', 0)  # Ya debería estar normalizado
-            ]
-            
-            # Agregar features adicionales si el modelo las necesita
-            additional_features = [
-                indicators.get('volatility', 0),
-                indicators.get('vol_ratio', 1.0),
-                indicators.get('sma_10', close) / close_safe,
-                indicators.get('ema_10', close) / close_safe
-            ]
-            features.extend(additional_features)
-            
-            # Ajustar longitud según el modelo
-            if hasattr(self.observation_space, 'shape'):
-                expected_len = self.observation_space.shape[0]
-                if len(features) < expected_len:
-                    features.extend([0.0] * (expected_len - len(features)))
-                elif len(features) > expected_len:
-                    features = features[:expected_len]
-            
-            obs_array = np.array(features, dtype=np.float32)
-            
-            # Limpiar valores inválidos
-            obs_array = np.nan_to_num(obs_array, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            # Clip extreme values
-            obs_array = np.clip(obs_array, -100, 100)
-            
-            logger.debug(f"Observación preparada para {symbol}: shape={obs_array.shape}, "
-                        f"range=[{obs_array.min():.3f}, {obs_array.max():.3f}]")
-            
-            return obs_array
-            
-        except Exception as e:
-            logger.error(f"Error preparando observación para {symbol}: {e}")
-            return None
-    def _action_to_signal(self, action: int, symbol: str, market_data: Dict[str, Any]) -> Optional[TacticalSignal]:
-        """
-        Convierte acción a señal
-        """
-        try:
-            # Tu modelo tiene 2 acciones: 0=Buy, 1=Sell (sin Hold)
-            action_map = {0: 'buy', 1: 'sell'}
-            
-            if action not in action_map:
-                logger.warning(f"Acción desconocida: {action}, esperadas: {list(action_map.keys())}")
-                return None
-            
-            side = action_map[action]
-            
-            # Calcular strength para modelo de 2 acciones
-            base_strength = 0.7
-            volume_factor = min(market_data.get('ohlcv', {}).get('volume', 0) / 10000, 0.2)
-            
-            if action == 0:  # Buy
-                strength = base_strength + volume_factor
-            else:  # Sell (action == 1)
-                strength = -(base_strength + volume_factor)
-            
-            return TacticalSignal(
-                symbol=symbol,
-                signal_type='finrl_ppo_real',
-                strength=strength,
-                confidence=0.85,
-                side=side,
-                features=market_data,
-                timestamp=pd.Timestamp.now().timestamp(),
-                metadata={
-                    'model': 'FinRL_PPO_REAL',
-                    'action': int(action),
-                    'model_loaded': True
+            if hasattr(self.model, 'observation_space'):
+                obs_space = self.model.observation_space
+                logger.info(f"Observation space type: {type(obs_space)}")
+                logger.info(f"Observation space: {obs_space}")
+                self.observation_space_info = {
+                    'type': type(obs_space).__name__,
+                    'space': obs_space
                 }
+                if hasattr(obs_space, 'spaces'):
+                    logger.info("Sub-spaces:")
+                    for key, subspace in obs_space.spaces.items():
+                        logger.info(f"  {key}: {subspace}")
+        except Exception as e:
+            logger.warning(f"Could not inspect observation space: {e}")
+
+    def check_model_file(self, model_path: str) -> bool:
+        """Check if model file exists and is valid"""
+        if not os.path.exists(model_path):
+            logger.error(f"Model file does not exist: {model_path}")
+            return False
+        try:
+            file_size = os.path.getsize(model_path)
+            if file_size < 1000:
+                logger.error(f"Model file too small: {file_size} bytes")
+                return False
+            logger.info(f"Model file check passed: {file_size/1024:.1f}KB")
+            return True
+        except Exception as e:
+            logger.error(f"Error checking model file: {e}")
+            return False
+
+    def load_real_model(self, model_path: str) -> bool:
+        """Load FinRL model"""
+        if not self.check_model_file(model_path):
+            return False
+        try:
+            logger.info(f"Loading FinRL model from {model_path}...")
+            if model_path.endswith('.zip'):
+                return self.load_stable_baselines3_model(model_path)
+            elif model_path.endswith('.pkl'):
+                return self.load_pickle_model(model_path)
+            elif model_path.endswith('.pth'):
+                return self.load_torch_model(model_path)
+            else:
+                logger.error(f"Unsupported model format: {model_path}")
+                return False
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to load FinRL model: {e}", exc_info=True)
+            return False
+
+    def load_stable_baselines3_model(self, zip_path: str) -> bool:
+        """Load stable_baselines3 PPO model from ZIP"""
+        try:
+            from stable_baselines3 import PPO
+            logger.info(f"Loading stable_baselines3 PPO model from: {zip_path}")
+            self.model = PPO.load(zip_path, device='cpu')
+            self.is_loaded = True
+            logger.info(f"PPO model loaded successfully via stable_baselines3! Policy: {type(self.model.policy)}")
+            return True
+        except ImportError as e:
+            logger.error(f"stable_baselines3 not available: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error loading stable_baselines3 model: {e}", exc_info=True)
+            return False
+
+    def load_pickle_model(self, pkl_path: str) -> bool:
+        """Load pickled model"""
+        try:
+            self.model = pickle.load(open(pkl_path, 'rb'))
+            self.is_loaded = True
+            logger.info(f"Pickled model loaded successfully: {type(self.model)}")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading pickled model: {e}", exc_info=True)
+            return False
+
+    def load_torch_model(self, pth_path: str) -> bool:
+        """Load PyTorch model"""
+        try:
+            # Create model instance with the right architecture
+            from stable_baselines3.ppo.policies import ActorCriticPolicy
+            
+            # Define observation space (matching the saved model)
+            from gymnasium.spaces import Box
+            import numpy as np
+            obs_space = Box(low=-np.inf, high=np.inf, shape=(63,), dtype=np.float32)  # 63 features
+            action_space = Box(low=0, high=2, shape=(2,), dtype=np.float32)  # 2 outputs
+            
+            # Create policy with matching architecture
+            policy = ActorCriticPolicy(
+                observation_space=obs_space,
+                action_space=action_space,
+                lr_schedule=lambda _: 0.0,  # Dummy schedule since we're just using for inference
+                net_arch=[dict(pi=[256, 128], vf=[256, 128])]  # Match saved architecture
+            )
+            
+            # Load state dict
+            state_dict = torch.load(pth_path, map_location='cpu')
+            policy.load_state_dict(state_dict)
+            policy.eval()  # Set to evaluation mode
+            
+            self.model = policy
+            self.is_loaded = True
+            logger.info(f"PyTorch model loaded successfully and reconstructed as ActorCriticPolicy")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading PyTorch model: {e}", exc_info=True)
+            return False
+
+    def generate_signal(self, symbol: str, market_data: Optional[Dict[str, Any]] = None, 
+                       features: Optional[Dict[str, Any]] = None, indicators: Optional[Dict[str, Any]] = None) -> Optional[TacticalSignal]:
+        """
+        Generate tactical signal using FinRL model
+        """
+        try:
+            # 1️⃣ Preparar observación
+            obs = self.prepare_observation(market_data or features or indicators)
+
+            # 2️⃣ Llamada al modelo (policy)
+            with torch.no_grad():
+                obs_tensor = torch.FloatTensor(obs)
+                
+                # Forward pass through the policy network
+                # This gets both the features and action distribution
+                features, dist = self.model.mlp_extractor(obs_tensor)
+                
+                # Get value prediction
+                value = self.model.value_net(features).cpu().numpy()[0]
+                
+                # Get action logits and convert to probabilities
+                action_logits = self.model.action_net(features)
+                probs = torch.softmax(action_logits, dim=-1)
+                action_probs = probs.cpu().numpy()[0]  # Remove batch dimension
+                
+                logger.debug(f"Action probs: {action_probs}, Value: {value}")
+                
+            # 3️⃣ Convert probabilities to signal and return
+            signal = self._action_to_signal(action_probs, symbol, value)
+            return signal
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando señal para {symbol}: {e}")
+            # Fallback to a neutral signal
+            return TacticalSignal(
+                symbol=symbol,
+                strength=0.1,
+                confidence=0.1,
+                side="hold",
+                type="market",
+                signal_type="hold",
+                source="ai_fallback",
+                features={},
+                metadata={'error': str(e)}
+            )
+
+    def prepare_observation(self, data: Dict[str, Any]) -> np.ndarray:
+        """
+        Prepare observation as a flat np.ndarray[float32] matching Box obs_space.
+        Extends basic features to match the 63-dimensional input expected by the model.
+        """
+        try:
+            # Si viene como dict anidado desde feature_engineering
+            if isinstance(data, dict):
+                if "ohlcv" in data and "indicators" in data:
+                    flat = {**data["ohlcv"], **data["indicators"]}
+                else:
+                    flat = data
+                data = pd.Series(flat)
+            elif isinstance(data, pd.DataFrame):
+                data = data.iloc[-1]
+
+            # Base features (19 dimensions)
+            base_features = [
+                'open','high','low','close','volume',
+                'sma_20','sma_50','ema_12','ema_26','macd','macd_signal','rsi',
+                'bollinger_middle','bollinger_std','bollinger_upper','bollinger_lower',
+                'vol_mean_20','vol_std_20','vol_zscore'
+            ]
+            
+            # Get base feature values
+            base_values = [float(data.get(f, 0.0)) for f in base_features]
+            
+            # Add derived features to reach 63 dimensions
+            derived_values = []
+            
+            # Price momentum features
+            if len(base_values) >= 4:  # If we have OHLCV data
+                price = base_values[3]  # Close price
+                derived_values.extend([
+                    price / base_values[0] - 1,  # Returns vs open
+                    price / base_values[1] - 1,  # Returns vs high
+                    price / base_values[2] - 1,  # Returns vs low
+                ])
+            else:
+                derived_values.extend([0.0] * 3)
+                
+            # Normalized indicators
+            if len(base_values) >= 12:  # If we have technical indicators
+                rsi = base_values[11]
+                derived_values.extend([
+                    (rsi - 50) / 50,  # Normalized RSI
+                    base_values[9] / abs(base_values[10]) if abs(base_values[10]) > 0 else 0,  # MACD ratio
+                ])
+            else:
+                derived_values.extend([0.0] * 2)
+                
+            # Pad remaining dimensions with zeros
+            remaining_dims = 63 - (len(base_values) + len(derived_values))
+            derived_values.extend([0.0] * remaining_dims)
+            
+            # Combine base and derived features
+            obs_values = base_values + derived_values
+            obs = np.array(obs_values, dtype=np.float32)
+            
+            # Add batch dimension and validate shape
+            obs = obs.reshape(1, -1)
+            if obs.shape[1] != 63:
+                raise ValueError(f"Invalid observation shape: {obs.shape}, expected (1, 63)")
+                
+            return obs
+            
+        except Exception as e:
+            logger.error(f"Error preparing observation: {e}", exc_info=True)
+            # Return zero vector as fallback
+            return np.zeros((1, 63), dtype=np.float32)
+        except Exception as e:
+            logger.error(f"Error preparing flat observation: {e}", exc_info=True)
+            return np.zeros((1, 19), dtype=np.float32)
+
+    def _action_to_signal(self, action_probs, symbol: str, value: float = None):
+        """
+        Convert model outputs to a tactical signal
+        
+        Args:
+            action_probs: Probabilities from the model's action head
+            symbol: The trading symbol
+            value: Optional value prediction from the model's value head
+        """
+        try:
+            # Convert to numpy array if needed
+            probs = np.array(action_probs).flatten() if isinstance(action_probs, (list, np.ndarray)) else np.array([action_probs])
+            
+            # Convert numpy values to native Python types
+            probs = [float(p) for p in probs]
+            
+            # Handle different output formats
+            if len(probs) == 2:  # Binary action space (buy/sell)
+                buy_prob, sell_prob = probs
+                hold_prob = 1.0 - (buy_prob + sell_prob)  # Implicit hold probability
+            elif len(probs) == 3:  # Trinary action space (buy/hold/sell)
+                buy_prob, hold_prob, sell_prob = probs
+            elif len(probs) == 1:  # Continuous action space [-1, 1]
+                action_value = probs[0]
+                # Convert to probabilities
+                if action_value > 0.2:
+                    buy_prob, hold_prob, sell_prob = 0.7, 0.2, 0.1
+                elif action_value < -0.2:
+                    buy_prob, hold_prob, sell_prob = 0.1, 0.2, 0.7
+                else:
+                    buy_prob, hold_prob, sell_prob = 0.3, 0.4, 0.3
+            else:
+                logger.warning(f"Unexpected probability shape: {len(probs)}")
+                buy_prob, hold_prob, sell_prob = 0.33, 0.34, 0.33
+            
+            # Normalize probabilities
+            total = buy_prob + hold_prob + sell_prob
+            if total > 0:
+                buy_prob /= total
+                hold_prob /= total
+                sell_prob /= total
+            
+            # Determine action based on highest probability
+            if buy_prob > max(sell_prob, hold_prob) and buy_prob > 0.4:
+                side = "buy"
+                strength = buy_prob
+            elif sell_prob > max(buy_prob, hold_prob) and sell_prob > 0.4:
+                side = "sell"
+                strength = sell_prob
+            else:
+                side = "hold"
+                strength = hold_prob
+
+            # Use value prediction to scale confidence if available
+            base_confidence = max(buy_prob, sell_prob, hold_prob)
+            if value is not None:
+                # Convert value to native Python float and scale to [0, 1]
+                value = float(value)
+                value_confidence = (np.tanh(value / 2) + 1) / 2
+                confidence = (base_confidence + float(value_confidence)) / 2
+            else:
+                confidence = base_confidence
+
+            # Create metadata with native Python types
+            metadata = {
+                "source": "finrl",
+                "probabilities": {
+                    "buy": buy_prob,
+                    "hold": hold_prob,
+                    "sell": sell_prob
+                }
+            }
+            
+            if value is not None:
+                metadata["value"] = value
+
+            return TacticalSignal(
+                symbol=symbol,
+                side=side,
+                type="market",
+                strength=strength,
+                confidence=confidence,
+                signal_type=side,
+                timestamp=datetime.utcnow().timestamp(),
+                metadata=metadata
             )
             
         except Exception as e:
-            logger.error(f"❌ Error convirtiendo acción: {e}")
-            return None
+            logger.error(f"Error converting action to signal: {e}")
+            return TacticalSignal(
+                symbol=symbol,
+                side="hold",
+                type="market",
+                strength=0.1,
+                confidence=0.1,
+                signal_type="hold",
+                timestamp=datetime.utcnow().timestamp(),
+                metadata={"error": str(e)}
+            )
+
+    def _calculate_stop_loss(self, price: float, is_long: bool, stop_pct: float = 0.02) -> float:
+        """Calculate stop loss price"""
+        if price <= 0:
+            return 0.0
+        if is_long:
+            return price * (1 - stop_pct)
+        else:
+            return price * (1 + stop_pct)
+
+if __name__ == "__main__":
+    try:
+        processor = FinRLProcessor('models/L2/ai_model_data_multiasset/policy.pth')
+        print("SUCCESS: Model loaded")
+        test_data = {
+            'open': 108000.0, 'high': 109000.0, 'low': 107500.0, 'close': 108790.92,
+            'volume': 1500000.0, 'rsi': 45.0, 'macd': -50.0, 'bollinger_upper': 110000.0,
+            'bollinger_lower': 107000.0, 'ema_12': 108500.0, 'ema_26': 108200.0,
+        }
+        signal = processor.generate_signal(test_data)
+        print(f"Test signal: {signal}")
+    except Exception as e:
+        print(f"FAILED: {e}")
+        import traceback
+        traceback.print_exc()

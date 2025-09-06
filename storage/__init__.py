@@ -1,7 +1,7 @@
 # storage/__init__.py
-import logging
+from core.logging import logger
 
-logger = logging.getLogger("storage")
+logger.info("storage")
 
 def guardar_estado_csv(state: dict):
     logger.debug("[STORAGE] Guardando estado en CSV (placeholder)")

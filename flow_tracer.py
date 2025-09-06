@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#flow_tracer.py
 """
 HRM Feature Flow Tracer
 Rastrea el flujo de features desde L2 hasta L1 para diagnosticar el problema 52 vs 12
@@ -9,10 +9,11 @@ import numpy as np
 import pickle
 import json
 from pathlib import Path
-import logging
-from datetime import datetime
 import sys
 import os
+from datetime import datetime
+
+from core.logging import logger  # ✅ Logger centralizado
 
 # Añadir el directorio raíz al path para imports
 sys.path.insert(0, os.path.abspath('.'))
@@ -20,16 +21,9 @@ sys.path.insert(0, os.path.abspath('.'))
 class FeatureFlowTracer:
     def __init__(self, project_root="./"):
         self.project_root = Path(project_root)
-        self.logger = self._setup_logger()
+        self.logger = logger
         self.symbols = ['BTCUSDT', 'ETHUSDT']
-        
-    def _setup_logger(self):
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s | %(levelname)s | %(message)s'
-        )
-        return logging.getLogger(__name__)
-    
+
     def trace_feature_flow(self):
         """Rastrea el flujo completo de features L2 -> L1"""
         
@@ -62,11 +56,9 @@ class FeatureFlowTracer:
         
         print("   Simulando features L2 (como en main.py)...")
         
-        # Simular datos básicos como en main.py
         features_by_symbol = {}
         
         for symbol in self.symbols:
-            # Estas son las features que main.py prepara para L2
             features = {
                 # Price features
                 'price_rsi': 45.0,
@@ -109,7 +101,6 @@ class FeatureFlowTracer:
             feature_count = len(features)
             print(f"   ✅ {symbol}: {feature_count} features preparadas")
             
-            # Mostrar primeras 5 features
             first_5 = list(features.keys())[:5]
             print(f"      Primeras 5: {first_5}")
         
@@ -138,7 +129,6 @@ class FeatureFlowTracer:
                     
                 model_name = model_path.split('/')[-1].replace('.pkl', '')
                 
-                # Extraer número de features esperadas
                 expected_features = None
                 if hasattr(model, 'n_features_in_'):
                     expected_features = model.n_features_in_
@@ -163,13 +153,11 @@ class FeatureFlowTracer:
         
         print("   Analizando transferencia de features...")
         
-        # El problema está probablemente aquí
         print("   🔍 PROBLEMA IDENTIFICADO:")
         print("   - L2 prepara ~52 features por símbolo")
         print("   - Pero L1 recibe solo 12 features")
         print("   - Esto indica que hay una transformación/filtrado intermedio")
         
-        # Verificar si trend_ai.py usa solo algunas features
         print("\n   🧐 Posibles causas:")
         print("   1. trend_ai.py usa solo un subset de features")
         print("   2. data/loaders.py filtra features")
@@ -188,11 +176,9 @@ class FeatureFlowTracer:
         print("   📄 Analizando data/loaders.py...")
         
         try:
-            # Importar y verificar función generate_features
             sys.path.insert(0, str(self.project_root))
             from data.loaders import generate_features
             
-            # Crear datos de prueba
             test_data = pd.DataFrame({
                 'open': [100, 101, 102, 103, 104],
                 'high': [101, 102, 103, 104, 105],
@@ -208,7 +194,6 @@ class FeatureFlowTracer:
                 print(f"   ✅ generate_features() produce {feature_count} features")
                 print(f"      Primeras 5: {list(features.columns)[:5]}")
                 
-                # Verificar si produce exactamente 12 features
                 if feature_count == 12:
                     print("   🎯 CAUSA ENCONTRADA: generate_features() produce exactamente 12 features")
                     print("      Esta es probablemente la causa del problema!")
@@ -224,20 +209,17 @@ class FeatureFlowTracer:
     def _suggest_solutions(self):
         """Sugiere soluciones al problema de features"""
         
-        print("   💡 SOLUCIONES RECOMENDADAS:")
-        print()
+        print("   💡 SOLUCIONES RECOMENDADAS:\n")
         
         print("   🔧 SOLUCIÓN INMEDIATA:")
         print("   1. Usar predict_disable_shape_check=true en LightGBM")
         print("      - Modificar l1_operational/trend_ai.py")
-        print("      - Añadir parámetro predict_disable_shape_check=True")
-        print()
+        print("      - Añadir parámetro predict_disable_shape_check=True\n")
         
         print("   🎯 SOLUCIÓN CORRECTA:")
         print("   1. Identificar exactamente qué features usan los modelos L1")
         print("   2. Modificar la preparación de features para coincidir")
-        print("   3. O re-entrenar modelos L1 con las 52 features de L2")
-        print()
+        print("   3. O re-entrenar modelos L1 con las 52 features de L2\n")
         
         print("   📋 PASOS ESPECÍFICOS:")
         print("   1. Verificar data/loaders.py generate_features()")

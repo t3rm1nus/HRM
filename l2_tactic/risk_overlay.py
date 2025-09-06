@@ -6,6 +6,8 @@ Módulo para generar señales de ajuste de riesgo compatible con tu configuraci�
 
 import asyncio
 from typing import Dict, List, Any, Optional
+import pandas as pd
+import numpy as np
 from datetime import datetime
 
 from core.logging import logger
@@ -18,26 +20,10 @@ class RiskOverlay:
     
     def __init__(self, config=None):
         self.config = config
-        
-        # Importar configuración del sistema
-        try:
-            from comms.config import RISK_CONFIG
-            self.max_drawdown_limit = RISK_CONFIG.max_drawdown_limit
-            self.max_expected_vol = RISK_CONFIG.max_expected_vol
-            self.correlation_limit = RISK_CONFIG.correlation_limit
-            logger.info(f"🛡️ RiskOverlay usando configuración del sistema")
-        except ImportError:
-            # Fallback si no se puede importar
-            self.max_drawdown_limit = getattr(config, 'max_drawdown_limit', 0.15) if config else 0.15
-            self.max_expected_vol = getattr(config, 'max_expected_vol', 0.05) if config else 0.05
-            self.correlation_limit = getattr(config, 'correlation_limit', 0.8) if config else 0.8
-            
-            # Si config es un dict en lugar de objeto
-            if isinstance(config, dict):
-                self.max_drawdown_limit = config.get('max_drawdown_limit', 0.15)
-                self.max_expected_vol = config.get('max_expected_vol', 0.05)
-                self.correlation_limit = config.get('correlation_limit', 0.8)
-        
+        # Forzar umbral de drawdown
+        self.max_drawdown_limit = 0.01  # Forzado a 1%
+        self.max_expected_vol = 0.05
+        self.correlation_limit = 0.8
         logger.info(f"🛡️ RiskOverlay inicializado - MaxDD: {self.max_drawdown_limit:.1%}, MaxVol: {self.max_expected_vol:.1%}")
         
     async def generate_risk_signals(self, market_data: Dict[str, Any], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
@@ -45,59 +31,61 @@ class RiskOverlay:
         Genera señales de ajuste de riesgo basadas en condiciones de mercado y portfolio
         """
         signals = []
+        logger.debug(f"Portfolio data: {portfolio_data}")
         
         try:
             # Verificar volatilidad excesiva
             vol_signals = await self._check_volatility_risk(market_data)
+            logger.info(f"[DEBUG] Señales de volatilidad generadas: {len(vol_signals)}")
             signals.extend(vol_signals)
-            
+
             # Verificar correlación
             corr_signals = await self._check_correlation_risk(market_data, portfolio_data)
+            logger.info(f"[DEBUG] Señales de correlación generadas: {len(corr_signals)}")
             signals.extend(corr_signals)
-            
-            # Verificar drawdown - CORREGIDO
+
+            # Verificar drawdown
             dd_signals = await self._check_drawdown_risk(portfolio_data)
+            logger.info(f"[DEBUG] Señales de drawdown generadas: {len(dd_signals)}")
             signals.extend(dd_signals)
-            
+
             logger.info(f"🛡️ Señales de riesgo generadas: {len(signals)}")
             return signals
-            
+
         except Exception as e:
-            logger.error(f"❌ Error generando señales de riesgo: {e}")
+            logger.error(f"❌ Error generando señales de riesgo: {e}", exc_info=True)
             return []
     
-    async def _check_volatility_risk(self, market_data: Dict[str, Any]) -> List[TacticalSignal]:
+    async def _check_volatility_risk(self, market_data: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
         """
         Verifica riesgo de volatilidad excesiva
         """
         signals = []
         
+        
         try:
             for symbol, data in market_data.items():
-                if symbol == 'USDT' or not isinstance(data, dict):
+                if symbol == 'USDT' or not isinstance(data, pd.DataFrame) or data.empty:
+                    logger.warning(f"⚠️ Datos de mercado vacíos o inválidos para {symbol}")
                     continue
                     
-                # Obtener volatilidad de diferentes posibles estructuras
-                volatility = 0
-                if 'volatility' in data:
-                    if isinstance(data['volatility'], dict):
-                        volatility = data['volatility'].get('1d', 0)
-                    else:
-                        volatility = data['volatility']
-                elif 'vol' in data:
-                    volatility = data['vol']
-                elif 'change_24h' in data:
-                    volatility = abs(data['change_24h'])  # Usar cambio 24h como proxy
+                # Calcular volatilidad desde la columna 'close'
+                if 'close' not in data.columns:
+                    logger.warning(f"⚠️ Columna 'close' no encontrada para {symbol}")
+                    continue
+                
+                volatility = data['close'].pct_change().std() * np.sqrt(252)  # Volatilidad anualizada
+                logger.debug(f"Volatilidad calculada para {symbol}: {volatility:.3f}")
                 
                 if volatility > self.max_expected_vol:
                     signal = TacticalSignal(
                         symbol=symbol,
                         signal_type='risk_high_volatility',
-                        strength=-(volatility - self.max_expected_vol),  # Negative = reduce
+                        strength=-(volatility - self.max_expected_vol),
                         confidence=0.8,
                         side='reduce',
                         features={'volatility': volatility, 'max_vol': self.max_expected_vol},
-                        timestamp=datetime.now().timestamp(),
+                        timestamp=pd.Timestamp.now(),
                         metadata={'risk_type': 'volatility', 'action': 'reduce_position'}
                     )
                     signals.append(signal)
@@ -106,81 +94,75 @@ class RiskOverlay:
             return signals
             
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de volatilidad: {e}")
+            logger.error(f"❌ Error verificando riesgo de volatilidad: {e}", exc_info=True)
             return []
     
-    async def _check_correlation_risk(self, market_data: Dict[str, Any], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
+    async def _check_correlation_risk(self, market_data: Dict[str, pd.DataFrame], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Verifica riesgo de correlación alta entre activos
+        Verifica riesgo de correlación entre activos
         """
         signals = []
         
         try:
-            # Buscar datos BTC y ETH en diferentes formatos posibles
-            btc_data = None
-            eth_data = None
+            btc_data = market_data.get('BTCUSDT')
+            eth_data = market_data.get('ETHUSDT')
             
-            # Intentar diferentes keys
-            for key in market_data.keys():
-                if 'BTC' in key.upper():
-                    btc_data = market_data[key]
-                elif 'ETH' in key.upper():
-                    eth_data = market_data[key]
+            if not isinstance(btc_data, pd.DataFrame) or btc_data.empty or not isinstance(eth_data, pd.DataFrame) or eth_data.empty:
+                logger.warning("⚠️ Datos insuficientes para calcular correlación BTC-ETH")
+                return signals
             
-            if btc_data and eth_data and isinstance(btc_data, dict) and isinstance(eth_data, dict):
-                # Obtener cambios 24h
-                btc_change = btc_data.get('change_24h', btc_data.get('change', 0))
-                eth_change = eth_data.get('change_24h', eth_data.get('change', 0))
+            if 'close' not in btc_data.columns or 'close' not in eth_data.columns:
+                logger.warning("⚠️ Columna 'close' no encontrada para BTCUSDT o ETHUSDT")
+                return signals
+            
+            # Calcular correlación de retornos
+            btc_returns = btc_data['close'].pct_change().dropna()
+            eth_returns = eth_data['close'].pct_change().dropna()
+            if len(btc_returns) > 10 and len(eth_returns) > 10:
+                correlation = btc_returns.corr(eth_returns)
+                logger.debug(f"Correlación BTC-ETH: {correlation:.3f}")
                 
-                # Si ambos se mueven fuertemente en la misma dirección
-                if abs(btc_change) > 0.03 and abs(eth_change) > 0.03:
-                    correlation_risk = (btc_change > 0) == (eth_change > 0)  # Misma dirección
-                    
-                    if correlation_risk:
-                        signal = TacticalSignal(
-                            symbol='PORTFOLIO',
-                            signal_type='risk_high_correlation',
-                            strength=-0.3,  # Reducir exposición
-                            confidence=0.6,
-                            side='reduce',
-                            features={'btc_change': btc_change, 'eth_change': eth_change},
-                            timestamp=datetime.now().timestamp(),
-                            metadata={'risk_type': 'correlation', 'pairs': 'BTC-ETH'}
-                        )
-                        signals.append(signal)
-                        logger.warning(f"⚠️ Alta correlación BTC-ETH: {btc_change:.3f}, {eth_change:.3f}")
+                if correlation > self.correlation_limit:
+                    signal = TacticalSignal(
+                        symbol='PORTFOLIO',
+                        signal_type='risk_high_correlation',
+                        strength=-(correlation - self.correlation_limit),
+                        confidence=0.6,
+                        side='reduce',
+                        features={'correlation': correlation, 'btc_returns': btc_returns.iloc[-1], 'eth_returns': eth_returns.iloc[-1]},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={'risk_type': 'correlation', 'pairs': 'BTC-ETH'}
+                    )
+                    signals.append(signal)
+                    logger.warning(f"⚠️ Alta correlación BTC-ETH: {correlation:.3f} > {self.correlation_limit:.3f}")
             
             return signals
-            
+
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de correlación: {e}")
+            logger.error(f"❌ Error verificando riesgo de correlación: {e}", exc_info=True)
             return []
     
     async def _check_drawdown_risk(self, portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Verifica riesgo de drawdown excesivo - CORREGIDO
+        Verifica riesgo de drawdown excesivo
         """
         signals = []
         
         try:
-            # Obtener drawdown actual de diferentes posibles estructuras
-            current_dd = 0
+            current_dd = portfolio_data.get('drawdown', 
+                          portfolio_data.get('current_drawdown',
+                          portfolio_data.get('dd', 0)))
+            logger.debug(f"Current drawdown: {current_dd:.1%}")
             
-            if isinstance(portfolio_data, dict):
-                current_dd = portfolio_data.get('drawdown', 
-                            portfolio_data.get('current_drawdown',
-                            portfolio_data.get('dd', 0)))
-            
-            # Si drawdown excede el límite
             if current_dd > self.max_drawdown_limit:
                 signal = TacticalSignal(
                     symbol='PORTFOLIO',
                     signal_type='risk_max_drawdown',
-                    strength=-(current_dd - self.max_drawdown_limit) * 2,  # Señal negativa fuerte
+                    strength=-(current_dd - self.max_drawdown_limit) * 2,
                     confidence=0.9,
                     side='close_all',
                     features={'current_dd': current_dd, 'max_dd': self.max_drawdown_limit},
-                    timestamp=datetime.now().timestamp(),
+                    timestamp=pd.Timestamp.now(),
                     metadata={'risk_type': 'drawdown', 'action': 'close_positions'}
                 )
                 signals.append(signal)
@@ -189,5 +171,5 @@ class RiskOverlay:
             return signals
             
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de drawdown: {e}")
+            logger.error(f"❌ Error verificando riesgo de drawdown: {e}", exc_info=True)
             return []

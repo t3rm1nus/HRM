@@ -301,6 +301,13 @@ L1 está ahora completamente preparado para operar con múltiples activos, combi
 5. Actualiza portfolio automáticamente
 6. Registra métricas en logs persistentes
 
+
+### 🔹 Logging:
+OrderManager, executor y risk_guard usan core/logging.py como logger central.
+No se requiere configuración adicional: se importa `logger` desde core.logging.
+Se mantienen niveles DEBUG/INFO/WARNING/ERROR uniformes.
+
+
 ### ⚠️ **LIMITACIONES ACTUALES**
 - **Ejecución simulada:** No envía órdenes reales (por seguridad)
 - **Modelos IA L1:** ✅ **IMPLEMENTADOS Y FUNCIONALES** (modelo1_lr.pkl, modelo2_rf.pkl, modelo3_lgbm.pkl)

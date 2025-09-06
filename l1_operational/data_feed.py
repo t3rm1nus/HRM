@@ -1,67 +1,113 @@
-# l1_operational/data_feed.py
-import pandas as pd
-from .binance_client import BinanceClient
-from comms.config import SYMBOLS
-import logging
 import asyncio
-
-logger = logging.getLogger(__name__)
+import pandas as pd
+from typing import Dict, Any
+from core.logging import logger
+try:
+    from .binance_client import BinanceClient
+except ImportError:
+    logger.warning("⚠️ No se pudo importar BinanceClient, usando ccxt como fallback")
+    BinanceClient = None
 
 class DataFeed:
-    def __init__(self):
-        self.binance = BinanceClient()
-        self.symbols = SYMBOLS
-    
-    async def start(self):
-        """Inicialización asíncrona con datos reales"""
-        logger.info("[DataFeed] Conectando a Binance...")
-        # Test rápido de conexión
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.symbols = config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
+        self.binance_client = BinanceClient(config) if BinanceClient else None
+        self.ccxt_exchange = None
+        if not self.binance_client:
+            try:
+                import ccxt.async_support as ccxt
+                api_key = config.get('BINANCE_API_KEY', '')
+                api_secret = config.get('BINANCE_API_SECRET', '')
+                use_testnet = config.get('USE_TESTNET', False)
+
+                options = {
+                    'apiKey': api_key,
+                    'secret': api_secret,
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'spot'}  # Para spot trading
+                }
+
+                if use_testnet:
+                    options['urls'] = {'api': 'https://testnet.binance.vision/api'}
+                    options['options']['test'] = True
+                    logger.info("✅ Usando Testnet de Binance en ccxt fallback")
+
+                self.ccxt_exchange = ccxt.binance(options)
+                if use_testnet:
+                    self.ccxt_exchange.set_sandbox_mode(True)  # Habilitar modo sandbox/testnet
+                    logger.info("✅ Modo sandbox/testnet habilitado en fallback")
+
+                logger.info("✅ Usando ccxt.binance como fallback para DataFeed")
+            except ImportError:
+                logger.error("❌ ccxt no instalado. Instale con: pip install ccxt")
+                raise ImportError("Falta ccxt para el fallback de BinanceClient")
+
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 50) -> pd.DataFrame:
+        """
+        Obtiene datos OHLCV para un símbolo.
+        """
         try:
-            btc_price = self.binance.client.get_symbol_ticker(symbol="BTCUSDT")
-            eth_price = self.binance.client.get_symbol_ticker(symbol="ETHUSDT")
-            logger.info(f"[DataFeed] Precios: BTC=${btc_price['price']}, ETH=${eth_price['price']}")
-        except Exception as e:
-            logger.warning(f"[DataFeed] Error en conexión inicial: {e}")
-        
-        logger.info("[DataFeed] Conexión establecida.")
+            if self.binance_client:
+                data = await self.binance_client.get_klines(symbol, timeframe, limit=limit)
+                df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            else:
+                await self.ccxt_exchange.load_markets()
+                ohlcv = await self.ccxt_exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-    async def stop(self):
-        """Simulación de apagado asíncrono."""
-        logger.info("[DataFeed] Desconectando de fuentes de datos...")
-        await asyncio.sleep(1)
-        logger.info("[DataFeed] Desconexión completa.")
-
-    def fetch_data(self, symbol, timeframe="1m", limit=100):
-        """Obtener datos OHLCV y convertir a DataFrame"""
-        columns = [
-            "timestamp", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "trades",
-            "taker_buy_base", "taker_buy_quote", "ignored"
-        ]
-        try:
-            klines = self.binance.get_klines(symbol, timeframe, limit)
-            if not klines:
-                return pd.DataFrame(columns=columns)
-            
-            df = pd.DataFrame(klines, columns=columns)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df.set_index("timestamp", inplace=True)
-
-            # Convertir todas las columnas numéricas
-            for col in ["open", "high", "low", "close", "volume",
-                        "quote_asset_volume", "taker_buy_base", "taker_buy_quote"]:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = df[col].astype(float)
-            df["trades"] = df["trades"].astype(int)
-            return df
-        except Exception as e:
-            logger.error(f"Error al obtener datos para {symbol}: {e}")
-            return pd.DataFrame(columns=columns)
 
-    def get_latest_data(self, symbol=None):
-        """Devuelve la última vela disponible para un símbolo o todos los símbolos."""
-        if symbol is None:
-            return {s: self.fetch_data(s, limit=1).iloc[-1] for s in self.symbols if not self.fetch_data(s, limit=1).empty}
-        df = self.fetch_data(symbol, limit=1)
-        if df.empty:
-            return None
-        return df.iloc[-1]
+            logger.debug(f"📊 OHLCV para {symbol}: shape={df.shape}")
+            return df
+
+        except ccxt.AuthenticationError as e:
+            logger.error(f"❌ Error de autenticación para {symbol}: {str(e)} (verifique claves de testnet)", exc_info=True)
+            return pd.DataFrame()
+        except ccxt.NetworkError as e:
+            logger.error(f"❌ Error de red para {symbol}: {str(e)} (verifique conexión o URLs de testnet)", exc_info=True)
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo OHLCV para {symbol}: {str(e)}", exc_info=True)
+            return pd.DataFrame()
+
+    async def get_market_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Obtiene datos de mercado para todos los símbolos.
+        """
+        try:
+            tasks = [self.fetch_ohlcv(symbol) for symbol in self.symbols]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            market_data = {}
+            for symbol, result in zip(self.symbols, results):
+                if isinstance(result, pd.DataFrame) and not result.empty:
+                    market_data[symbol] = result
+                    logger.info(f"✅ Market data {symbol} shape: {result.shape}")
+                else:
+                    logger.warning(f"⚠️ No se obtuvieron datos para {symbol}")
+            
+            if not market_data:
+                logger.warning("⚠️ No se obtuvieron datos de mercado válidos")
+            
+            return market_data
+
+        except Exception as e:
+            logger.error(f"❌ Error en get_market_data: {e}", exc_info=True)
+            return {}
+
+    async def close(self):
+        """
+        Cierra conexiones abiertas.
+        """
+        try:
+            if self.binance_client:
+                await self.binance_client.close()
+            if self.ccxt_exchange:
+                await self.ccxt_exchange.close()
+            logger.info("✅ Conexiones de DataFeed cerradas")
+        except Exception as e:
+            logger.error(f"❌ Error cerrando DataFeed: {e}", exc_info=True)

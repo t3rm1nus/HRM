@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, List
 from .models import Signal, ExecutionResult, OrderIntent
 from .config import EXECUTION_CONFIG, OPERATION_MODE
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 class AIModelManager:
     """Gestor de modelos IA para validación de señales"""

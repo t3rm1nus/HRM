@@ -169,7 +169,7 @@ Cache hit ratio
 
 Logging estructurado
 pythonimport logging
-logger = logging.getLogger("l2_tactic")
+from core.logging import logger
 
 # Los logs incluyen:
 logger.info("Generated 3 AI signals for BTCUSDT", extra={

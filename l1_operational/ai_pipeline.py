@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from .models import Signal, RiskAlert
 import logging
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 @dataclass
 class ModelPrediction:

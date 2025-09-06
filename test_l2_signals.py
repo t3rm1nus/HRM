@@ -4,10 +4,11 @@ from l2_tactic.config import L2Config, AIModelConfig
 from l2_tactic.signal_generator import SignalGenerator
 import pandas as pd
 from dataclasses import dataclass
+from core.logging import logger
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-logger = logging.getLogger("test_l2_signals")
+logger.info("test_l2_signals")
 
 # Mock signals configuration
 @dataclass

@@ -2,8 +2,8 @@ import sqlite3
 import os
 import json
 import logging
-
-logger = logging.getLogger("HRM")
+from core.logging import logger
+logger.info("HRM")
 
 DB_PATH = os.path.join("data", "historico.db")
 

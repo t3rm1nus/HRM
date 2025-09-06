@@ -72,6 +72,7 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 - **L4 Meta:** Planificado pero no desarrollado
 - **Nota:** El sistema actual opera efectivamente con L2+L1
 - ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
+
 🆕 Features incluidas (actualizado)
 表格
 复制
@@ -107,6 +108,14 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 4. **⚙️ Procesamiento L1:** Valida señales y ejecuta órdenes seguras
 5. **💰 Actualización portfolio:** Tracking automático de balances
 6. **📝 Logging persistente:** Guarda métricas en data/logs/ y data/portfolio/
+- L2/L1 se ejecuta **cada 10 segundos** de forma independiente.
+- L3 se ejecuta **cada 10 minutos** en segundo plano.
+- Si L3 falla o se retrasa >30s, L2 sigue usando la última estrategia conocida (fallback).
+
+### **VENTAJAS DEL FALLBACK**
+- L2/L1 nunca se bloquea si L3 falla.
+- Última estrategia válida de L3 se mantiene.
+- Logs centralizados registran errores y warnings.
 
 ### 🎛️ **MODOS DE OPERACIÓN**
 | Modo | Descripción | Activación |
@@ -114,6 +123,7 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 | **TESTNET** | Binance testnet (recomendado) | `USE_TESTNET=true` |
 | **LIVE** | Binance Spot real | `USE_TESTNET=false` |
 | **PAPER** | Simulación local | Configuración interna |
+
 ✅ Buenas prácticas de riesgo (resumen actualizado)
 表格
 复制
@@ -125,8 +135,9 @@ Correlación BTC-ETH	Monitoreada en tiempo real
 Modo LIVE	Implementado y validado
 Determinismo	Una orden por señal → si falla → rechazo y reporte
 Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
+
 🏗️ 5️⃣ Arquitectura (ASCII actualizada)
-复制
+
 ┌─────────────────────────────────────────┐
 │        NIVEL META-RAZONAMIENTO          │
 │  ┌──────────────┐  ┌─────────────────┐  │
@@ -140,7 +151,7 @@ Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
 └─────────────┬───────────────────────────┘
               │ Ajustes Globales (Horas/Días)
 ┌─────────────▼───────────────────────────┐
-│           NIVEL ESTRATÉGICO             │
+│           NIVEL ESTRATÉGICO (L3)       │
 │  ┌─────────────┐  ┌─────────────────┐   │
 │  │ Macro       │  │ Portfolio       │   │
 │  │ Analysis    │  │ Management      │   │
@@ -149,31 +160,49 @@ Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
 │  │ Sentiment   │  │ Risk Appetite   │   │
 │  │ Analysis    │  │ Calculator      │   │
 │  └─────────────┘  └─────────────────┘   │
+│  ⚡ Ejecuta periódicamente (10 min)      │
+│  ⚡ Fallback automático si L3 falla      │
 └─────────────┬───────────────────────────┘
-              │ Decisiones de Alto Nivel (Horas)
+              │ Decisiones Estratégicas → L2
 ┌─────────────▼───────────────────────────┐
-│            NIVEL TÁCTICO                │
+│            NIVEL TÁCTICO (L2)           │
 │  ┌──────────┐ ┌──────────┐ ┌─────────┐  │
 │  │Technical │ │Pattern   │ │Risk     │  │
 │  │Analysis  │ │Recognition│ │Control  │  │
 │  └──────────┘ └──────────┘ └─────────┘  │
+│  ⚡ Loop principal cada 10 segundos      │
+│  ⚡ Genera señales tácticas basadas en L3│
 └─────────────┬───────────────────────────┘
-              │ Señales de Trading (Minutos)
-              │
-┌─────────────▼────────────── Nivel Operacional ───────────────┐
-│ Hard-coded Safety Layer + Order Manager (determinista)       │
-│ AI Models (LogReg, RF, LightGBM) + Multiasset Execution      │
-│ Executor determinista → Exchange (Binance real o testnet)    │
-└──────────────────────────────────────────────────────────────┘
+              │ Señales de Trading → L1
+┌─────────────▼────────────── Nivel Operacional (L1) ───────────────┐
+│ Hard-coded Safety Layer + Order Manager (determinista)             │
+│ AI Models (LogReg, RF, LightGBM) + Multiasset Execution           │
+│ Executor determinista → Exchange (Binance real o testnet)         │
+│ ⚡ Recibe señales L2 y valida límites de riesgo                    │
+│ ⚡ Ejecuta órdenes pre-validadas, mantiene trazabilidad completa   │
+└───────────────────────────────────────────────────────────────────┘
+
+
+
 🔗 6️⃣ Conexión entre niveles (resumen actualizado)
-表格
-复制
+
 Flujo	Descripción
 L4 → L3	Ajuste de capital y parámetros globales
 L3 → L2	Selección de sub-estrategias y universo (BTC, ETH)
 L2 → L1	Señales concretas (cantidad, stop, target) por símbolo
 L1 → Exchange	Envío/gestión de órdenes en tiempo real para BTC/USDT y ETH/USDT desde Binance Spot o testnet
 
+### MÓDULOS CORE ✅ IMPLEMENTADOS
+Funcionalidades esenciales:
+core/state_manager.py - Gestión del estado del sistema
+core/portfolio_manager.py - Tracking y gestión de portfolio
+core/technical_indicators.py - Cálculo de indicadores
+core/feature_engineering.py - Preparación de features para L2
+🔹 Logging centralizado:
+Todos los módulos usan un único logger centralizado en core/logging.py, que combina:
+  - Logging estándar de Python.
+  - Loguru para formatos enriquecidos y colores en consola.
+  - Trazabilidad de ciclo, símbolo y nivel.
 
 ## 📂 7️⃣ Estructura de carpetas
 
@@ -186,7 +215,12 @@ HRM/
 │   ├── sqlite_writer.py
 │   └── __init__.py
 │
-├── core/                      
+├── core/     
+│   ├── __init__.py
+│   ├── state_manager.py         # Gestión del estado global
+│   ├── portfolio_manager.py     # Gestión de portfolio y CSV
+│   ├── technical_indicators.py  # Cálculo de indicadores técnicos
+│   ├── feature_engineering.py   # Preparación de features para L2          
 │   ├── logging.py
 │   ├── scheduler.py
 │   └── utils.py
@@ -278,6 +312,15 @@ HRM/
 > **Nota:** Esta estructura resume el proyecto real y es suficiente para navegar y extender el código.
 
 ---
+
+## 🔁 TABLA DE TIEMPOS/FRECUENCIAS
+| Nivel | Frecuencia              |
+| ----- | ----------------------- |
+| L4    | horas/días              |
+| L3    | 10 min (periódico)      |
+| L2    | 10 s                    |
+| L1    | subsegundos / inmediato |
+
 
 ## 🔁 8️⃣ Flujo de mensajes y state global
 

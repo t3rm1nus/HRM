@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 class RiskLevel(Enum):

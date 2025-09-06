@@ -265,6 +265,11 @@ pytest tests/test_risk_controls.py -v
 
 ---
 
+### 🔹 Logging:
+Todos los logs de L2 (AI, técnico, riesgo, métricas) se centralizan en core/logging.py.
+Se incluyen metadatos opcionales como `cycle_id` y `symbol` para trazabilidad.
+No se usan loggers locales ni setup_logger() en módulos L2.
+
 <div align="center">
 
 **🚀 L2 Tactical - Motor de Señales IA en Producción 🚀**

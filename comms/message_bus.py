@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Coroutine
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 @dataclass

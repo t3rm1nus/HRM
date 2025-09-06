@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pandas as pd
 from core.hrm import ciclo_historico  # tu ciclo HRM adaptado a backtest
-from core.logger import logger  # logging estructurado
+from core.logging import logger # logging estructurado
 
 def _resolver_path_csv(path: str) -> str:
     # Si el path no existe, intentar en carpeta data/

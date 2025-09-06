@@ -13,7 +13,7 @@ from .positions import RiskPosition
 from .stop_losses import DynamicStopLoss, StopLossOrder
 from .portfolio import PortfolioRiskManager
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 class RiskControlManager:

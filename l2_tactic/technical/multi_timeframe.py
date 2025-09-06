@@ -22,43 +22,135 @@ class MultiTimeframeTechnical:
         self.config = config
         self.timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
         self.indicators = ['rsi', 'macd', 'bollinger', 'sma', 'ema']
+        # Definir umbrales ajustados
+        self.rsi_overbought = 60  # Reducido de 70
+        self.rsi_oversold = 40   # Aumentado de 30
+        self.macd_strength_factor = 50  # Reducido de 100 para mayor sensibilidad
+        self.bb_strength_factor = 50   # Reducido de 100 para mayor sensibilidad
+        self.sma_strength_factor = 50  # Reducido de 100 para mayor sensibilidad
         
-    async def generate_signals(self, market_data: Dict[str, Any]) -> List[TacticalSignal]:
+    async def generate_signals(self, market_data: Dict[str, pd.DataFrame], technical_indicators: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
         """
         Genera señales técnicas para múltiples timeframes
         """
         signals = []
         for symbol in market_data:
             try:
-                indicators = market_data[symbol].get('indicators', {})
-                rsi = indicators.get('rsi', 50.0)
-                macd = indicators.get('macd', 0.0)
-                macd_signal = indicators.get('macd_signal', 0.0)
-                
-                side = None
-                strength = 0.7
-                confidence = 0.7
-                
-                if rsi < 50:
-                    side = 'buy'
-                elif rsi > 50:
-                    side = 'sell'
-                
-                if side:
+                data = technical_indicators.get(symbol, pd.DataFrame())
+                if not isinstance(data, pd.DataFrame) or data.empty:
+                    logger.warning(f"⚠️ Datos técnicos vacíos o inválidos para {symbol}: {data.shape if isinstance(data, pd.DataFrame) else type(data)}")
+                    continue
+
+                # Obtener la última fila de indicadores
+                latest = data.iloc[-1]
+                rsi = float(latest.get('rsi', 50.0))
+                macd = float(latest.get('macd', 0.0))
+                macd_signal = float(latest.get('macd_signal', 0.0))
+                bollinger_upper = float(latest.get('bollinger_upper', 0.0))
+                bollinger_lower = float(latest.get('bollinger_lower', 0.0))
+                sma_20 = float(latest.get('sma_20', 0.0))
+                sma_50 = float(latest.get('sma_50', 0.0))
+                ema_12 = float(latest.get('ema_12', 0.0))
+                ema_26 = float(latest.get('ema_26', 0.0))
+                close = float(latest.get('close', 0.0))
+
+                logger.debug(f"Indicadores para {symbol}: rsi={rsi:.2f}, macd={macd:.2f}, macd_signal={macd_signal:.2f}, "
+                            f"bb_upper={bollinger_upper:.2f}, bb_lower={bollinger_lower:.2f}, "
+                            f"sma_20={sma_20:.2f}, sma_50={sma_50:.2f}, ema_12={ema_12:.2f}, "
+                            f"ema_26={ema_26:.2f}, close={close:.2f}")
+
+                # Señales RSI
+                if rsi > self.rsi_overbought:
                     signals.append(TacticalSignal(
                         symbol=symbol,
-                        strength=strength,
-                        confidence=confidence,
-                        side=side,
-                        features={'rsi': rsi, 'macd': macd, 'macd_signal': macd_signal},
-                        timestamp=datetime.now().timestamp(),
-                        source='technical',  # Añadir source
-                        metadata={'indicators': ['rsi', 'macd']}
+                        signal_type="technical_rsi_overbought",
+                        strength=-0.7,
+                        confidence=0.7,
+                        side="sell",
+                        source="technical",
+                        features={"rsi": rsi},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "rsi"}
                     ))
-                    logger.debug(f"📊 Señal técnica para {symbol}: side={side}, rsi={rsi}")
+                    logger.info(f"📈 Señal técnica para {symbol}: sell (RSI overbought, rsi={rsi:.2f})")
+                elif rsi < self.rsi_oversold:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        signal_type="technical_rsi_oversold",
+                        strength=0.7,
+                        confidence=0.7,
+                        side="buy",
+                        source="technical",
+                        features={"rsi": rsi},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "rsi"}
+                    ))
+                    logger.info(f"📈 Señal técnica para {symbol}: buy (RSI oversold, rsi={rsi:.2f})")
+                else:
+                    logger.debug(f"[DEBUG] {symbol} - No señal RSI: rsi={rsi:.2f}")
+
+                # Señales MACD
+                if macd > macd_signal and macd > 0:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        signal_type="technical_macd_bullish",
+                        strength=0.7,
+                        confidence=0.7,
+                        side="buy",
+                        source="technical",
+                        features={"macd": macd, "macd_signal": macd_signal},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "macd"}
+                    ))
+                    logger.info(f"📈 Señal técnica para {symbol}: buy (MACD bullish, macd={macd:.2f})")
+                elif macd < macd_signal and macd < 0:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        signal_type="technical_macd_bearish",
+                        strength=-0.7,
+                        confidence=0.7,
+                        side="sell",
+                        source="technical",
+                        features={"macd": macd, "macd_signal": macd_signal},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "macd"}
+                    ))
+                    logger.info(f"📈 Señal técnica para {symbol}: sell (MACD bearish, macd={macd:.2f})")
+                else:
+                    logger.debug(f"[DEBUG] {symbol} - No señal MACD: macd={macd:.2f}, signal={macd_signal:.2f}")
+
+                # Señales Bollinger
+                if close > bollinger_upper:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        signal_type="technical_bb_overbought",
+                        strength=-0.7,
+                        confidence=0.7,
+                        side="sell",
+                        source="technical",
+                        features={"close": close, "bollinger_upper": bollinger_upper},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "bollinger"}
+                    ))
+                    logger.info(f"📈 Señal técnica para {symbol}: sell (Bollinger overbought, close={close:.2f})")
+                elif close < bollinger_lower:
+                    signals.append(TacticalSignal(
+                        symbol=symbol,
+                        signal_type="technical_bb_oversold",
+                        strength=0.7,
+                        confidence=0.7,
+                        side="buy",
+                        source="technical",
+                        features={"close": close, "bollinger_lower": bollinger_lower},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={"indicator": "bollinger"}
+                    ))
+                    logger.info(f"📈 Señal técnica para {symbol}: buy (Bollinger oversold, close={close:.2f})")
+                else:
+                    logger.debug(f"[DEBUG] {symbol} - No señal Bollinger: close={close:.2f}, bb_lower={bollinger_lower:.2f}, bb_upper={bollinger_upper:.2f}")
+
             except Exception as e:
-                logger.error(f"❌ Error generando señal técnica para {symbol}: {e}", exc_info=True)
-        
+                logger.error(f"❌ Error generando señales técnicas para {symbol}: {e}")
         logger.info(f"📊 Señales técnicas multi-timeframe generadas: {len(signals)}")
         return signals
     
@@ -69,14 +161,12 @@ class MultiTimeframeTechnical:
         signals = []
         
         try:
-            # Obtener datos OHLCV
+            # Obtener datos OHLCV e indicadores
             ohlcv = data.get('ohlcv', {})
             indicators = data.get('indicators', {})
             logger.debug(f"📊 Datos para {symbol}: OHLCV={ohlcv}, Indicadores={indicators}")
             if not indicators:
                 logger.warning(f"⚠️ No hay indicadores para {symbol}, no se generarán señales técnicas")
-            
-            if not ohlcv:
                 return signals
             
             # Análisis RSI
@@ -114,31 +204,31 @@ class MultiTimeframeTechnical:
             if rsi is None:
                 return None
             
-            # Señal de sobrecompra/sobreventa
-            if rsi < 50:  # Relajar umbral de sobreventa
+            if rsi < self.rsi_oversold:
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='rsi_oversold',
-                    strength=min((50 - rsi) / 20, 1.0),
+                    strength=min((self.rsi_oversold - rsi) / 15, 1.0),
                     confidence=0.7,
                     side='buy',
                     source="technical",
                     features={'rsi': rsi, 'condition': 'oversold'},
-                    timestamp=datetime.now().timestamp(),
-                    metadata={'indicator': 'RSI', 'threshold': 50}
+                    timestamp=pd.Timestamp.now(),
+                    metadata={'indicator': 'RSI', 'threshold': self.rsi_oversold}
                 )
-            elif rsi > 50:  # Relajar umbral de sobrecompra
+            elif rsi > self.rsi_overbought:
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='rsi_overbought',
-                    strength=min((rsi - 50) / 20, 1.0),
+                    strength=min((rsi - self.rsi_overbought) / 15, 1.0),
                     confidence=0.7,
                     side='sell',
                     source="technical",
                     features={'rsi': rsi, 'condition': 'overbought'},
-                    timestamp=datetime.now().timestamp(),
-                    metadata={'indicator': 'RSI', 'threshold': 50}
+                    timestamp=pd.Timestamp.now(),
+                    metadata={'indicator': 'RSI', 'threshold': self.rsi_overbought}
                 )
+            return None
         except Exception as e:
             logger.error(f"❌ Error en análisis RSI: {e}")
             return None
@@ -150,41 +240,36 @@ class MultiTimeframeTechnical:
         try:
             macd = indicators.get('macd')
             macd_signal = indicators.get('macd_signal')
-            macd_histogram = indicators.get('macd_histogram')
-            logger.debug(f"📊 MACD para {symbol}: macd={macd}, signal={macd_signal}, histogram={macd_histogram}")
-            if None in [macd, macd_signal, macd_histogram]:
+            if None in [macd, macd_signal]:
                 return None
             
-            # Señal de cruce MACD
-            if macd > macd_signal:  # Bullish crossover
-                strength = min(abs(macd - macd_signal) * 100, 1.0)
+            if macd > macd_signal:
+                strength = min(abs(macd - macd_signal) * self.macd_strength_factor, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='macd_bullish',
                     strength=strength,
-                    confidence=0.6,
+                    confidence=0.7,
                     side='buy',
-                    source="technical",  # Añadir atributo source
-                    features={'macd': macd, 'signal': macd_signal, 'histogram': macd_histogram},
-                    timestamp=datetime.now().timestamp(),
+                    source="technical",
+                    features={'macd': macd, 'macd_signal': macd_signal},
+                    timestamp=pd.Timestamp.now(),
                     metadata={'indicator': 'MACD', 'type': 'bullish_crossover'}
                 )
-            elif macd < macd_signal:  # Bearish crossover
-                strength = min(abs(macd - macd_signal) * 100, 1.0)
+            elif macd < macd_signal:
+                strength = min(abs(macd - macd_signal) * self.macd_strength_factor, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='macd_bearish',
                     strength=strength,
-                    confidence=0.6,
+                    confidence=0.7,
                     side='sell',
-                    source="technical",  # Añadir atributo source
-                    features={'macd': macd, 'signal': macd_signal, 'histogram': macd_histogram},
-                    timestamp=datetime.now().timestamp(),
+                    source="technical",
+                    features={'macd': macd, 'macd_signal': macd_signal},
+                    timestamp=pd.Timestamp.now(),
                     metadata={'indicator': 'MACD', 'type': 'bearish_crossover'}
                 )
-            
             return None
-            
         except Exception as e:
             logger.error(f"❌ Error en análisis MACD: {e}")
             return None
@@ -194,44 +279,40 @@ class MultiTimeframeTechnical:
         Análisis Bollinger Bands
         """
         try:
-            bb_upper = indicators.get('bb_upper')
-            bb_lower = indicators.get('bb_lower')
-            bb_middle = indicators.get('bb_middle')
             close = ohlcv.get('close')
-            logger.debug(f"📊 Bollinger para {symbol}: close={close}, bb_upper={bb_upper}, bb_lower={bb_lower}, bb_middle={bb_middle}")
-            if None in [bb_upper, bb_lower, bb_middle, close]:
+            bb_upper = indicators.get('bollinger_upper')
+            bb_lower = indicators.get('bollinger_lower')
+            bb_middle = indicators.get('bb_middle')
+            if None in [close, bb_upper, bb_lower]:
                 return None
             
-            # Señales de Bollinger Bands
-            if close <= bb_lower:  # Price at lower band - potential buy
-                strength = min((bb_lower - close) / bb_lower * 100, 1.0)
+            if close < bb_lower:
+                strength = min((bb_lower - close) / close * self.bb_strength_factor, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='bb_oversold',
                     strength=strength,
                     confidence=0.5,
                     side='buy',
-                    source="technical",  # Añadir atributo source
+                    source="technical",
                     features={'close': close, 'bb_lower': bb_lower, 'bb_middle': bb_middle},
-                    timestamp=datetime.now().timestamp(),
+                    timestamp=pd.Timestamp.now(),
                     metadata={'indicator': 'Bollinger', 'type': 'lower_touch'}
                 )
-            elif close >= bb_upper:  # Price at upper band - potential sell
-                strength = min((close - bb_upper) / bb_upper * 100, 1.0)
+            elif close >= bb_upper:
+                strength = min((close - bb_upper) / close * self.bb_strength_factor, 1.0)
                 return TacticalSignal(
                     symbol=symbol,
                     signal_type='bb_overbought',
                     strength=strength,
                     confidence=0.5,
                     side='sell',
-                    source="technical",  # Añadir atributo source
+                    source="technical",
                     features={'close': close, 'bb_upper': bb_upper, 'bb_middle': bb_middle},
-                    timestamp=datetime.now().timestamp(),
+                    timestamp=pd.Timestamp.now(),
                     metadata={'indicator': 'Bollinger', 'type': 'upper_touch'}
                 )
-            
             return None
-            
         except Exception as e:
             logger.error(f"❌ Error en análisis Bollinger: {e}")
             return None
@@ -246,62 +327,69 @@ class MultiTimeframeTechnical:
             ema_12 = indicators.get('ema_12')
             ema_26 = indicators.get('ema_26')
             close = ohlcv.get('close')
-            logger.debug(f"📊 Tendencia para {symbol}: close={close}, sma_20={sma_20}, sma_50={sma_50}, ema_12={ema_12}, ema_26={ema_26}")
             if close is None:
                 return None
             
-            # Señal de cruce de medias móviles (Golden/Death Cross)
             if sma_20 and sma_50:
-                if sma_20 > sma_50 and close > sma_20:  # Golden cross + price above
-                    strength = min((close - sma_20) / sma_20 * 100, 1.0)
+                if sma_20 > sma_50 and close > sma_20:
+                    strength = min((close - sma_20) / sma_20 * self.sma_strength_factor, 1.0)
                     return TacticalSignal(
                         symbol=symbol,
                         signal_type='trend_bullish',
                         strength=strength,
                         confidence=0.6,
                         side='buy',
-                        source="technical",  # Añadir atributo source
+                        source="technical",
                         features={'close': close, 'sma_20': sma_20, 'sma_50': sma_50},
-                        timestamp=datetime.now().timestamp(),
+                        timestamp=pd.Timestamp.now(),
                         metadata={'indicator': 'SMA_Cross', 'type': 'golden_cross'}
                     )
-                elif sma_20 < sma_50 and close < sma_20:  # Death cross + price below
-                    strength = min((sma_20 - close) / sma_20 * 100, 1.0)
+                elif sma_20 < sma_50 and close < sma_20:
+                    strength = min((sma_20 - close) / sma_20 * self.sma_strength_factor, 1.0)
                     return TacticalSignal(
                         symbol=symbol,
                         signal_type='trend_bearish',
                         strength=strength,
                         confidence=0.6,
                         side='sell',
-                        source="technical",  # Añadir atributo source
+                        source="technical",
                         features={'close': close, 'sma_20': sma_20, 'sma_50': sma_50},
-                        timestamp=datetime.now().timestamp(),
+                        timestamp=pd.Timestamp.now(),
                         metadata={'indicator': 'SMA_Cross', 'type': 'death_cross'}
                     )
             
-            # Señal EMA
             if ema_12 and ema_26:
-                if ema_12 > ema_26 and close > ema_12:  # EMA bullish
-                    strength = min((close - ema_12) / ema_12 * 50, 0.8)
+                if ema_12 > ema_26 and close > ema_12:
+                    strength = min((close - ema_12) / ema_12 * self.sma_strength_factor, 0.8)
                     return TacticalSignal(
                         symbol=symbol,
                         signal_type='ema_bullish',
                         strength=strength,
                         confidence=0.5,
                         side='buy',
-                        source="technical",  # Añadir atributo source
+                        source="technical",
                         features={'close': close, 'ema_12': ema_12, 'ema_26': ema_26},
-                        timestamp=datetime.now().timestamp(),
+                        timestamp=pd.Timestamp.now(),
                         metadata={'indicator': 'EMA_Cross', 'type': 'bullish'}
                     )
-            
+                elif ema_12 < ema_26 and close < ema_12:
+                    strength = min((ema_12 - close) / ema_12 * self.sma_strength_factor, 0.8)
+                    return TacticalSignal(
+                        symbol=symbol,
+                        signal_type='ema_bearish',
+                        strength=strength,
+                        confidence=0.5,
+                        side='sell',
+                        source="technical",
+                        features={'close': close, 'ema_12': ema_12, 'ema_26': ema_26},
+                        timestamp=pd.Timestamp.now(),
+                        metadata={'indicator': 'EMA_Cross', 'type': 'bearish'}
+                    )
             return None
-            
         except Exception as e:
             logger.error(f"❌ Error en análisis de tendencia: {e}")
             return None
 
-# Función helper para consenso multi-timeframe
 async def resample_and_consensus(data: Dict[str, Any], timeframes: List[str]) -> Dict[str, Any]:
     """
     Resampling y consenso entre múltiples timeframes
@@ -315,12 +403,9 @@ async def resample_and_consensus(data: Dict[str, Any], timeframes: List[str]) ->
             'timeframes_analyzed': len(timeframes)
         }
         
-        # Simple consensus based on available data
-        # En una implementación real, aquí harías resampling de los datos OHLCV
         for tf in timeframes:
             tf_data = data.get(f'tf_{tf}', {})
             if tf_data:
-                # Analyze each timeframe (simplified)
                 if tf_data.get('trend', 'neutral') == 'bullish':
                     consensus['bullish_signals'] += 1
                 elif tf_data.get('trend', 'neutral') == 'bearish':
@@ -328,14 +413,12 @@ async def resample_and_consensus(data: Dict[str, Any], timeframes: List[str]) ->
                 else:
                     consensus['neutral_signals'] += 1
         
-        # Calculate overall confidence
         total_signals = sum([consensus['bullish_signals'], consensus['bearish_signals'], consensus['neutral_signals']])
         if total_signals > 0:
             max_signals = max(consensus['bullish_signals'], consensus['bearish_signals'], consensus['neutral_signals'])
             consensus['confidence'] = max_signals / total_signals
         
         return consensus
-        
     except Exception as e:
         logger.error(f"❌ Error en consenso multi-timeframe: {e}")
         return {'confidence': 0.0, 'timeframes_analyzed': 0}

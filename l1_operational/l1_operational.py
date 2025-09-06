@@ -16,4 +16,5 @@ class L1Model:
 
 class BusAdapterAsync:
     def __init__(self):
-        logging.getLogger(__name__).info("[BusAdapterAsync] Inicializado (pendiente de start())")
+        from core.logging import logger
+        logger.info("[BusAdapterAsync] Inicializado (pendiente de start())")

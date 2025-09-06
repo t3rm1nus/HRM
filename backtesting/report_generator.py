@@ -28,7 +28,8 @@ class ReportGenerator:
     
     def __init__(self, config: Dict):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        from core.logging import logger
+        self.logger = logger
         
         # Configuración de reportes
         self.output_dir = config.get('output_dir', 'backtesting/results')

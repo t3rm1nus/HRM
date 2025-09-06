@@ -5,7 +5,7 @@ import numpy as np
 from typing import Dict, Any, Optional, Union
 import logging
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 def clean_price_data(data: Dict[str, Any]) -> Dict[str, Any]:
     """

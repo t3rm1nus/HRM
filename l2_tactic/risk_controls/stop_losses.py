@@ -13,7 +13,7 @@ from ..config import L2Config
 from ..models import TacticalSignal, MarketFeatures
 from .positions import RiskPosition
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 @dataclass

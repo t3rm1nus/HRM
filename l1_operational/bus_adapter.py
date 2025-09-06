@@ -15,8 +15,22 @@ from comms.message_bus import MessageBus  # assuming comms/message_bus.py
 
 
 class BusAdapterAsync:
-    def __init__(self, bus: MessageBus, timeout: float = 5.0):
-        self.bus = bus
+    def __init__(self, config: dict, state: dict = None, timeout: float = 5.0):
+        """
+        state: diccionario con estado global, necesario para RealTimeDataLoader
+        """
+        from core.state_manager import validate_state_structure
+        from l2_tactic.models import L2State
+
+        # Validación de state
+        self.state = validate_state_structure(state) if state else {}
+        if not isinstance(self.state.get("l2"), L2State):
+            logger.warning("[BusAdapterAsync] ⚠️ state['l2'] no es L2State, corrigiendo...")
+            self.state["l2"] = L2State()
+        
+        logger.debug(f"[BusAdapterAsync] state['l2'] tipo: {type(self.state.get('l2'))}")
+        
+        self.bus = MessageBus()
         self.timeout = timeout
         self._running = True
 
@@ -37,15 +51,24 @@ class BusAdapterAsync:
 
     def _initialize_data_loader(self):
         """Inicializa el data loader para datos reales."""
+        if not self.state:
+            logger.warning("[BusAdapterAsync] ⚠️ No se proporcionó state, DataLoader no se inicializará")
+            return
+
         try:
-            from data.loaders import RealTimeDataLoader
-            self.data_loader = RealTimeDataLoader(real_time=True)
-            logger.info("[BusAdapterAsync] DataLoader para datos REALES inicializado")
+            # Intento flexible de importación
+            try:
+                from data.loaders.realtime_loader import RealTimeDataLoader
+            except ImportError:
+                from l1_operational.realtime_loader import RealTimeDataLoader
+
+            self.data_loader = RealTimeDataLoader(self.state)
+            logger.info("[BusAdapterAsync] ✅ DataLoader para datos REALES inicializado correctamente")
         except ImportError as e:
-            logger.warning(f"[BusAdapterAsync] No se pudo inicializar DataLoader: {e}")
+            logger.warning(f"[BusAdapterAsync] ⚠️ No se encontró RealTimeDataLoader: {e}")
             self.data_loader = None
         except Exception as e:
-            logger.error(f"[BusAdapterAsync] Error inicializando DataLoader: {e}")
+            logger.error(f"[BusAdapterAsync] ❌ Error inicializando DataLoader: {e}")
             self.data_loader = None
 
     async def start(self):
@@ -64,8 +87,7 @@ class BusAdapterAsync:
 
     async def _enqueue_alert(self, message):
         await self.queue_alerts.put(message)
-    
-    
+
     # ----------------- CONSUMO -----------------
     async def consume_signal(self) -> Optional[Signal]:
         signal = await self._consume_generic(self.queue_signals, Signal, "Señal")
@@ -135,32 +157,29 @@ class BusAdapterAsync:
         """Maneja decisiones estratégicas con datos REALES."""
         try:
             from .l2_message import L2Message, StrategicDecision
-            
+
             l2msg = L2Message.from_bus_message(message)
             decision = StrategicDecision(**l2msg.data)
-            
-            # Obtener datos de mercado REALES
+
             market_data = await self.get_real_market_data(decision.universe)
             signals = self._generate_signals_from_market_data(market_data, decision)
-            
+
             for sig in signals:
-                # Obtener features REALES para el símbolo
                 features = await self.get_real_features(sig.symbol)
                 if not features.empty:
                     await self._process_signal_with_features(sig, features)
                 else:
                     logger.warning(f"No hay features para {sig.symbol}, saltando señal")
-                    
+
         except Exception as e:
             logger.exception(f"Error handling strategic decision: {e}")
 
     async def get_real_market_data(self, symbols: list) -> Dict[str, pd.DataFrame]:
-        """Obtener datos de mercado reales para múltiples símbolos."""
         market_data = {}
         if not self.data_loader:
-            logger.warning("DataLoader no disponible, usando datos simulados")
+            logger.warning("⚠️ DataLoader no disponible, usando datos simulados")
             return market_data
-            
+
         for symbol in symbols:
             try:
                 data = await self.data_loader.get_market_data(symbol, "1m", 100)
@@ -174,11 +193,10 @@ class BusAdapterAsync:
         return market_data
 
     async def get_real_features(self, symbol: str) -> pd.DataFrame:
-        """Obtener features reales para un símbolo."""
         if not self.data_loader:
-            logger.warning("DataLoader no disponible, no se pueden generar features")
+            logger.warning("⚠️ DataLoader no disponible, no se pueden generar features")
             return pd.DataFrame()
-            
+
         try:
             features = await self.data_loader.get_features_for_symbol(symbol)
             logger.info(f"🔧 Features REALES para {symbol}: {features.shape if not features.empty else 'vacío'}")
@@ -188,26 +206,19 @@ class BusAdapterAsync:
             return pd.DataFrame()
 
     def _generate_signals_from_market_data(self, market_data: Dict[str, pd.DataFrame], decision) -> list:
-        """Genera señales a partir de datos de mercado reales."""
         signals = []
-        # Aquí integrarías tu lógica de generación de señales
-        # Esto es un placeholder - deberías conectar con tu signal_generator
         logger.info(f"Generando señales desde datos REALES para {len(market_data)} símbolos")
         return signals
 
     async def _process_signal_with_features(self, signal, features: pd.DataFrame):
-        """Procesa una señal con features reales."""
         try:
-            # Aquí integrarías tu lógica de procesamiento de señales
             logger.info(f"Procesando señal {signal.signal_id} con features REALES")
-            # Publicar la señal procesada
             await self.publish_signal(signal)
         except Exception as e:
             logger.error(f"Error procesando señal {signal.signal_id}: {e}")
 
     # ----------------- MÉTODOS DE PENDIENTES -----------------
     async def get_pending_reports(self) -> list:
-        """Devuelve lista de ExecutionReports pendientes."""
         items = []
         while not self._pending_reports.empty():
             try:
@@ -219,7 +230,6 @@ class BusAdapterAsync:
         return items
 
     async def get_pending_alerts(self) -> list:
-        """Devuelve lista de RiskAlerts pendientes."""
         items = []
         while not self._pending_alerts.empty():
             try:
@@ -236,19 +246,20 @@ class BusAdapterAsync:
         logger.info("[BusAdapterAsync] Adapter detenido correctamente")
 
     async def cleanup(self):
-        """Limpieza de recursos."""
         self.stop()
-        if self.data_loader:
-            # Si tu data loader tiene método de cleanup
-            if hasattr(self.data_loader, 'cleanup'):
-                await self.data_loader.cleanup()
+        if self.data_loader and hasattr(self.data_loader, 'cleanup'):
+            await self.data_loader.cleanup()
         logger.info("[BusAdapterAsync] Cleanup completado")
 
-
-# ----------------- INSTANCIA POR DEFECTO -----------------
-try:
-    default_bus = MessageBus()
-    bus_adapter = BusAdapterAsync(default_bus)
-except Exception as e:
-    bus_adapter = None
-    logger.warning(f"[BusAdapterAsync] No se pudo inicializar bus_adapter: {e}")
+    async def close(self):
+            """
+            Cierra conexiones abiertas.
+            """
+            try:
+                if hasattr(self, 'data_feed') and self.data_feed is not None:
+                    await self.data_feed.close()
+                    logger.info("[BusAdapterAsync] Conexiones cerradas")
+                else:
+                    logger.warning("[BusAdapterAsync] ⚠️ No hay data_feed para cerrar")
+            except Exception as e:
+                logger.error(f"[BusAdapterAsync] ❌ Error cerrando conexiones: {e}", exc_info=True)

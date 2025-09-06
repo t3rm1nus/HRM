@@ -10,6 +10,7 @@ from backtesting_utils import TestMode, TestLevel, TestResult, L1Model
 from report_generator import ReportGenerator
 from getdata import BinanceDataCollector
 import asyncio
+from core.logging import logger
 
 class HRMStrategyTester:
     """Clase principal para ejecutar y evaluar la estrategia HRM"""
@@ -17,7 +18,7 @@ class HRMStrategyTester:
     def __init__(self, config: Dict, data_collector: BinanceDataCollector):
         self.config = config
         self.data_collector = data_collector
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     async def run_full_backtest(self):
         # Ya no se accede a self.config['binance'], se usa self.data_collector

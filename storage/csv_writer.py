@@ -1,8 +1,8 @@
 import csv
 import os
 import logging
-
-logger = logging.getLogger("HRM")
+from core.logging import logger
+logger.info("HRM")
 
 FILE_PATH = os.path.join("data", "historico.csv")
 

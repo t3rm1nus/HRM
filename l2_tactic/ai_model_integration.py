@@ -78,17 +78,17 @@ class AIModelWrapper:
             # Extraer symbol y market data
             symbol = features.get('symbol', 'BTC/USDT')
             market_data = features.get('market_data', {})
-            
+
             if not market_data:
-                logger.warning(f"⚠️  Sin datos de mercado para {symbol}")
+                logger.warning(f"⚠️  Sin datos de mercado para {symbol} | features keys: {list(features.keys())} | features: {features} | market_data: {market_data}")
                 return None
-            
+
             # Generar señal usando FinRL
             signal = self.finrl_processor.generate_signal(market_data, symbol)
-            
+
             if signal is None:
                 return None
-                
+
             # Convertir a ModelPrediction
             prediction = ModelPrediction(
                 symbol=symbol,
@@ -98,10 +98,10 @@ class AIModelWrapper:
                 model_type="FinRL_PPO",
                 timestamp=signal.timestamp
             )
-            
+
             logger.debug(f"🎯 Predicción {symbol}: {prediction.prediction:.3f} (conf: {prediction.confidence:.3f})")
             return prediction
-            
+
         except Exception as e:
             logger.error(f"❌ Error en predicción sync: {e}")
             return None

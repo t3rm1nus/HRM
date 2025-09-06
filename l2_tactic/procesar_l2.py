@@ -4,9 +4,9 @@ import pandas as pd
 from typing import Dict, Any
 from .config import L2Config
 from .signal_generator import L2TacticProcessor
-from data.loaders import RealTimeDataLoader
-
-logger = logging.getLogger("l2_tactic")
+from l1_operational.realtime_loader import RealTimeDataLoader
+from core.logging import logger
+logger.info("l2_tactic")
 
 async def procesar_l2(state: dict, config: L2Config, bus=None) -> dict:
     """

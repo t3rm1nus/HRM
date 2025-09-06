@@ -54,7 +54,8 @@ class HRMStrategyTester:
     
     def __init__(self, config: Dict):
         # Configuración de logger
-        self.logger = logging.getLogger(self.__class__.__name__)
+        from core.logging import logger
+        self.logger = logger
         if not self.logger.handlers:  # evita duplicar handlers si se instancia varias veces
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -62,7 +63,7 @@ class HRMStrategyTester:
             )
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+            
             
         # Si la config viene anidada, extraer la sección testing
         if 'testing' in config:
@@ -132,7 +133,8 @@ class HRMStrategyTester:
                 logging.StreamHandler()
             ]
         )
-        self.logger = logging.getLogger(__name__)
+        from core.logging import logger
+        self.logger = logger
 
     def _initialize_components(self):
         """Inicializar componentes del sistema HRM"""

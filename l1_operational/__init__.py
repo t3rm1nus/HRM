@@ -10,7 +10,7 @@ import time
 from loguru import logger
 from .models import Signal, ExecutionReport, RiskAlert, OrderIntent
 from .order_manager import OrderManager
-from .bus_adapter import bus_adapter
+from .bus_adapter import BusAdapterAsync  # Importamos la clase, no la instancia
 
 async def procesar_l1(state: dict) -> dict:
     """
@@ -31,12 +31,10 @@ async def procesar_l1(state: dict) -> dict:
         logger.debug(f"[L1] Señales disponibles: {len(signals)}")
         for signal in signals:
             try:
-                # Validar señal
                 if signal["confidence"] < 0.6:
                     logger.debug(f"[L1] Señal para {signal['symbol']} descartada: confianza {signal['confidence']} < 0.6")
                     continue
 
-                # Obtener precio actual
                 symbol = signal["symbol"]
                 if symbol not in state["mercado"]:
                     logger.error(f"[L1] Símbolo {symbol} no encontrado en datos de mercado")
@@ -149,7 +147,7 @@ async def procesar_l1(state: dict) -> dict:
         "current_positions": metrics["current_positions"],
         "daily_pnl": metrics["daily_pnl"]
     }
-    
+
     logger.info(f"[L1] Métricas actualizadas: success_rate={metrics['success_rate']:.2%}, "
                f"executed={metrics['executed']}, rejected={metrics['rejected_safety']}")
     logger.debug(f"[L1] Órdenes procesadas: {nuevas_ordenes}")
@@ -157,7 +155,6 @@ async def procesar_l1(state: dict) -> dict:
     return state
 
 def _map_status_to_legacy(new_status: str) -> str:
-    """Mapea nuestros status a los esperados por el sistema legacy"""
     status_mapping = {
         "EXECUTED": "filled",
         "REJECTED_SAFETY": "rejected",
@@ -168,11 +165,7 @@ def _map_status_to_legacy(new_status: str) -> str:
     return status_mapping.get(new_status, "unknown")
 
 def get_l1_status() -> dict:
-    """
-    Retorna el estado actual de L1 usando nuestro sistema mejorado.
-    """
     metrics = OrderManager.get_metrics()
-    
     status = {
         "active_orders": metrics["total_signals_processed"],
         "pending_reports": 0,
@@ -189,7 +182,8 @@ def get_l1_status() -> dict:
     return status
 
 def get_l1_metrics():
-    """Alias para compatibilidad - obtiene métricas consolidadas de L1"""
     return OrderManager.get_metrics()
 
-__all__ = ['procesar_l1', 'get_l1_status', 'get_l1_metrics', 'Signal', 'ExecutionReport', 'RiskAlert', 'OrderIntent']
+__all__ = ['procesar_l1', 'get_l1_status', 'get_l1_metrics',
+           'Signal', 'ExecutionReport', 'RiskAlert', 'OrderIntent',
+           'BusAdapterAsync']  # Incluimos la clase, no la instancia

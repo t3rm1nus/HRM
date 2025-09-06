@@ -3,7 +3,7 @@ import os
 import logging
 from stable_baselines3 import PPO
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 def load_model_safely(model_path):
     try:

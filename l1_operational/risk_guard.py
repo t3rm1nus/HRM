@@ -7,7 +7,7 @@ from .models import Signal, ValidationResult, RiskAlert
 from .config import RISK_LIMITS, PORTFOLIO_LIMITS
 import time
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 class RiskGuard:
     """Guardián de riesgo con validaciones hard-coded"""

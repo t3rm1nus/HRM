@@ -14,7 +14,7 @@ from .alerts import AlertType, RiskAlert, RiskLevel
 from .positions import RiskPosition
 from ..models import TacticalSignal  # tipo para check_correlation_risk
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 class PortfolioRiskManager:

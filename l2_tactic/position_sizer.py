@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from .models import TacticalSignal, MarketFeatures, PositionSize
 from .config import L2Config
 
-logger = logging.getLogger(__name__)
+from core.logging import logger
 
 
 @dataclass
