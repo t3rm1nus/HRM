@@ -27,8 +27,9 @@ class TacticalSignal:
                  strength: float,
                  confidence: float,
                  side: str,
+                 quantity: float = None,  # Añadir quantity como parámetro explícito
                  signal_type: str = None,
-                 source: str = 'unknown',   # <<<< agregar
+                 source: str = 'unknown',
                  features: dict = None,
                  timestamp = None,                 
                  metadata: dict = None,
@@ -37,8 +38,9 @@ class TacticalSignal:
         self.strength = strength
         self.confidence = confidence
         self.side = side
+        self.quantity = quantity  # Guardar la cantidad explícitamente
         self.signal_type = signal_type or side
-        self.source = source            # <<<< agregar
+        self.source = source
         self.features = features or {}
         self.timestamp = pd.Timestamp.now() if timestamp is None else pd.to_datetime(timestamp)
         self.metadata = metadata or {}
@@ -83,7 +85,7 @@ class TacticalSignal:
             'side': self.side.lower(),
             'type': getattr(self, 'type', 'market'),
             'order_type': 'market',
-            'qty': getattr(self, 'quantity', 0.0),  # Let order manager calculate
+            'qty': float(self.quantity) if self.quantity is not None else None,
             'price': price,
             'stop_loss': getattr(self, 'stop_loss', None),
             'take_profit': getattr(self, 'take_profit', None),

@@ -15,6 +15,7 @@ async def update_portfolio_from_orders(state, orders):
         btc_balance = float(positions.get("BTCUSDT", {}).get("size", 0.0))
         eth_balance = float(positions.get("ETHUSDT", {}).get("size", 0.0))
         usdt_balance = float(portfolio.get("USDT", 3000.0))
+        total_fees = float(portfolio.get("total_fees", 0.0))  # Tracking de fees acumulados
 
         # Obtener precios actuales del mercado
         market_data = state.get("mercado", {})
@@ -53,21 +54,30 @@ async def update_portfolio_from_orders(state, orders):
                 logger.warning(f"⚠️ Precio no disponible para {symbol}, omitiendo orden")
                 continue
 
+            # Calcular costos de trading
+            order_value = quantity * price
+            trading_fee_rate = 0.001  # 0.1% comisión de Binance
+            trading_fee = order_value * trading_fee_rate
+            
             if symbol == "BTCUSDT":
                 if side.lower() == "buy":
                     btc_balance += quantity
-                    usdt_balance -= quantity * price
+                    usdt_balance -= order_value + trading_fee  # Precio + comisión
                 elif side.lower() == "sell":
                     btc_balance -= quantity
-                    usdt_balance += quantity * price
+                    usdt_balance += order_value - trading_fee  # Precio - comisión
             elif symbol == "ETHUSDT":
                 if side.lower() == "buy":
                     eth_balance += quantity
-                    usdt_balance -= quantity * price
+                    usdt_balance -= order_value + trading_fee  # Precio + comisión
                 elif side.lower() == "sell":
                     eth_balance -= quantity
-                    usdt_balance += quantity * price
-            logger.info(f"📈 Orden procesada: {symbol} {side} {quantity} @ {price}")
+                    usdt_balance += order_value - trading_fee  # Precio - comisión
+            
+            logger.info(f"📈 Orden procesada: {symbol} {side} {quantity} @ {price} (fee: {trading_fee:.4f} USDT)")
+            
+            # Acumular fees totales
+            total_fees += trading_fee
 
         # Validar balances
         if usdt_balance < 0:
@@ -85,8 +95,13 @@ async def update_portfolio_from_orders(state, orders):
         eth_value = eth_balance * eth_price if eth_price else 0.0
         total_value = btc_value + eth_value + usdt_balance
 
+        # Calcular P&L desde capital inicial
+        initial_capital = state.get("initial_capital", 1000.0)
+        pnl_absolute = total_value - initial_capital
+        pnl_percentage = (pnl_absolute / initial_capital) * 100 if initial_capital > 0 else 0.0
+
         # Calcular drawdown
-        peak_value = portfolio.get("peak_value", total_value)
+        peak_value = portfolio.get("peak_value", initial_capital)
         peak_value = max(peak_value, total_value)
         drawdown = (peak_value - total_value) / peak_value if peak_value > 0 else 0.0
 
@@ -98,7 +113,8 @@ async def update_portfolio_from_orders(state, orders):
             },
             "USDT": usdt_balance,
             "drawdown": drawdown,
-            "peak_value": peak_value
+            "peak_value": peak_value,
+            "total_fees": total_fees
         }
         state["btc_balance"] = btc_balance
         state["btc_value"] = btc_value
@@ -107,7 +123,15 @@ async def update_portfolio_from_orders(state, orders):
         state["usdt_balance"] = usdt_balance
         state["total_value"] = total_value
 
-        logger.info(f"💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}, Drawdown={drawdown:.4f}")
+        # Log con color según comparación con capital inicial
+        if total_value > initial_capital:
+            logger.info(f"\x1b[32m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+        elif total_value < initial_capital:
+            logger.info(f"\x1b[31m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+        else:
+            logger.info(f"\x1b[34m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+        logger.info(f"📊 P&L: {pnl_absolute:+.2f} USDT ({pnl_percentage:+.2f}%), Drawdown={drawdown:.4f}")
+        logger.info(f"💸 Fees acumulados: {total_fees:.4f} USDT")
 
     except Exception as e:
         logger.error(f"❌ Error actualizando portfolio: {e}", exc_info=True)

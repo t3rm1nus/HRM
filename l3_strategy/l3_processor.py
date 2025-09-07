@@ -141,24 +141,108 @@ def compute_risk_appetite(volatility_avg, sentiment_score):
 # ---------------------------
 # Main L3 Output
 # ---------------------------
+def _build_regime_features(market_data: dict, model) -> pd.DataFrame:
+    """Construye un DataFrame con los nombres de features que el modelo espera.
+    Rellena con 0.0 cualquier columna faltante y mapea OHLCV básicos si existen.
+    """
+    # Obtener nombres esperados desde el modelo si es posible
+    if hasattr(model, 'feature_names_in_'):
+        expected = list(getattr(model, 'feature_names_in_'))
+    else:
+        # Fallback razonable si el modelo no expone nombres
+        expected = [
+            'open','high','low','close','volume',
+            'boll_lower','boll_middle','boll_upper'
+        ]
+
+    row = {name: 0.0 for name in expected}
+
+    # Intentar mapear OHLCV básicos desde BTCUSDT (o ETHUSDT)
+    def _last_close(sym: str) -> float:
+        val = market_data.get(sym)
+        try:
+            if isinstance(val, list) and val:
+                return float(val[-1].get('close', 0.0))
+            if isinstance(val, dict):
+                return float(val.get('close', 0.0))
+        except Exception:
+            pass
+        return 0.0
+
+    def _last_ohlcv(sym: str, key: str) -> float:
+        val = market_data.get(sym)
+        try:
+            if isinstance(val, list) and val:
+                return float(val[-1].get(key, 0.0))
+            if isinstance(val, dict):
+                return float(val.get(key, 0.0))
+        except Exception:
+            pass
+        return 0.0
+
+    primary = 'BTCUSDT' if 'BTCUSDT' in market_data else ('ETHUSDT' if 'ETHUSDT' in market_data else None)
+    if primary:
+        for key in ('open','high','low','close','volume'):
+            if key in row:
+                row[key] = _last_ohlcv(primary, key)
+
+    return pd.DataFrame([row], columns=expected)
+
+def _safe_close_series(val) -> np.ndarray:
+    """Convierte market_data[symbol] a un np.array de cierres de longitud >=1."""
+    try:
+        if isinstance(val, list) and val:
+            arr = [float(d.get('close', 0.0)) for d in val]
+            return np.array(arr, dtype=float)
+        if isinstance(val, dict):
+            return np.array([float(val.get('close', 0.0))], dtype=float)
+    except Exception:
+        pass
+    return np.array([0.0], dtype=float)
+
 def generate_l3_output(market_data: dict, texts_for_sentiment: list):
     log.info("Generando L3 output estratégico")
-    regime_model = load_regime_model()
-    tokenizer, sentiment_model = load_sentiment_model()
-    garch_btc, garch_eth, lstm_btc, lstm_eth = load_vol_models()
-    cov_matrix, optimal_weights = load_portfolio()
 
-    df_features = pd.DataFrame(market_data)  # adaptar según features reales
-    regime = predict_regime(df_features, regime_model)
-    sentiment_score = predict_sentiment(texts_for_sentiment, tokenizer, sentiment_model)
+    # Carga robusta de modelos con fallbacks por componente
+    try:
+        regime_model = load_regime_model()
+        df_features = _build_regime_features(market_data, regime_model)
+        regime = predict_regime(df_features, regime_model)
+    except Exception as e:
+        log.critical(f"Regime detection fallback por error: {e}")
+        regime = 'neutral'
 
-    returns_btc = np.array([c["close"] for c in market_data["BTCUSDT"]])
-    returns_eth = np.array([c["close"] for c in market_data["ETHUSDT"]])
-    vol_btc = 0.5*(predict_vol_garch(garch_btc, returns_btc)+predict_vol_lstm(lstm_btc, returns_btc))
-    vol_eth = 0.5*(predict_vol_garch(garch_eth, returns_eth)+predict_vol_lstm(lstm_eth, returns_eth))
-    volatility_avg = np.mean([vol_btc, vol_eth])
+    try:
+        tokenizer, sentiment_model = load_sentiment_model()
+        sentiment_score = predict_sentiment(texts_for_sentiment or [], tokenizer, sentiment_model)
+    except Exception as e:
+        log.critical(f"Sentiment fallback por error: {e}")
+        sentiment_score = 0.0
 
-    asset_allocation = {col: float(optimal_weights.loc[0, col]) for col in optimal_weights.columns}
+    # Volatilidad
+    try:
+        garch_btc, garch_eth, lstm_btc, lstm_eth = load_vol_models()
+        btc_series = _safe_close_series(market_data.get('BTCUSDT'))
+        eth_series = _safe_close_series(market_data.get('ETHUSDT'))
+        if len(btc_series) < 10 or len(eth_series) < 10:
+            raise ValueError("series demasiado cortas para modelos de volatilidad")
+        vol_btc = 0.5*(predict_vol_garch(garch_btc, btc_series)+predict_vol_lstm(lstm_btc, btc_series))
+        vol_eth = 0.5*(predict_vol_garch(garch_eth, eth_series)+predict_vol_lstm(lstm_eth, eth_series))
+    except Exception as e:
+        log.critical(f"Volatility fallback por error: {e}")
+        vol_btc = 0.03
+        vol_eth = 0.03
+
+    volatility_avg = float(np.mean([vol_btc, vol_eth]))
+
+    # Black-Litterman / pesos
+    try:
+        cov_matrix, optimal_weights = load_portfolio()
+        asset_allocation = {col: float(optimal_weights.loc[0, col]) for col in optimal_weights.columns}
+    except Exception as e:
+        log.critical(f"Portfolio allocation fallback por error: {e}")
+        asset_allocation = {"BTC": 0.5, "ETH": 0.4, "CASH": 0.1}
+
     risk_appetite = compute_risk_appetite(volatility_avg, sentiment_score)
 
     strategic_guidelines = {

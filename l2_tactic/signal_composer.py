@@ -23,17 +23,17 @@ class SignalComposer:
 
         # Valores por defecto si no existen en el config
         config_defaults = {
-            "ai_model_weight": 0.50,
-            "technical_weight": 0.30,
-            "pattern_weight": 0.20,
-            "min_signal_strength": 0.10,
-            "conflict_tie_threshold": 0.05,
-            "keep_both_when_far": False
+            "ai_model_weight": 0.45,      # Peso principal a la IA
+            "technical_weight": 0.35,      # Técnico como apoyo
+            "pattern_weight": 0.20,        # Patrones como confirmación
+            "min_signal_strength": 0.10,   # Más permisivo
+            "conflict_tie_threshold": 0.15, # Mayor margen para conflictos
+            "keep_both_when_far": True     # Mantener señales opuestas si son fuertes
         }
 
         # Configuración de señales por defecto
         signals_defaults = {
-            "min_confidence": 0.3
+            "min_confidence": 0.25         # Más permisivo con señales iniciales
         }
 
         # Pesos base por fuente
@@ -46,8 +46,11 @@ class SignalComposer:
         self.min_conf = signals_config.get("min_confidence", signals_defaults["min_confidence"])
         self.min_strength = config.get("min_signal_strength", config_defaults["min_signal_strength"])
 
-        # Ajuste de umbrales de conflicto para ser más permisivos con señales fuertes
-        self.conflict_tie_threshold = config.get("conflict_tie_threshold", config_defaults["conflict_tie_threshold"]) * 0.8
+        # Ajuste de umbrales de conflicto - más permisivo con señales fuertes
+        self.conflict_tie_threshold = config.get("conflict_tie_threshold", config_defaults["conflict_tie_threshold"])
+        
+        # Inicializar histórico de señales
+        self._last_signals = {}
         self.keep_both_when_far = True  # Forzar keep_both para señales con alta confianza
         self.high_conf_threshold = 0.7   # Nueva: umbral para señales de alta confianza
 
@@ -122,46 +125,87 @@ class SignalComposer:
                     features.update(signal.features)
 
             if total_weight > 0:
-                avg_strength = weighted_strength / total_weight
-                avg_confidence = weighted_confidence / total_weight
-                dominant_signal = max(sym_signals, key=lambda s: self._get_dynamic_weight(s))
+                # Separar señales por lado (buy/sell)
+                buy_signals = [s for s in sym_signals if s.side.lower() == 'buy']
+                sell_signals = [s for s in sym_signals if s.side.lower() == 'sell']
+                
+                # Calcular fuerza por lado
+                buy_strength = sum(s.strength * self._get_dynamic_weight(s) for s in buy_signals) / total_weight
+                sell_strength = sum(s.strength * self._get_dynamic_weight(s) for s in sell_signals) / total_weight
+                
+                # Decidir el lado dominante
+                side = 'buy' if buy_strength > sell_strength else 'sell'
+                strength_diff = abs(buy_strength - sell_strength)
+                
+                # Si la diferencia es pequeña, no generar señal
+                if strength_diff < self.conflict_tie_threshold:
+                    logger.debug(f"Señales {symbol} muy cercanas (diff={strength_diff:.3f}), ignorando")
+                    continue
+                
+                # Usar señales del lado dominante
+                relevant_signals = buy_signals if side == 'buy' else sell_signals
+                if not relevant_signals:
+                    continue
+                
+                # Calcular métricas finales
+                dominant_signal = max(relevant_signals, key=lambda s: s.strength * self._get_dynamic_weight(s))
+                avg_strength = max(buy_strength, sell_strength)
+                avg_confidence = sum(s.confidence * self._get_dynamic_weight(s) for s in relevant_signals) / sum(self._get_dynamic_weight(s) for s in relevant_signals)
 
-                # Create TacticalSignal with all required fields
                 # Get current price from market data or features
                 current_price = None
-                if hasattr(dominant_signal, 'price') and dominant_signal.price:
-                    current_price = dominant_signal.price
-                elif 'close' in features:
-                    current_price = features['close']
-                
-                # Get latest price from features
-                current_price = None
-                if 'close' in features:
-                    current_price = features['close']
+                if 'close' in features and features['close']:
+                    current_price = float(features['close'])
                 elif hasattr(dominant_signal, 'price') and dominant_signal.price:
-                    current_price = dominant_signal.price
+                    current_price = float(dominant_signal.price)
                 
-                composed_signal = TacticalSignal(
-                    symbol=symbol,
-                    strength=avg_strength,
-                    confidence=avg_confidence,
-                    side=dominant_signal.side,
-                    type="market",
-                    signal_type='tactical',
-                    features=features,  # Include all collected features
-                    timestamp=pd.Timestamp.now(),
-                    source='composed',
-                    price=current_price,
-                    quantity=0.0,  # Let order manager calculate based on portfolio
-                    stop_loss=None,  # Risk overlay should set this
-                    take_profit=None,  # Risk overlay should set this
-                    metadata={
-                        'composed_from': [s.source for s in sym_signals],
-                        'technical_indicators': {k: v for k, v in features.items() 
-                                              if isinstance(v, (int, float))},
-                        'source': 'composed',
-                        'signal_type': dominant_signal.side
-                    }
+                # Fallback a precios por defecto si no se encuentra precio
+                if not current_price:
+                    if symbol == 'BTCUSDT':
+                        current_price = 110000.0  # Precio fallback BTC
+                    elif symbol == 'ETHUSDT':
+                        current_price = 4300.0    # Precio fallback ETH
+                    else:
+                        current_price = 1000.0    # Precio fallback genérico
+                    logger.warning(f"⚠️ Usando precio fallback para {symbol}: {current_price}")
+                
+                # Solo generar señal si supera umbrales mínimos
+                if avg_strength >= self.min_strength and avg_confidence >= self.min_conf:
+                    # Calcular cantidad base según el símbolo
+                    base_quantity = 0.01 if symbol == 'BTCUSDT' else 0.1  # ETH y otros
+                    
+                    # Ajustar por fuerza de la señal
+                    quantity = base_quantity * (1 + avg_strength)
+                    
+                    # Calcular stop-loss y take-profit
+                    stop_loss, take_profit = self._calculate_stop_loss_take_profit(
+                        current_price, side, avg_strength, avg_confidence, features
+                    )
+                    
+                    logger.info(f"💰 Calculando cantidad para {symbol}: base={base_quantity:.4f}, strength={avg_strength:.3f}, final={quantity:.4f}")
+                    logger.info(f"🛡️ SL/TP para {symbol}: SL={stop_loss:.2f}, TP={take_profit:.2f}")
+                    
+                    composed_signal = TacticalSignal(
+                        symbol=symbol,
+                        side=side,  # Usar el lado dominante calculado anteriormente
+                        strength=avg_strength,
+                        confidence=avg_confidence,
+                        type="market",
+                        signal_type='tactical',
+                        features=features,  # Include all collected features
+                        timestamp=pd.Timestamp.now(),
+                        source='composed',
+                        price=current_price,
+                        quantity=quantity,  # Usar la cantidad calculada y asegurarnos que no es 0
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        metadata={
+                            'composed_from': [s.source for s in sym_signals],
+                            'technical_indicators': {k: v for k, v in features.items() 
+                                                if isinstance(v, (int, float))},
+                            'source': 'composed',
+                            'signal_type': 'composed'
+                        }
                 )
                 composed_signals.append(composed_signal)
                 logger.debug(f"✅ Señal compuesta para {symbol}: side={dominant_signal.side}, strength={avg_strength:.3f}, confidence={avg_confidence:.3f}")
@@ -178,19 +222,53 @@ class SignalComposer:
         return final_signals
 
     # --- Métodos auxiliares ---
+    def normalize_features(self, features: dict, symbol: str) -> dict:
+        """Normaliza features según el activo"""
+        if not features:
+            return {}
+            
+        normalized = {}
+        if symbol == 'BTCUSDT':
+            normalized.update({
+                'rsi': features.get('rsi', 50) / 100,
+                'macd': features.get('macd', 0) / 100,  # normalizar por rango típico de BTC
+                'vol_zscore': features.get('vol_zscore', 0) / 3  # normalizar por desvíos estándar
+            })
+        elif symbol == 'ETHUSDT':
+            normalized.update({
+                'rsi': features.get('rsi', 50) / 100,
+                'macd': features.get('macd', 0) / 50,  # normalizar por rango típico de ETH
+                'vol_zscore': features.get('vol_zscore', 0) / 3
+            })
+        return normalized
+
     def _get_dynamic_weight(self, signal: TacticalSignal) -> float:
+        """Calcula peso dinámico basado en la fuente y calidad de la señal"""
         logger.debug(f"Calculando peso para señal: source={signal.source}, confidence={signal.confidence}")
         base_weight = 1.0
+        
+        # Por fuente
         if signal.source == 'ai':
-            base_weight *= 1.5
+            base_weight *= 1.2  # Reducir peso de IA
             if signal.side == 'hold':  # Baja peso para holds
                 base_weight *= 0.2
         elif signal.source == 'technical':
-            base_weight *= 1.0
+            base_weight *= 1.3  # Aumentar peso técnico
         elif signal.source == 'risk':
-            base_weight *= 2.0
-        weight = base_weight * signal.confidence
-        return max(weight, 0.01)
+            base_weight *= 2.0  # Mantener peso de riesgo alto
+            
+        # Por indicador
+        if signal.features:
+            normalized = self.normalize_features(signal.features, signal.symbol)
+            rsi = signal.features.get('rsi', 50)
+            macd = signal.features.get('macd', 0)
+            
+            if abs(rsi - 50) > 20:
+                base_weight *= 1.2  # Aumentar peso cuando RSI está en extremos
+            if abs(macd) > 10:
+                base_weight *= 1.1  # Aumentar peso cuando MACD es fuerte
+                
+        return max(base_weight * signal.confidence, 0.01)
 
     def _resolve_conflicts_and_filter(self, signals: List[TacticalSignal]) -> List[TacticalSignal]:
         """
@@ -212,9 +290,29 @@ class SignalComposer:
                     if avg_confidence >= self.min_conf and avg_strength >= self.min_strength:
                         # Get price from features if available
                         current_price = None
-                        if sigs[0].features and 'close' in sigs[0].features:
-                            current_price = sigs[0].features['close']
+                        if sigs[0].features and 'close' in sigs[0].features and sigs[0].features['close']:
+                            current_price = float(sigs[0].features['close'])
+                        
+                        # Fallback a precios por defecto si no se encuentra precio
+                        if not current_price:
+                            if symbol == 'BTCUSDT':
+                                current_price = 110000.0  # Precio fallback BTC
+                            elif symbol == 'ETHUSDT':
+                                current_price = 4300.0    # Precio fallback ETH
+                            else:
+                                current_price = 1000.0    # Precio fallback genérico
+                            logger.warning(f"⚠️ Usando precio fallback para {symbol}: {current_price}")
 
+                        # Calcular cantidad base según el símbolo
+                        base_quantity = 0.01 if symbol == 'BTCUSDT' else 0.1  # ETH y otros
+                        # Ajustar por fuerza de la señal
+                        calculated_quantity = base_quantity * (1 + avg_strength)
+                        
+                        # Calcular stop-loss y take-profit
+                        stop_loss, take_profit = self._calculate_stop_loss_take_profit(
+                            current_price, side, avg_strength, avg_confidence, sigs[0].features or {}
+                        )
+                        
                         final.append(TacticalSignal(
                             symbol=symbol,
                             strength=avg_strength,
@@ -226,9 +324,9 @@ class SignalComposer:
                             features=sigs[0].features if sigs[0].features else {},
                             timestamp=pd.Timestamp.now(),
                             price=current_price,  # Include price
-                            quantity=0.0,  # Let order manager calculate based on portfolio
-                            stop_loss=None,  # Risk overlay should set this
-                            take_profit=None,  # Risk overlay should set this
+                            quantity=calculated_quantity,  # Use calculated quantity
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
                             metadata={
                                 'composed_from': [s.source for s in sigs],
                                 'technical_indicators': {k: v for k, v in (sigs[0].features or {}).items() 
@@ -244,23 +342,70 @@ class SignalComposer:
             hold = next((s for s in final if s.side == 'hold' and s.symbol == symbol), None)
 
             if buy and sell:
+                # Calcular scores base
                 b_score = buy.strength * buy.confidence
                 s_score = sell.strength * sell.confidence
+                
+                # Añadir peso por volumen
+                if buy.features and 'vol_zscore' in buy.features:
+                    vol_weight = 1 + abs(buy.features['vol_zscore']) if buy.features['vol_zscore'] > 0 else 1
+                    b_score *= vol_weight
+                    logger.debug(f"Buy vol_weight: {vol_weight:.3f}")
+                
+                if sell.features and 'vol_zscore' in sell.features:
+                    vol_weight = 1 + abs(sell.features['vol_zscore']) if sell.features['vol_zscore'] > 0 else 1
+                    s_score *= vol_weight
+                    logger.debug(f"Sell vol_weight: {vol_weight:.3f}")
+                    
+                # Añadir peso por tendencia MACD
+                if buy.features and 'macd' in buy.features:
+                    macd_weight = 1.2 if buy.features['macd'] > 0 else 0.8
+                    b_score *= macd_weight
+                    logger.debug(f"Buy macd_weight: {macd_weight:.3f}")
+                
+                if sell.features and 'macd' in sell.features:
+                    macd_weight = 1.2 if sell.features['macd'] < 0 else 0.8
+                    s_score *= macd_weight
+                    logger.debug(f"Sell macd_weight: {macd_weight:.3f}")
+                
+                # Añadir peso por RSI
+                if buy.features and 'rsi' in buy.features:
+                    rsi = buy.features['rsi']
+                    rsi_weight = 1.3 if rsi < 30 else (1.1 if rsi < 40 else 1.0)
+                    b_score *= rsi_weight
+                    logger.debug(f"Buy rsi_weight: {rsi_weight:.3f}")
+                
+                if sell.features and 'rsi' in sell.features:
+                    rsi = sell.features['rsi']
+                    rsi_weight = 1.3 if rsi > 70 else (1.1 if rsi > 60 else 1.0)
+                    s_score *= rsi_weight
+                    logger.debug(f"Sell rsi_weight: {rsi_weight:.3f}")
+                
+                logger.debug(f"Final scores - Buy: {b_score:.3f}, Sell: {s_score:.3f}")
+                
                 if abs(b_score - s_score) > self.conflict_tie_threshold * 5 and self.keep_both_when_far:
-                    continue  # Mantener ambos
+                    continue  # Mantener ambos si la diferencia es muy grande
                 elif b_score > s_score + self.conflict_tie_threshold:
                     final = [s for s in final if s.side != 'sell' or s.symbol != symbol]
+                    logger.info(f"Resolviendo conflicto a favor de BUY - scores: {b_score:.3f} vs {s_score:.3f}")
                 elif s_score > b_score + self.conflict_tie_threshold:
                     final = [s for s in final if s.side != 'buy' or s.symbol != symbol]
+                    logger.info(f"Resolviendo conflicto a favor de SELL - scores: {s_score:.3f} vs {b_score:.3f}")
                 else:
-                    # Empate: Mantener el de mayor confianza, o descartar ambos
-                    if buy.confidence > sell.confidence:
-                        final = [s for s in final if s.side != 'sell' or s.symbol != symbol]
-                    elif sell.confidence > buy.confidence:
-                        final = [s for s in final if s.side != 'buy' or s.symbol != symbol]
-                    else:
-                        final = [s for s in final if s.side not in ['buy', 'sell'] or s.symbol != symbol]
-                        logger.debug(f"Conflict tie for {symbol}; discarding buy/sell")
+                    # En caso de empate técnico, usar tendencia
+                    if buy.features and sell.features:
+                        buy_trend = buy.features.get('macd', 0) > 0 and buy.features.get('rsi', 50) < 50
+                        sell_trend = sell.features.get('macd', 0) < 0 and sell.features.get('rsi', 50) > 50
+                        
+                        if buy_trend and not sell_trend:
+                            final = [s for s in final if s.side != 'sell' or s.symbol != symbol]
+                            logger.info(f"Empate resuelto por tendencia a favor de BUY")
+                        elif sell_trend and not buy_trend:
+                            final = [s for s in final if s.side != 'buy' or s.symbol != symbol]
+                            logger.info(f"Empate resuelto por tendencia a favor de SELL")
+                        else:
+                            final = [s for s in final if s.side not in ['buy', 'sell'] or s.symbol != symbol]
+                            logger.info(f"Empate sin tendencia clara - descartando ambas señales")
 
             # Si solo hold y no buy/sell, mantener si confianza alta
             if hold and not (buy or sell) and hold.confidence >= self.min_conf:
@@ -282,3 +427,51 @@ class SignalComposer:
 
         logger.info(f"Final signals after composition and conflict resolution: {len(validated_signals)}")
         return validated_signals
+
+    def _calculate_stop_loss_take_profit(self, price: float, side: str, strength: float, confidence: float, features: dict) -> tuple[float, float]:
+        """
+        Calcula stop-loss y take-profit basado en volatilidad, fuerza de señal y confianza
+        """
+        if not price or price <= 0:
+            logger.warning(f"⚠️ Precio inválido para SL/TP: {price}")
+            return None, None
+            
+        # Configuración base
+        base_stop_pct = 0.02  # 2% stop-loss base
+        base_tp_pct = 0.04    # 4% take-profit base (2:1 ratio)
+        
+        # Ajustar por volatilidad si está disponible
+        volatility_multiplier = 1.0
+        if 'vol_zscore' in features:
+            vol_zscore = features['vol_zscore']
+            # Aumentar stop si hay alta volatilidad
+            volatility_multiplier = 1.0 + abs(vol_zscore) * 0.5
+            
+        # Ajustar por confianza de la señal
+        confidence_multiplier = 1.0 + (1.0 - confidence) * 0.5  # Stop más amplio si menos confianza
+        
+        # Ajustar por fuerza de la señal
+        strength_multiplier = 1.0 + (1.0 - strength) * 0.3  # Stop más amplio si menos fuerza
+        
+        # Calcular stop-loss final
+        final_stop_pct = base_stop_pct * volatility_multiplier * confidence_multiplier * strength_multiplier
+        final_stop_pct = min(final_stop_pct, 0.05)  # Máximo 5% stop-loss
+        
+        # Calcular take-profit con ratio riesgo/beneficio
+        risk_reward_ratio = 2.0  # 2:1 por defecto
+        if confidence > 0.8:
+            risk_reward_ratio = 2.5  # Mejor ratio para señales de alta confianza
+        elif confidence < 0.5:
+            risk_reward_ratio = 1.5  # Ratio más conservador para señales de baja confianza
+            
+        final_tp_pct = final_stop_pct * risk_reward_ratio
+        
+        # Aplicar según el lado de la operación
+        if side.lower() == 'buy':
+            stop_loss = price * (1 - final_stop_pct)
+            take_profit = price * (1 + final_tp_pct)
+        else:  # sell
+            stop_loss = price * (1 + final_stop_pct)
+            take_profit = price * (1 - final_tp_pct)
+            
+        return stop_loss, take_profit

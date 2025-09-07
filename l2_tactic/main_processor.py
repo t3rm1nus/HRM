@@ -97,10 +97,19 @@ class L2MainProcessor:
             orders = []
             if combined:
                 try:
+                    # Construir portfolio_state con caja real
+                    port = state.get('portfolio', {}) or {}
+                    total_cap = float(state.get('total_value', state.get('initial_capital', 0.0)) or 0.0)
+                    avail_cap = float(port.get('USDT', 0.0) or 0.0)
+                    portfolio_state = {
+                        'total_capital': total_cap,
+                        'available_capital': avail_cap,
+                    }
+
                     ps = await self.sizer.calculate_position_size(
                         signal=combined,
-                        portfolio_state=state.get('portfolio', {}),
-                        market_features=state.get('mercado', {})
+                        market_features=state.get('mercado', {}),
+                        portfolio_state=portfolio_state,
                     )
                     if ps and getattr(ps, "size", 0) > 0:
                         orders.append(self._create_order_dict(ps))

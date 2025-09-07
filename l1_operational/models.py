@@ -53,7 +53,7 @@ class Signal:
     timestamp: float
     symbol: str
     side: str  # 'buy' or 'sell'
-    qty: float
+    qty: Optional[float] = None  # Will be calculated if not provided
     order_type: str = "market"  # market, limit
     price: Optional[float] = None  # para limit orders
     stop_loss: Optional[float] = None

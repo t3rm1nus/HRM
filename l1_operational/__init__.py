@@ -92,7 +92,7 @@ async def procesar_l1(state: dict) -> dict:
                 timestamp=orden.get("timestamp", time.time()),
                 symbol=orden["symbol"],
                 side=orden["side"],
-                qty=orden["amount"],
+                qty=orden.get("quantity", orden.get("amount", 0.0)),
                 order_type=orden.get("type", "market"),
                 price=orden.get("price"),
                 stop_loss=orden.get("risk", {}).get("stop_loss"),

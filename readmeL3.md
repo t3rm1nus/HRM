@@ -3,6 +3,9 @@
 
 L3_Strategic es el nivel superior de toma de decisiones que define la estrategia global del sistema de trading. Analiza condiciones macroeconómicas, tendencias de mercado y patrones a largo plazo para establecer el régimen de mercado, asignación de activos y apetito de riesgo que guiarán las decisiones tácticas de L2.
 
+## ⚠️ ESTADO ACTUAL: NO IMPLEMENTADO
+**El sistema HRM actualmente opera con L2+L1 únicamente. L3 está planificado pero no desarrollado.**
+
 🚫 Lo que L3 NO hace
 ❌ No hace
 No genera señales de trading específicas (responsabilidad de L2)
@@ -79,10 +82,10 @@ l3_processor.py - Pipeline de inferencia y consolidación L3 → L2
 data_provider.py - Proveedor de datos macro y de mercado
 config.py - Configuración de parámetros estratégicos
 combine_sentiment.py - Consolida inputs de Twitter, Reddit, News en JSON usable
-run_pipeline.py - Orquestador general HRM L4→L1
+run_pipeline.py - Orquestador general HRM L3→L1
 
-📊 Flujo de Decisión Estratégica (Pipeline HRM L4→L1)
-1. 📈 Recolección de Datos (L4)
+📊 Flujo de Decisión Estratégica (Pipeline HRM L3→L1)
+1. 📈 Recolección de Datos (L3)
    ├─ Indicadores macroeconómicos (GDP, inflación, tasas de interés)
    ├─ Datos de mercado (precios, volúmenes, volatilidad)
    ├─ Datos de sentimiento (redes sociales, noticias)
@@ -204,18 +207,32 @@ project_root/
 - Producción confiable: fallback automático evita bloqueos.
 - Logging centralizado: errores y warnings quedan registrados en `core/logging_utils`.
 
-🎉 Conclusión
+## 🚧 ROADMAP FUTURO - L3 ESTRATÉGICO
 
-L3_Strategic representa el cerebro estratégico del sistema HRM, combinando:
+**Funcionalidades planificadas para L3:**
+- 🔮 **Regime Detection** con modelos ML avanzados
+- 📊 **Portfolio Optimization** usando Black-Litterman
+- 🧠 **Sentiment Analysis** con BERT y redes sociales
+- 📈 **Volatility Forecasting** con GARCH y LSTM
+- 🎯 **Strategic Decision Making** basado en análisis macro
 
-Análisis macroeconómico avanzado
+**Integración con L2+L1:**
+- L3 proporcionará directrices estratégicas a L2
+- L2 generará señales tácticas usando contexto L3
+- L1 ejecutará órdenes con validación de riesgo
+- Fallback automático si L3 no está disponible
 
-Modelos de ML sofisticados (RF, LSTM, BERT, GARCH, Black-Litterman)
+## 🎉 Conclusión
 
-Principios modernos de teoría de portafolio
+L3_Strategic representa el cerebro estratégico futuro del sistema HRM, combinando:
 
-Integración jerárquica completa L4→L1
+- Análisis macroeconómico avanzado
+- Modelos de ML sofisticados (RF, LSTM, BERT, GARCH, Black-Litterman)
+- Principios modernos de teoría de portafolio
+- Integración jerárquica L3→L1
 
 para guiar decisiones tácticas de L2 y asegurar un marco estratégico coherente y adaptado al mercado.
+
+**Estado actual:** El sistema HRM funciona perfectamente con L2+L1, proporcionando trading algorítmico robusto y confiable. L3 será una mejora futura para análisis estratégico avanzado.
 
 ¿Listo para llevar tu estrategia al siguiente nivel? 🚀

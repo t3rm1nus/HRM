@@ -12,6 +12,7 @@ from core.feature_engineering import integrate_features_with_l2, debug_l2_featur
 from l1_operational.data_feed import DataFeed
 from l2_tactic.signal_generator import L2TacticProcessor
 from l2_tactic.models import L2State, TacticalSignal
+from l2_tactic.risk_controls.manager import RiskControlManager
 from l1_operational.order_manager import OrderManager
 from comms.config import config
 from l2_tactic.config import L2Config
@@ -41,8 +42,8 @@ bus = MessageBus()
 async def execute_l3_pipeline(state=None):
     logger.debug("[DEBUG] Entrando en execute_l3_pipeline, logger id: %s" % id(logger))
     """
-    Ejecuta L3 directamente, sin subprocess, compatible con IDE 'play'.
-    Llama a la función main() de procesar_l3.py.
+    Ejecuta L3 directamente. Intenta el pipeline completo (4 IAs) y si falla
+    cae al pipeline ligero de procesar_l3.py
     """
     from l3_strategy.procesar_l3 import main as procesar_l3_main
     
@@ -61,24 +62,41 @@ async def execute_l3_pipeline(state=None):
         for k, v in market_data.items()
     }
     try:
-        if asyncio.iscoroutinefunction(procesar_l3_main):
-            await procesar_l3_main({"mercado": market_data_serializable})
-        else:
-            procesar_l3_main({"mercado": market_data_serializable})
-        logger.info("✅ L3 ejecutado correctamente")
+        # Intentar pipeline completo (Regime, Sentiment BERT, Vol GARCH+LSTM, BL)
+        texts_for_sentiment = [
+            "macro neutral", "crypto sentiment mixed"
+        ]
+        generate_l3_output(market_data_serializable, texts_for_sentiment)
+        logger.info("\x1b[32m✅ L3 (pipeline completo) output regenerado\x1b[0m")
     except Exception as e:
-        logger.error(f"❌ Error ejecutando L3: {e}", exc_info=True)
+        logger.error(f"❌ L3 completo falló, usando pipeline ligero: {e}", exc_info=True)
+        try:
+            if asyncio.iscoroutinefunction(procesar_l3_main):
+                await procesar_l3_main({"mercado": market_data_serializable})
+            else:
+                procesar_l3_main({"mercado": market_data_serializable})
+            logger.info("\x1b[32m✅ L3 (pipeline ligero) output regenerado\x1b[0m")
+        except Exception as e2:
+            logger.error(f"❌ Error ejecutando L3 ligero: {e2}", exc_info=True)
 
 def load_l3_output():
     logger.debug("[DEBUG] Entrando en load_l3_output, logger id: %s" % id(logger))
     """Carga el output consolidado de L3"""
     if os.path.exists(L3_OUTPUT):
         with open(L3_OUTPUT, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Normalizar: si viene del pipeline completo (dict plano), envolver
+            if isinstance(data, dict) and 'strategic_context' not in data:
+                return {"strategic_context": data}
+            return data
     logger.warning("⚠️ No se encontró l3_output.json, usando fallback")
     market_data_example = {}
-    texts_example = []
-    return generate_l3_output(market_data_example, texts_example)
+    texts_example = ["neutral"]
+    try:
+        data = generate_l3_output(market_data_example, texts_example)
+        return {"strategic_context": data}
+    except Exception:
+        return {"strategic_context": {}}
 
 async def l3_periodic_task(state):
     logger.debug("[DEBUG] Entrando en l3_periodic_task, logger id: %s" % id(logger))
@@ -110,7 +128,9 @@ async def main():
 
         # Inicializar y validar state
         from l2_tactic.models import L2State  # Importar L2State
-        state = initialize_state(config["SYMBOLS"])
+        initial_capital = 3000.0  # Capital inicial configurable
+        state = initialize_state(config["SYMBOLS"], initial_capital)
+        logger.info(f"💰 Capital inicial configurado: {initial_capital} USDT")
         
         # Validación agresiva del state
         logger.debug(f"[DEBUG] Antes de validate_state_structure, tipo de state['l2']: {type(state.get('l2', 'No existe'))}")
@@ -134,7 +154,12 @@ async def main():
         bus_adapter = BusAdapterAsync(config, state)
         l2_processor = L2TacticProcessor(config)
         l1_order_manager = OrderManager(market_data=state["mercado"])
+        
+        # Inicializar RiskControlManager
+        l2_config = L2Config()
+        risk_manager = RiskControlManager(l2_config)
         logger.info(f"✅ Componentes iniciados, símbolos: {config['SYMBOLS']}")
+        logger.info(f"🛡️ RiskControlManager inicializado para stop-loss y take-profit")
 
         # Forzar L3 inicial
         await execute_l3_pipeline(state)
@@ -146,7 +171,7 @@ async def main():
         asyncio.create_task(l3_periodic_task(state))
 
         # Ejecutar loop principal L2/L1
-        await main_loop(state, data_feed, loader, l2_processor, l1_order_manager, bus_adapter)
+        await main_loop(state, data_feed, loader, l2_processor, l1_order_manager, bus_adapter, risk_manager)
 
     except KeyboardInterrupt:
         logger.info("🛑 Cierre solicitado por usuario")
@@ -177,7 +202,7 @@ async def main():
             await bus_adapter.close()
             logger.info("✅ BusAdapterAsync cerrado")
 
-async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoader, l2_processor: L2TacticProcessor, l1_order_manager: OrderManager, bus_adapter: BusAdapterAsync):
+async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoader, l2_processor: L2TacticProcessor, l1_order_manager: OrderManager, bus_adapter: BusAdapterAsync, risk_manager: RiskControlManager):
     from l2_tactic.models import L2State  # Importar L2State
     logger.debug("[DEBUG] Entrando en main_loop, logger id: %s" % id(logger))
     """Loop principal L2/L1"""
@@ -277,9 +302,31 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
             # 6️⃣ Ejecutar L1 → validación y envío de órdenes
             logger.debug("Processing L1 signals")
             l1_orders = l2_result.get("orders_for_l1", [])
+            logger.info(f"🔍 L1 orders recibidas: {len(l1_orders)}")
+            for i, order in enumerate(l1_orders):
+                logger.info(f"   Orden {i}: {order.get('symbol')} {order.get('side')} qty={order.get('quantity', 'None')}")
             orders_result = await l1_order_manager.process_signals(l1_orders, state=state)
 
-            # 7️⃣ Actualizar portfolio
+            # 7️⃣ Monitorear posiciones existentes para stop-loss/take-profit
+            logger.debug("Monitoring existing positions")
+            current_prices = {}
+            for symbol in config["SYMBOLS"]:
+                if symbol in market_data and not market_data[symbol].empty:
+                    current_prices[symbol] = float(market_data[symbol]['close'].iloc[-1])
+            
+            if current_prices:
+                portfolio_value = state.get("total_value", state.get("initial_capital", 1000.0))
+                risk_alerts = risk_manager.monitor_existing_positions(current_prices, portfolio_value)
+                
+                # Procesar alertas de riesgo (stop-loss/take-profit activados)
+                if risk_alerts:
+                    logger.info(f"🚨 {len(risk_alerts)} alertas de riesgo detectadas")
+                    for alert in risk_alerts:
+                        logger.warning(f"⚠️ {alert.alert_type.value}: {alert.message}")
+                        # Aquí se podrían generar órdenes de cierre automático
+                        # Por ahora solo logueamos las alertas
+
+            # 8️⃣ Actualizar portfolio
             logger.debug("Updating portfolio")
             # Ensure orders_result is a list or convert dict to list of orders
             if isinstance(orders_result, dict):
@@ -293,7 +340,7 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
             await update_portfolio_from_orders(state, processed_orders)
             await save_portfolio_to_csv(state)
 
-            # 8️⃣ Logging persistente
+            # 9️⃣ Logging persistente
             logger.debug("Logging cycle data")
             cycle_id = state.get("cycle_id", 0)
             

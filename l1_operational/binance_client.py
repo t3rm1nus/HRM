@@ -2,6 +2,18 @@ import ccxt.async_support as ccxt
 from core.logging import logger
 try:
     from comms.config import config
+    from dotenv import load_dotenv
+    import os
+    
+    # Forzar recarga del .env
+    load_dotenv(override=True)
+    
+    # Sobreescribir la configuración con valores del .env
+    config = {
+        "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY"),
+        "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET"),
+        "USE_TESTNET": os.getenv("USE_TESTNET", "false").lower() == "true"  # Forzar evaluación explícita
+    }
 except ImportError:
     logger.error("❌ No se pudo importar config desde comms.config")
     config = {

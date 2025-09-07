@@ -117,6 +117,24 @@ class PositionSizerManager:
         total_capital = float(portfolio_state.get("total_capital", 0.0) or 0.0)
         available_capital = float(portfolio_state.get("available_capital", total_capital))
 
+        # Reservas de caja: hard floor 1%, soft reserve 15% (puede relajarse con alta confianza)
+        hard_floor_pct = 0.01
+        soft_reserve_pct = 0.15
+        high_conf_threshold = 0.8
+        hard_floor_usd = total_capital * hard_floor_pct
+        soft_reserve_usd = total_capital * soft_reserve_pct
+
+        # Si la confianza es alta, se permite usar hasta el hard floor; si no, respetar soft reserve
+        confidence = float(getattr(signal, 'confidence', 0.0) or 0.0)
+        min_cash_to_keep = hard_floor_usd if confidence >= high_conf_threshold else soft_reserve_usd
+        effective_available = max(0.0, available_capital - min_cash_to_keep)
+        if effective_available < available_capital:
+            logger.info(
+                f"Cash reserve aplicada ({(hard_floor_pct if confidence>=high_conf_threshold else soft_reserve_pct)*100:.0f}%): "
+                f"available {available_capital:.2f} -> {effective_available:.2f}"
+            )
+        available_capital = effective_available
+
         if total_capital <= 0 or signal.price is None or signal.price <= 0:
             logger.warning("Position sizing aborted: missing total_capital or price")
             return None

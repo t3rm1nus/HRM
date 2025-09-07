@@ -4,13 +4,13 @@ import pandas as pd
 from core.logging import log_event
 from l2_tactic.models import L2State
 
-def initialize_state(symbols):
+def initialize_state(symbols, initial_usdt=1000.0):
     """Inicializa el estado del sistema"""
     from l2_tactic.models import L2State
     return {
         'mercado': {symbol: {} for symbol in symbols},
         'estrategia': 'neutral',
-        'portfolio': {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0},
+        'portfolio': {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': initial_usdt},
         'universo': symbols,
         'exposicion': {symbol: 0.0 for symbol in symbols},
         "signals": [],
@@ -19,6 +19,7 @@ def initialize_state(symbols):
         'deriva': False,
         'ciclo_id': 0,
         'l2': L2State(),
+        'initial_capital': initial_usdt,  # Guardar capital inicial
     }
 
 async def log_cycle_data(state, cycle_id, ciclo_start):

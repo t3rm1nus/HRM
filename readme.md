@@ -2,7 +2,7 @@
 **Estado: PRODUCCIÓN** · **Lenguaje:** Python 3.10+ · **Dominio:** Cripto Trading · **Arquitectura:** L2 Táctico + L1 Operacional
 
 ## 🧭 TL;DR
-HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC y ETH en Binance Spot. Combina **análisis técnico avanzado**, **modelos FinRL pre-entrenados**, **gestión dinámica de riesgo** y **ejecución determinista**. El sistema genera señales inteligentes cada 10 segundos, calcula posiciones óptimas y ejecuta órdenes con controles de seguridad multi-nivel.
+HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC y ETH en Binance Spot. Combina **análisis técnico avanzado**, **modelos FinRL pre-entrenados**, **gestión dinámica de riesgo**, **stop-loss/take-profit automáticos** y **ejecución determinista**. El sistema genera señales inteligentes cada 10 segundos, calcula posiciones óptimas y ejecuta órdenes con controles de seguridad multi-nivel.
 
 ## ✅ SISTEMA OPERATIVO - FUNCIONALIDAD REAL
 **🚀 El sistema HRM está completamente operativo y ejecutándose en producción:**
@@ -12,6 +12,9 @@ HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC
 - ✅ **Gestión de portfolio automática** con tracking en CSV
 - ✅ **Logging persistente** completo en data/logs/
 - ✅ **Controles de riesgo dinámicos** y stops inteligentes
+- ✅ **Stop-Loss y Take-Profit automáticos** integrados
+- ✅ **Costos reales de trading** (comisiones 0.1% Binance)
+- ✅ **Monitoreo de posiciones** en tiempo real
 Modos de operación
 表格
 复制
@@ -35,14 +38,13 @@ Crear un framework reutilizable para distintos universos de activos líquidos.
 Qué queremos aprender a nivel de sistema
 Si el razonamiento multietapa mejora la estabilidad frente a un agente monolítico.
 Qué señales funcionan en cada régimen y cómo combinarlas en L2/L3.
-Cómo distribuir capital/ponderaciones entre modelos/estrategias y detectar concept drift en L4.
+Cómo distribuir capital/ponderaciones entre modelos/estrategias.
 2️⃣ Beneficios esperados
 Mayor precisión mediante composición multiasset y modelos IA (LogReg, RF, LightGBM).
 Reducción de riesgo vía diversificación temporal, límite rígido en L1 y gestión de correlación BTC–ETH.
 Adaptabilidad automática a distintos regímenes de mercado.
 Razonamiento multi-variable con métricas granulares por activo (latencia, slippage, tasa de éxito).
 ⚙️ 3️⃣ Flujo general (visión de tiempos)
-Nivel 4: Meta-Razonamiento — horas/días
 Nivel 3: Análisis Estratégico — horas
 Nivel 2: Táctica de Ejecución — minutos
 Nivel 1: Ejecución + Gestión de Riesgo — segundos
@@ -56,6 +58,8 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 - ✅ **Composición de señales** con pesos dinámicos
 - ✅ **Position sizing** con Kelly Criterion y vol-targeting
 - ✅ **Controles de riesgo pre-ejecución** (stops, correlación, drawdown)
+- ✅ **Stop-Loss y Take-Profit dinámicos** basados en volatilidad y confianza
+- ✅ **Cálculo automático de SL/TP** por señal generada
 
 ### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO  
 **Rol:** Ejecución determinista y segura de órdenes
@@ -66,10 +70,12 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 - ✅ **Conexión a Binance Spot** (real y testnet)
 - ✅ **Order management** con timeouts y reintentos
 - ✅ **Logging persistente** y métricas en tiempo real
+- ✅ **Monitoreo de posiciones** con activación automática de SL/TP
+- ✅ **Costos reales de trading** (comisiones 0.1% Binance)
+- ✅ **RiskControlManager** integrado para gestión de riesgo
 
-### 🚧 **NIVELES L3/L4** - NO IMPLEMENTADOS
+### 🚧 **NIVEL L3** - NO IMPLEMENTADO
 - **L3 Estratégico:** Planificado pero no desarrollado
-- **L4 Meta:** Planificado pero no desarrollado
 - **Nota:** El sistema actual opera efectivamente con L2+L1
 - ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
 
@@ -105,9 +111,11 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 1. **📈 Recolección de datos:** Obtiene OHLCV de Binance para BTC/ETH
 2. **🧮 Cálculo de indicadores:** RSI, MACD, Bollinger Bands, volatilidad
 3. **🤖 Procesamiento L2:** Genera señales con modelos FinRL + análisis técnico  
-4. **⚙️ Procesamiento L1:** Valida señales y ejecuta órdenes seguras
-5. **💰 Actualización portfolio:** Tracking automático de balances
-6. **📝 Logging persistente:** Guarda métricas en data/logs/ y data/portfolio/
+4. **🛡️ Cálculo SL/TP:** Stop-loss y take-profit dinámicos por señal
+5. **⚙️ Procesamiento L1:** Valida señales y ejecuta órdenes seguras
+6. **💰 Actualización portfolio:** Tracking automático con costos reales
+7. **🔍 Monitoreo posiciones:** Activación automática de SL/TP
+8. **📝 Logging persistente:** Guarda métricas en data/logs/ y data/portfolio/
 - L2/L1 se ejecuta **cada 10 segundos** de forma independiente.
 - L3 se ejecuta **cada 10 minutos** en segundo plano.
 - Si L3 falla o se retrasa >30s, L2 sigue usando la última estrategia conocida (fallback).
@@ -128,28 +136,18 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 表格
 复制
 Concepto	Valor real
-Stop-loss	Obligatorio
+Stop-loss	Obligatorio + automático
+Take-profit	Dinámico basado en volatilidad
 Límites por trade	BTC: 0.05, ETH: 1.0
 Exposición máxima	BTC: 20%, ETH: 15%
 Correlación BTC-ETH	Monitoreada en tiempo real
+Costos reales	Comisiones 0.1% Binance aplicadas
+Monitoreo posiciones	Activación automática SL/TP
 Modo LIVE	Implementado y validado
 Determinismo	Una orden por señal → si falla → rechazo y reporte
 Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
 
 🏗️ 5️⃣ Arquitectura (ASCII actualizada)
-
-┌─────────────────────────────────────────┐
-│        NIVEL META-RAZONAMIENTO          │
-│  ┌──────────────┐  ┌─────────────────┐  │
-│  │ Performance  │  │ Concept Drift   │  │
-│  │ Evaluation   │  │ Detection       │  │
-│  └──────────────┘  └─────────────────┘  │
-│  ┌──────────────┐  ┌─────────────────┐  │
-│  │ Model/Strat  │  │ Capital & Risk  │  │
-│  │ Selection    │  │ Allocation      │  │
-│  └──────────────┘  └─────────────────┘  │
-└─────────────┬───────────────────────────┘
-              │ Ajustes Globales (Horas/Días)
 ┌─────────────▼───────────────────────────┐
 │           NIVEL ESTRATÉGICO (L3)       │
 │  ┌─────────────┐  ┌─────────────────┐   │
@@ -187,7 +185,6 @@ Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
 🔗 6️⃣ Conexión entre niveles (resumen actualizado)
 
 Flujo	Descripción
-L4 → L3	Ajuste de capital y parámetros globales
 L3 → L2	Selección de sub-estrategias y universo (BTC, ETH)
 L2 → L1	Señales concretas (cantidad, stop, target) por símbolo
 L1 → Exchange	Envío/gestión de órdenes en tiempo real para BTC/USDT y ETH/USDT desde Binance Spot o testnet
@@ -230,12 +227,6 @@ HRM/
 │   ├── message_bus.py
 │   ├── schemas.py
 │   └── adapters/
-│
-├── l4_meta/                   
-│   ├── drift_detector.py
-│   ├── strategy_selector.py
-│   ├── portfolio_allocator.py
-│   └── __init__.py
 │
 ├── l3_strategy/              
 │   ├── __init__.py
@@ -283,7 +274,6 @@ HRM/
 │   │   └── modelo3_lgbm.pkl
 │   ├── L2/
 │   ├── L3/
-│   └── L4/
 │
 ├── data/                      
 │   ├── connectors/
@@ -316,7 +306,6 @@ HRM/
 ## 🔁 TABLA DE TIEMPOS/FRECUENCIAS
 | Nivel | Frecuencia              |
 | ----- | ----------------------- |
-| L4    | horas/días              |
 | L3    | 10 min (periódico)      |
 | L2    | 10 s                    |
 | L1    | subsegundos / inmediato |
@@ -488,7 +477,6 @@ Configurar parámetros y límites en `core/config/` y en variables de entorno.
 
 ## 🛣️ Roadmap (alto nivel)
 
-* Meta-aprendizaje para selección dinámica de estrategias (L4)
 * Mejores clasificadores de régimen (L3)
 * Ensamble multi-señal robusto (L2)
 * Integración multi-exchange/DEX y simulador de slippage (L1)

@@ -165,7 +165,21 @@ class L2BusAdapter:
     # ---------- processing ----------
     async def _process_signal(self, signal: TacticalSignal, mf: MarketFeatures):
         try:
-            ps = await self.position_sizer.calculate_position_size(signal, mf, self._portfolio_state())
+            # Construir estado de portfolio usando caja real cuando esté disponible
+            port_state = self._portfolio_state()
+            try:
+                # Si existe state global accesible con USDT/total, úsalo (este adaptador puede ejecutarse aislado)
+                # Mantener compatibilidad si no existe
+                # port_state keys esperadas: total_capital, available_capital
+                if 'total_capital' not in port_state or 'available_capital' not in port_state:
+                    port_state = {
+                        'total_capital': port_state.get('capital', 0.0),
+                        'available_capital': port_state.get('USDT', port_state.get('capital', 0.0)),
+                    }
+            except Exception:
+                pass
+
+            ps = await self.position_sizer.calculate_position_size(signal, mf, port_state)
             if not ps:
                 logger.info(f"❌ Sizing rejected for {signal.symbol}")
                 self.metrics.record_signal(signal.symbol, accepted=False)

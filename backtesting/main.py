@@ -1,27 +1,24 @@
-#!/backtesting/main.py
+#!/backtesting/main.py   & .\.venv\Scripts\python.exe -m backtesting.main
 """
 HRM Backtesting System - Ejecutor Principal
-Prueba el sistema completo con datos reales de Binance
+Prueba el sistema completo con datos históricos de Binance.
+Actualizado para usar imports relativos y el logger centralizado.
 """
 
 import os
-import sys
 import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import json
 
-# Agregar paths del proyecto
-sys.path.append('..')
-sys.path.append('../l1_operational')
-sys.path.append('../l2_tactic') 
-sys.path.append('../l3_strategic')
+from core.logging import logger  # Logger centralizado
 
-from getdata import BinanceDataCollector
-from hrm_tester import HRMStrategyTester
-from performance_analyzer import PerformanceAnalyzer
-from report_generator import ReportGenerator
+# Imports relativos dentro del paquete backtesting
+from .getdata import BinanceDataCollector
+from .hrm_tester import HRMStrategyTester
+from .performance_analyzer import PerformanceAnalyzer
+from .report_generator import ReportGenerator
 
 
 class HRMBacktester:
@@ -46,49 +43,71 @@ class HRMBacktester:
         }
         
     def _load_config(self, config_path: str) -> Dict:
-        """Carga la configuración desde un archivo JSON o usa valores por defecto."""
+        """Carga configuración y aplica defaults para claves faltantes."""
+        defaults = {
+            'binance': {
+                'symbols': ['BTCUSDT', 'ETHUSDT'],
+                'intervals': ['1m', '5m', '15m', '1h'],
+                'historical_days': 1,
+                'api_key': '',
+                'api_secret': '',
+                'testnet': True,
+            },
+            'testing': {
+                'mode': 'full',
+                'lookback_days': 7,
+                'symbols': ['BTCUSDT', 'ETHUSDT'],
+                'intervals': ['1h', '5m', '15m', '1m'],
+                'start_date': None,
+                'end_date': None,
+                'initial_capital': 100000.0,
+            },
+            'analysis': {
+                'generate_charts': True,
+                'export_trades': True,
+                'metrics': ['sharpe', 'drawdown', 'win_rate'],
+            },
+            'reporting': {
+                'output_dir': 'backtesting/results',
+                'generate_charts': True,
+                'detailed_logs': True,
+                'export_trades': True,
+            },
+        }
+
+        def _merge(user: Dict, base: Dict) -> Dict:
+            merged = dict(base)
+            for k, v in (user or {}).items():
+                if isinstance(v, dict) and isinstance(base.get(k), dict):
+                    merged[k] = _merge(v, base[k])
+                else:
+                    merged[k] = v
+            return merged
+
         if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
-                return json.load(f)
+            try:
+                with open(config_path, 'r') as f:
+                    user_cfg = json.load(f)
+                return _merge(user_cfg, defaults)
+            except Exception:
+                logging.warning("Config inválida, usando defaults.")
+                return defaults
         else:
-            logging.warning("Archivo de configuración no encontrado, usando valores por defecto.")
-            return {
-                'binance': {
-                    'symbols': ['BTCUSDT', 'ETHUSDT'],
-                    'intervals': ['1m', '5m', '15m', '1h'],
-                    'historical_days': 1
-                },
-                'testing': {
-                    'mode': 'full',
-                    'lookback_days': 7,
-                    'symbols': ['BTCUSDT', 'ETHUSDT'],
-                    'intervals': ['1h', '5m', '15m', '1m']
-                },
-                'analysis': {
-                    'generate_charts': True,
-                    'export_trades': True,
-                    'metrics': ['sharpe', 'drawdown', 'win_rate']
-                },
-                'reporting': {
-                    'output_dir': 'backtesting/results',
-                    'generate_charts': True,
-                    'detailed_logs': True,
-                    'export_trades': True
-                }
-            }
+            logging.warning("Archivo de configuración no encontrado, usando defaults.")
+            return defaults
 
     def setup_logging(self):
-        # Implementación del método que faltaba
-        log_level = self.config['reporting'].get('detailed_logs', True)
-        if log_level:
+        """Integra el logger centralizado y define self.logger."""
+        try:
+            self.logger = logger
+            self.logger.info("Logging configured successfully.")
+        except Exception:
+            # Fallback básico si fallara el logger central (poco probable)
             logging.basicConfig(level=logging.INFO,
-                                format='%(asctime)s | %(levelname)-8s | %(name)-15s:%(funcName)-20s:%(lineno)-4d - %(message)s',
-                                datefmt='%Y-%m-%d %H:%M:%S')
-        else:
-            logging.basicConfig(level=logging.WARNING,
                                 format='%(asctime)s | %(levelname)-8s | %(message)s',
                                 datefmt='%Y-%m-%d %H:%M:%S')
-        logging.info("Logging configured successfully.")
+            self.logger = logging.getLogger("backtesting")
+            self.logger.info("Logging configured (fallback).")
 
     async def run_backtest(self):
         """Ejecuta el proceso de backtesting de punta a punta"""
@@ -96,10 +115,23 @@ class HRMBacktester:
         
         try:
             # 1. Recolectar datos
+            tcfg = self.config['testing']
+            symbols = tcfg.get('symbols') or self.config['binance']['symbols']
+            intervals = tcfg.get('intervals') or self.config['binance']['intervals']
+            start_date = tcfg.get('start_date')
+            end_date = tcfg.get('end_date')
+            if not (start_date and end_date):
+                lookback = int(tcfg.get('lookback_days', 7) or 7)
+                from datetime import datetime, timedelta
+                # Usar fechas de 2023 para coincidir con el parquet
+                end_date = '2023-12-31'
+                start_date = '2023-01-01'
+
             historical_data = await self.data_collector.collect_historical_data(
-                self.config['testing']['symbols'],
-                self.config['testing']['intervals'],
-                self.config['testing']['lookback_days']
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                intervals=intervals,
             )
 
             if not historical_data:
@@ -107,7 +139,8 @@ class HRMBacktester:
                 return
 
             # 2. Ejecutar probador de estrategias
-            testing_results = await self.strategy_tester.run_all_tests(historical_data)
+            # Ejecutar estrategia (mock/simple) por ahora
+            testing_results = await self.strategy_tester.run_hrm_strategy(historical_data)
             
             # 3. Analizar rendimiento
             analyzed_results = self.performance_analyzer.analyze_results(
@@ -127,7 +160,47 @@ class HRMBacktester:
 
         except Exception as e:
             self.logger.error(f"❌ Error crítico durante el backtesting: {e}")
-            logging.exception("Detalles del error:")
+            self.logger.exception("Detalles del error:")
+
+    async def run_validation(self):
+        cfg = self.config.get('validation', {})
+        periods = cfg.get('periods', [])
+        cost_profiles = cfg.get('cost_profiles', [])
+        if not periods or not cost_profiles:
+            self.logger.warning("Validation config incompleta; saltando validación múltiple.")
+            return
+
+        summary = []
+        for period in periods:
+            p_start = period.get('start_date')
+            p_end = period.get('end_date')
+            for prof in cost_profiles:
+                # ajustar perfil en tester
+                try:
+                    self.strategy_tester.validation_profile = prof
+                except Exception:
+                    pass
+                self.logger.info(f"🔎 Validando periodo {p_start}..{p_end} perfil {prof.get('name')}")
+                data = await self.data_collector.collect_historical_data(
+                    symbols=self.config['testing'].get('symbols') or self.config['binance']['symbols'],
+                    start_date=p_start,
+                    end_date=p_end,
+                    intervals=self.config['testing'].get('intervals') or self.config['binance']['intervals'],
+                )
+                res = await self.strategy_tester.run_hrm_strategy(data)
+                overall = res.get('overall', {})
+                summary.append({
+                    'period': f"{p_start}..{p_end}",
+                    'profile': prof.get('name'),
+                    'trades': overall.get('total_trades', 0),
+                    'win_rate': overall.get('win_rate', 0),
+                    'total_return': overall.get('total_return', 0),
+                })
+
+        # imprimir resumen
+        self.logger.info("📋 Resumen validación:")
+        for row in summary:
+            self.logger.info(f" {row['period']} [{row['profile']}] trades={row['trades']} win={row['win_rate']:.2%} ret={row['total_return']:.2%}")
 
 async def main():
     """Función principal para ejecutar el backtester"""

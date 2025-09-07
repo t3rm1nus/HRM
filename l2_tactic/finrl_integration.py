@@ -9,7 +9,9 @@ import pandas as pd
 from typing import Dict, Any, Optional, List
 import os
 import torch
-from core.logging import logger
+from loguru import logger
+from .models import TacticalSignal
+from datetime import datetime
 from .models import TacticalSignal
 from datetime import datetime
 
@@ -19,6 +21,7 @@ class FinRLProcessor:
         self.model = None
         self.is_loaded = False
         self.observation_space_info = None
+        self.last_action_value = None
         
         if not self.load_real_model(model_path):
             raise RuntimeError(f"FAILED TO LOAD FINRL MODEL: {model_path}")
@@ -272,45 +275,52 @@ class FinRLProcessor:
             # Convert to numpy array if needed
             probs = np.array(action_probs).flatten() if isinstance(action_probs, (list, np.ndarray)) else np.array([action_probs])
             
-            # Convert numpy values to native Python types
-            probs = [float(p) for p in probs]
+            # Convert numpy values to native Python types and get action strength
+            probs = [abs(float(p)) for p in probs]
+            action_strength = max(probs)  # Get raw action strength
+            
+            # Scale action strength to [0,1]
+            action_strength = min(1.0, (np.tanh(action_strength) + 1) / 2)
             
             # Handle different output formats
+            # Calculate probabilities based on action space
             if len(probs) == 2:  # Binary action space (buy/sell)
                 buy_prob, sell_prob = probs
-                hold_prob = 1.0 - (buy_prob + sell_prob)  # Implicit hold probability
+                hold_prob = max(0.0, 1.0 - (buy_prob + sell_prob))  # Implicit hold probability
             elif len(probs) == 3:  # Trinary action space (buy/hold/sell)
                 buy_prob, hold_prob, sell_prob = probs
             elif len(probs) == 1:  # Continuous action space [-1, 1]
-                action_value = probs[0]
-                # Convert to probabilities
-                if action_value > 0.2:
-                    buy_prob, hold_prob, sell_prob = 0.7, 0.2, 0.1
-                elif action_value < -0.2:
-                    buy_prob, hold_prob, sell_prob = 0.1, 0.2, 0.7
+                action_val = probs[0]
+                # Convert to probabilities while maintaining strength
+                if action_val > 0.2:
+                    buy_prob = action_strength  # Use scaled strength
+                    hold_prob = 0.2
+                    sell_prob = 1.0 - buy_prob - hold_prob
+                elif action_val < -0.2:
+                    sell_prob = action_strength  # Use scaled strength
+                    hold_prob = 0.2
+                    buy_prob = 1.0 - sell_prob - hold_prob
                 else:
-                    buy_prob, hold_prob, sell_prob = 0.3, 0.4, 0.3
+                    hold_prob = 0.4
+                    buy_prob = sell_prob = (1.0 - hold_prob) / 2
             else:
                 logger.warning(f"Unexpected probability shape: {len(probs)}")
-                buy_prob, hold_prob, sell_prob = 0.33, 0.34, 0.33
+                buy_prob = sell_prob = action_strength / 3
+                hold_prob = 1.0 - (buy_prob + sell_prob)
             
-            # Normalize probabilities
-            total = buy_prob + hold_prob + sell_prob
-            if total > 0:
-                buy_prob /= total
-                hold_prob /= total
-                sell_prob /= total
+            # Get action value/strength directly from probabilities
+            action_strength = max(buy_prob, sell_prob)  # Hold prob doesn't affect strength
             
-            # Determine action based on highest probability
+            # Determine action based on highest probability while preserving PPO strength
             if buy_prob > max(sell_prob, hold_prob) and buy_prob > 0.4:
                 side = "buy"
-                strength = buy_prob
+                strength = action_strength  # Use scaled action strength
             elif sell_prob > max(buy_prob, hold_prob) and sell_prob > 0.4:
-                side = "sell"
-                strength = sell_prob
+                side = "sell" 
+                strength = action_strength  # Use scaled action strength
             else:
                 side = "hold"
-                strength = hold_prob
+                strength = min(0.4, action_strength)  # Limit hold strength
 
             # Use value prediction to scale confidence if available
             base_confidence = max(buy_prob, sell_prob, hold_prob)

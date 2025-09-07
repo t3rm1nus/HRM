@@ -553,3 +553,40 @@ class ReportGenerator:
         except Exception as e:
             self.logger.error(f"Error generando dashboard HTML: {e}")
             return ""
+
+    def generate_full_report(self, results: Dict, output_dir: str) -> str:
+        """Método síncrono para generar reporte completo (compatibilidad con main.py)"""
+        try:
+            # Crear directorio si no existe
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            
+            # Generar reporte básico
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Reporte ejecutivo simple
+            filename = f"{output_dir}/executive_summary_{timestamp}.txt"
+            overall = results.get('overall', {})
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write("="*80 + "\n")
+                f.write("HRM BACKTESTING - RESUMEN EJECUTIVO\n")
+                f.write("="*80 + "\n")
+                f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("📊 MÉTRICAS CLAVE:\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"Retorno Total: {overall.get('total_return', 0):.2%}\n")
+                f.write(f"Retorno Anualizado: {overall.get('annualized_return', 0):.2%}\n")
+                f.write(f"Sharpe Ratio: {overall.get('sharpe_ratio', 0):.3f}\n")
+                f.write(f"Drawdown Máximo: {overall.get('max_drawdown', 0):.2%}\n")
+                f.write(f"Win Rate: {overall.get('win_rate', 0):.2%}\n")
+                f.write(f"Profit Factor: {overall.get('profit_factor', 0):.2f}\n")
+                f.write(f"Total Trades: {overall.get('total_trades', 0)}\n")
+                f.write("="*80 + "\n")
+            
+            self.logger.info(f"Reporte generado en: {filename}")
+            return filename
+            
+        except Exception as e:
+            self.logger.error(f"Error generando reporte: {e}")
+            return ""

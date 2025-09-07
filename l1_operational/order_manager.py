@@ -126,11 +126,16 @@ class OrderManager:
 
         for signal in signals:
             try:
+                logger.debug(f"🔍 Tipo de señal recibida: {type(signal)}")
+                if isinstance(signal, dict):
+                    logger.debug(f"🔍 Contenido del dict: {signal}")
                 signal_obj = None
                 
                 # Convertir TacticalSignal a Signal si es necesario
                 if isinstance(signal, TacticalSignal):
                     try:
+                        logger.debug(f"🔄 Convirtiendo TacticalSignal: {signal.symbol} {signal.side} quantity={getattr(signal, 'quantity', 'None')}")
+                        
                         # Get price from features if not set directly
                         price = getattr(signal, 'price', None)
                         if price is None and hasattr(signal, 'features'):
@@ -151,14 +156,18 @@ class OrderManager:
                             'strategy_id': 'L2_TACTIC',
                             'price': float(price) if price is not None else None,  # Ensure price is included
                             'stop_loss': signal.stop_loss if hasattr(signal, 'stop_loss') else None,
-                            'take_profit': signal.take_profit if hasattr(signal, 'take_profit') else None,
-                            'quantity': signal.quantity if hasattr(signal, 'quantity') else 0.0,  # Will be recalculated
+                            'take_profit': signal.take_profit if hasattr(signal, 'take_profit') else None
                         }
                         
-                        # Calculate quantity for the order
-                        calculated_qty = self._calculate_order_quantity(signal)
-                        signal_dict['quantity'] = calculated_qty
-                        signal_dict['qty'] = calculated_qty  # For backward compatibility
+                        # Use existing quantity if available, otherwise calculate
+                        original_qty = getattr(signal, 'quantity', None)
+                        if original_qty is not None and float(original_qty) > 0:
+                            signal_dict['qty'] = float(original_qty)
+                            logger.debug(f"✅ Usando cantidad existente: {original_qty:.8f}")
+                        else:
+                            calculated_qty = self._calculate_order_quantity(signal)
+                            signal_dict['qty'] = calculated_qty
+                            logger.debug(f"✅ Usando cantidad calculada: {calculated_qty:.8f}")
                         
                         # Ensure all required fields are present
                         if not signal_dict.get('technical_indicators'):
@@ -172,7 +181,8 @@ class OrderManager:
                         
                         # Create the Signal object
                         signal_obj = create_signal(**signal_dict)
-                        logger.debug(f"✅ Señal táctica convertida: {signal_obj.symbol} {signal_obj.side} qty={signal_dict['quantity']:.8f}")
+                        logger.debug(f"✅ Señal táctica convertida: {signal_obj.symbol} {signal_obj.side} qty={signal_dict['qty']:.8f}")
+                        logger.debug(f"🔍 Signal object qty attribute: {getattr(signal_obj, 'qty', 'None')}")
                         
                     except Exception as e:
                         logger.error(f"❌ Error creando señal para {signal.symbol}: {e}", exc_info=True)
@@ -190,6 +200,7 @@ class OrderManager:
                         continue
                 
                 elif isinstance(signal, Signal):
+                    logger.debug(f"🔄 Procesando Signal object: {signal.symbol} {signal.side} qty={signal.qty}")
                     signal_obj = signal
                 elif isinstance(signal, dict):
                     try:
@@ -197,13 +208,28 @@ class OrderManager:
                         timestamp = signal.get('timestamp')
                         if hasattr(timestamp, 'timestamp'):
                             timestamp = timestamp.timestamp()
+                        
+                        # Get quantity from signal dict
+                        quantity = signal.get('quantity', 0.0)
+                        logger.debug(f"🔄 Procesando señal dict: {signal.get('symbol')} {signal.get('side')} quantity={quantity}")
+                        
+                        # Si quantity es 0, intentar calcularla
+                        if quantity <= 0:
+                            # Calcular cantidad basada en strength y símbolo
+                            strength = signal.get('strength', 0.5)
+                            symbol = signal.get('symbol', '')
+                            if symbol == 'BTCUSDT':
+                                quantity = 0.01 * (1 + strength)
+                            elif symbol == 'ETHUSDT':
+                                quantity = 0.1 * (1 + strength)
+                            logger.debug(f"🔄 Cantidad calculada: {quantity}")
                             
                         signal_dict = {
                             'signal_id': str(uuid.uuid4()),
                             'symbol': signal.get('symbol'),
                             'side': signal.get('side'),
                             'order_type': signal.get('type', 'market'),
-                            'qty': float(signal.get('quantity', 0.0)),
+                            'qty': float(quantity) if quantity > 0 else 0.0,
                             'strength': float(signal.get('strength', 0.0)),
                             'confidence': float(signal.get('confidence', 0.0)),
                             'timestamp': timestamp or time.time(),
@@ -281,14 +307,25 @@ class OrderManager:
                 
                 # Validar y procesar la orden
                 try:
-                    quantity = signal_obj.qty if isinstance(signal_obj, Signal) else self._calculate_order_quantity(signal_obj)
+                    logger.info(f"🔍 Procesando señal para {signal_obj.symbol}: type={type(signal_obj)}, attrs={dir(signal_obj)}")
+                    qty_from_signal = getattr(signal_obj, 'qty', None)
+                    logger.info(f"💫 Cantidad en señal: {qty_from_signal}")
+                    
+                    quantity = qty_from_signal if qty_from_signal is not None else self._calculate_order_quantity(signal_obj)
+                    logger.info(f"📊 Cantidad calculada: {quantity}")
+                    # Ajuste por capital/holdings disponible antes de ejecutar
+                    quantity_adj = self._adjust_quantity_for_capital_and_holdings(signal_obj, float(quantity), state)
+                    if quantity_adj != quantity:
+                        logger.info(f"🧮 Cantidad ajustada final: {quantity:.8f} -> {quantity_adj:.8f}")
+                    quantity = quantity_adj
+                    
                     if quantity <= 0:
                         logger.warning(f"⚠️ Cantidad calculada inválida para {signal_obj.symbol}: {quantity}")
                         rec = {
                             'symbol': signal_obj.symbol,
                             'side': signal_obj.side,
                             'status': 'rejected',
-                            'reason': 'invalid_quantity',
+                            'reason': 'invalid_or_unaffordable_quantity',
                             'order_id': None
                         }
                         processed_orders.append(rec)
@@ -368,6 +405,115 @@ class OrderManager:
                 'source': 'L1',
                 'raw': order_like
             }
+
+    def _get_current_price(self, symbol: str, signal) -> float:
+        """Obtiene el precio actual del símbolo desde la señal/market_data (con fallback)."""
+        try:
+            if hasattr(signal, 'price') and signal.price:
+                return float(signal.price)
+            if isinstance(self.market_data, dict):
+                md = self.market_data.get(symbol) or {}
+                if isinstance(md, dict):
+                    p = md.get('close')
+                    if p:
+                        return float(p)
+            if hasattr(signal, 'features') and isinstance(signal.features, dict):
+                p = signal.features.get('close')
+                if p:
+                    return float(p)
+        except Exception:
+            pass
+        return 110000.0 if symbol == 'BTCUSDT' else 4300.0 if symbol == 'ETHUSDT' else 1000.0
+
+    def _get_portfolio_balances(self, state: Optional[Dict[str, Any]]) -> Dict[str, float]:
+        """Extrae USDT y sizes por símbolo del state (seguro por defecto)."""
+        balances = {'USDT': 0.0, 'BTCUSDT': 0.0, 'ETHUSDT': 0.0}
+        try:
+            if not state:
+                return balances
+            portfolio = state.get('portfolio', {}) or {}
+            balances['USDT'] = float(portfolio.get('USDT', 0.0))
+            positions = portfolio.get('positions', {}) or {}
+            balances['BTCUSDT'] = float((positions.get('BTCUSDT') or {}).get('size', 0.0))
+            balances['ETHUSDT'] = float((positions.get('ETHUSDT') or {}).get('size', 0.0))
+        except Exception:
+            return balances
+        return balances
+
+    def _adjust_quantity_for_capital_and_holdings(self, signal: Signal, quantity: float, state: Optional[Dict[str, Any]]) -> float:
+        """Ajusta qty para no exceder USDT disponible (compras) ni holdings (ventas),
+        aplicando reservas: hard floor (1%) y soft reserve (15%). La soft reserve puede
+        saltarse en señales de alta convicción (confidence >= 0.8)."""
+        try:
+            symbol = signal.symbol
+            side = str(signal.side).lower()
+            price = self._get_current_price(symbol, signal)
+
+            # Cap por límites de configuración
+            max_size_cfg = None
+            if symbol == 'BTCUSDT':
+                max_size_cfg = float(self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01))
+            elif symbol == 'ETHUSDT':
+                max_size_cfg = float(self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1))
+            if max_size_cfg is not None and quantity > max_size_cfg:
+                logger.info(f"🔧 Cap config {symbol}: {quantity} -> {max_size_cfg}")
+                quantity = max_size_cfg
+
+            balances = self._get_portfolio_balances(state)
+            usdt = balances.get('USDT', 0.0)
+            total_value = 0.0
+            try:
+                if state:
+                    total_value = float(state.get('total_value', state.get('initial_capital', 0.0)) or 0.0)
+            except Exception:
+                total_value = 0.0
+            holdings = balances.get(symbol, 0.0)
+
+            fee_rate = 0.001  # 0.1%
+            slip = 0.001      # 0.1%
+            hard_floor_pct = 0.01
+            soft_reserve_pct = 0.15
+            high_conf_threshold = 0.8
+
+            hard_floor_usdt = total_value * hard_floor_pct if total_value > 0 else 0.0
+            soft_reserve_usdt = total_value * soft_reserve_pct if total_value > 0 else 0.0
+
+            if side == 'buy':
+                denom = price * (1.0 + fee_rate + slip)
+                # Capacidad sin romper hard floor
+                capacity_hard = max(0.0, usdt - hard_floor_usdt)
+                # Capacidad respetando soft reserve (por defecto)
+                capacity_soft = max(0.0, usdt - soft_reserve_usdt)
+                # Alta convicción permite usar hasta hard floor
+                confidence = 0.0
+                try:
+                    confidence = float(getattr(signal, 'confidence', 0.0) or 0.0)
+                except Exception:
+                    confidence = 0.0
+                allowed_spend = capacity_hard if confidence >= high_conf_threshold else capacity_soft
+
+                affordable = (allowed_spend / denom) if denom > 0 else 0.0
+                if affordable < quantity:
+                    # Mensaje específico según el motivo del ajuste
+                    if allowed_spend == capacity_soft and soft_reserve_usdt > 0:
+                        logger.info(
+                            f"🟦 Soft reserve activa ({soft_reserve_pct*100:.0f}%): {quantity:.8f} -> {affordable:.8f} "
+                            f"(USDT={usdt:.2f}, reserve={soft_reserve_usdt:.2f})"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ Ajuste por USDT/fees en {symbol}: {quantity:.8f} -> {affordable:.8f} (USDT={usdt:.2f})"
+                        )
+                quantity = min(quantity, max(0.0, affordable))
+            elif side == 'sell':
+                if holdings < quantity:
+                    logger.warning(f"⚠️ Ajuste por holdings en {symbol}: {quantity:.8f} -> {holdings:.8f}")
+                quantity = min(quantity, max(0.0, holdings))
+
+            return float(quantity if quantity and quantity > 0 else 0.0)
+        except Exception as e:
+            logger.error(f"❌ Error ajustando qty por capital/holdings: {e}")
+            return float(quantity or 0.0)
 
     async def _validate_signal_with_ai(self, signal) -> Dict[str, Any]:
         """
@@ -537,17 +683,44 @@ class OrderManager:
                 logger.warning("⚠️ No se pudieron obtener predicciones")
                 return {'approved': False, 'reason': 'no_predictions', 'score': 0.0}
 
-            # Calculate ensemble score
+            # Calculate ensemble score from L1 models
             ensemble_score = sum(predictions) / len(predictions)
             
-            # Approval threshold 
-            APPROVAL_THRESHOLD = 0.6
-            approved = ensemble_score >= APPROVAL_THRESHOLD
+            # Get L2 PPO signal strength
+            ppo_strength = float(getattr(signal, 'strength', 0.0))
+            
+            # Si hay alta confianza en L2 o condiciones técnicas claras, dar más peso a su decisión
+            has_strong_technicals = (
+                signal.technical_indicators.get('rsi', 50) < 30 or  # Oversold
+                signal.technical_indicators.get('rsi', 50) > 70     # Overbought
+            )
+            
+            if ppo_strength >= 0.7 or has_strong_technicals:
+                combined_score = (ensemble_score * 0.2 + ppo_strength * 0.8)  # Más peso a L2
+                logger.info(f"L2 dominante: PPO={ppo_strength:.3f}, L1={ensemble_score:.3f}, tech={has_strong_technicals}")
+            else:
+                combined_score = (ensemble_score * 0.5 + ppo_strength * 0.5)
+                logger.info(f"Balance L1/L2: PPO={ppo_strength:.3f}, L1={ensemble_score:.3f}")
+            
+            # Más permisivo cuando hay acuerdo entre L1 y L2 o señales técnicas fuertes
+            agreement_factor = 1 - abs(ensemble_score - ppo_strength)
+            if has_strong_technicals:
+                agreement_factor = min(1.0, agreement_factor * 1.2)  # Boost con señales técnicas
+            confidence_boost = agreement_factor * 0.2  # Max 20% boost when perfect agreement
+            
+            final_score = combined_score * (1 + confidence_boost)
+            
+            # More permisive threshold since we're using combined intelligence
+            APPROVAL_THRESHOLD = 0.45  # Ligeramente más permisivo con validación mejorada
+            approved = final_score >= APPROVAL_THRESHOLD
             
             result = {
                 'approved': approved,
-                'reason': 'ensemble_decision',
-                'score': float(ensemble_score),
+                'reason': 'combined_l1_l2_decision',
+                'score': float(final_score),
+                'l1_score': float(ensemble_score),
+                'l2_score': float(ppo_strength),
+                'agreement': float(agreement_factor),
                 'model_scores': model_scores
             }
             
@@ -558,6 +731,158 @@ class OrderManager:
         except Exception as e:
             logger.error(f"❌ Error en validación AI: {str(e)}")
             return {'approved': False, 'reason': str(e), 'score': 0.0}
+
+    def _calculate_order_quantity(self, signal) -> float:
+        """
+        Calcula la cantidad a operar para una señal basada en position sizing dinámico
+        """
+        try:
+            symbol = getattr(signal, 'symbol', None)
+            if not symbol:
+                logger.error("❌ Señal sin símbolo")
+                return 0.0
+                
+            # Si ya viene con cantidad, validarla contra límites
+            existing_qty = getattr(signal, 'qty', None)
+            if existing_qty and existing_qty > 0:
+                # Usar límites de configuración
+                if symbol == 'BTCUSDT' and existing_qty <= self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01):
+                    return self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01)
+                elif symbol == 'ETHUSDT' and existing_qty <= self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1):
+                    return self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1)
+                return existing_qty
+                
+            # Calcular cantidad base según el balance y el símbolo
+            # Usar balance por defecto si no hay portfolio manager
+            usdt_balance = 3000.0  # Default 3000 USDT
+            
+            # Usar un máximo del 10% del balance por operación
+            max_usdt = usdt_balance * 0.10
+            
+            # Ajustar por la fuerza de la señal (0.5 a 1.5x)
+            signal_strength = float(getattr(signal, 'strength', 0.5))
+            position_size = max_usdt * (0.5 + signal_strength)
+            
+            # Convertir a cantidad según el símbolo
+            if symbol == 'BTCUSDT':
+                current_price = float(signal.features.get('close', 110000))  # Precio aproximado si no hay
+                qty = position_size / current_price
+                min_qty = self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01)
+                return max(min_qty, min(qty, min_qty * 10))  # Entre min_qty y 10x min_qty
+            elif symbol == 'ETHUSDT':
+                current_price = float(signal.features.get('close', 4000))  # Precio aproximado si no hay
+                qty = position_size / current_price
+                min_qty = self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1)
+                return max(min_qty, min(qty, min_qty * 10))  # Entre min_qty y 10x min_qty
+            
+            logger.warning(f"❌ Símbolo no soportado: {symbol}")
+            return 0.0  # Símbolo no soportado
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculando cantidad para {symbol}: {str(e)}")
+            return 0.0
+
+    def _execute_paper_order(self, signal, quantity) -> Dict[str, Any]:
+        """
+        Ejecuta una orden en modo paper trading
+        """
+        try:
+            order_id = str(uuid.uuid4())
+            
+            # Simular ejecución exitosa
+            order_result = {
+                'order_id': order_id,
+                'symbol': signal.symbol,
+                'side': signal.side,
+                'quantity': quantity,
+                'price': signal.price or 0.0,
+                'status': 'filled',
+                'reason': 'paper_trading_success',
+                'ts': time.time(),
+                'source': getattr(signal, 'strategy_id', 'L1')
+            }
+            
+            logger.info(f"📝 Orden paper ejecutada: {signal.symbol} {signal.side} {quantity:.8f}")
+            return order_result
+            
+        except Exception as e:
+            logger.error(f"❌ Error ejecutando orden paper: {e}")
+            return {
+                'order_id': str(uuid.uuid4()),
+                'symbol': signal.symbol,
+                'side': signal.side,
+                'quantity': quantity,
+                'price': 0.0,
+                'status': 'rejected',
+                'reason': f'paper_execution_error: {str(e)}',
+                'ts': time.time(),
+                'source': getattr(signal, 'strategy_id', 'L1')
+            }
+
+    async def _execute_real_order(self, signal, quantity) -> Dict[str, Any]:
+        """
+        Ejecuta una orden real en Binance
+        """
+        try:
+            if not self.binance_client:
+                logger.error("❌ Binance client no disponible")
+                return {
+                    'order_id': str(uuid.uuid4()),
+                    'symbol': signal.symbol,
+                    'side': signal.side,
+                    'quantity': quantity,
+                    'price': 0.0,
+                    'status': 'rejected',
+                    'reason': 'no_binance_client',
+                    'ts': time.time(),
+                    'source': getattr(signal, 'strategy_id', 'L1')
+                }
+            
+            # Aquí iría la lógica real de Binance
+            # Por ahora, simular como paper trading
+            return self._execute_paper_order(signal, quantity)
+            
+        except Exception as e:
+            logger.error(f"❌ Error ejecutando orden real: {e}")
+            return {
+                'order_id': str(uuid.uuid4()),
+                'symbol': signal.symbol,
+                'side': signal.side,
+                'quantity': quantity,
+                'price': 0.0,
+                'status': 'rejected',
+                'reason': f'real_execution_error: {str(e)}',
+                'ts': time.time(),
+                'source': getattr(signal, 'strategy_id', 'L1')
+            }
+
+    def _update_execution_stats(self, order_result: Dict[str, Any]):
+        """
+        Actualiza estadísticas de ejecución
+        """
+        try:
+            symbol = order_result.get('symbol', 'unknown')
+            status = order_result.get('status', 'unknown')
+            
+            if symbol not in self.execution_stats:
+                self.execution_stats[symbol] = {
+                    'total_orders': 0,
+                    'filled_orders': 0,
+                    'rejected_orders': 0,
+                    'error_orders': 0
+                }
+            
+            self.execution_stats[symbol]['total_orders'] += 1
+            
+            if status == 'filled':
+                self.execution_stats[symbol]['filled_orders'] += 1
+            elif status == 'rejected':
+                self.execution_stats[symbol]['rejected_orders'] += 1
+            else:
+                self.execution_stats[symbol]['error_orders'] += 1
+                
+        except Exception as e:
+            logger.error(f"❌ Error actualizando estadísticas: {e}")
 
     def _check_risk_limits(self, signal) -> bool:
         """
@@ -583,13 +908,29 @@ class OrderManager:
             else:
                 strength = 0.0
 
-            # More permissive with high confidence signals
+            # Validación más estricta basada en confluencia de señales
             signal_conf = getattr(signal, 'confidence', 0.0)
-            if signal_conf >= 0.7:
-                min_strength *= 0.8  # Reduce minimum strength requirement for high confidence signals
+            rsi = signal.technical_indicators.get('rsi', 50.0)
+            macd = signal.technical_indicators.get('macd', 0.0)
+            macd_signal = signal.technical_indicators.get('macd_signal', 0.0)
+            
+            # Verificar confluencia de señales
+            is_oversold = rsi < 30
+            is_overbought = rsi > 70
+            macd_trend = macd - macd_signal
+            
+            # Solo reducir requisitos si hay confluencia
+            if signal.side.lower() == 'buy' and is_oversold and macd_trend > -1:
+                min_strength *= 0.8  # Reducción moderada
+                logger.info(f"✅ Confluencia alcista en {symbol}: RSI={rsi:.1f}, MACD trend={macd_trend:.2f}")
+            elif signal.side.lower() == 'sell' and is_overbought and macd_trend < 1:
+                min_strength *= 0.8  # Reducción moderada
+                logger.info(f"✅ Confluencia bajista en {symbol}: RSI={rsi:.1f}, MACD trend={macd_trend:.2f}")
+            else:
+                logger.debug(f"⚠️ Sin confluencia en {symbol}: RSI={rsi:.1f}, MACD trend={macd_trend:.2f}")
 
             if strength < min_strength:
-                logger.debug(f"Señal {symbol} rechazada por strength baja: {strength:.3f} < {min_strength}")
+                logger.debug(f"❌ Señal {symbol} rechazada por fuerza insuficiente: {strength:.3f} < {min_strength}")
                 return False
 
             min_confidence = self.risk_limits.get('MIN_CONFIDENCE', 0.5)

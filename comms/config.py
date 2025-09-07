@@ -19,7 +19,7 @@ MIN_SIGNAL_STRENGTH = float(os.getenv("MIN_SIGNAL_STRENGTH", 0.4))
 ENABLED_GENERATORS = os.getenv("ENABLED_GENERATORS", "technical,finrl,mean_reversion").split(',')
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"
+USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"  # Default to real data
 SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT").split(',')
 MODE = os.getenv("BINANCE_MODE", "TESTNET")
 

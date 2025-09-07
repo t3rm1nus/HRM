@@ -146,7 +146,7 @@ class OrderManager:
                             'price': float(price) if price is not None else None,  # Ensure price is included
                             'stop_loss': signal.stop_loss if hasattr(signal, 'stop_loss') else None,
                             'take_profit': signal.take_profit if hasattr(signal, 'take_profit') else None,
-                            'quantity': signal.quantity if hasattr(signal, 'quantity') else 0.0,  # Will be recalculated
+                            'qty': signal.quantity if hasattr(signal, 'quantity') else None,  # Transfer original quantity if exists
                         }
                         
                         # Calculate quantity for the order

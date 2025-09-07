@@ -476,6 +476,7 @@ class L2TacticProcessor:
                         "symbol": get_attr_or_key(signal, "symbol"),
                         "side": get_attr_or_key(signal, "side"),
                         "type": "market",
+                        "quantity": get_attr_or_key(signal, "quantity", 0.0),  # Agregar cantidad
                         "strength": get_attr_or_key(signal, "strength"),
                         "confidence": get_attr_or_key(signal, "confidence"),
                         "signal_type": get_attr_or_key(signal, "signal_type", "tactical"),
