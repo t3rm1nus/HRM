@@ -123,13 +123,26 @@ async def update_portfolio_from_orders(state, orders):
         state["usdt_balance"] = usdt_balance
         state["total_value"] = total_value
 
-        # Log con color según comparación con capital inicial
+        # Log con color según comparación con capital inicial - NEGRITA Y TAMAÑO AUMENTADO
         if total_value > initial_capital:
-            logger.info(f"\x1b[32m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"")
+            logger.info(f"********************************************************************************************")
+            logger.info(f"\x1b[32m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"********************************************************************************************")            
+            logger.info(f"")
         elif total_value < initial_capital:
-            logger.info(f"\x1b[31m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"")
+            logger.info(f"********************************************************************************************")
+            logger.info(f"\x1b[31m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"********************************************************************************************")
+            logger.info(f"")
         else:
-            logger.info(f"\x1b[34m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"")
+            logger.info(f"********************************************************************************************")
+            logger.info(f"\x1b[34m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+            logger.info(f"********************************************************************************************")
+            logger.info(f"")
+
         logger.info(f"📊 P&L: {pnl_absolute:+.2f} USDT ({pnl_percentage:+.2f}%), Drawdown={drawdown:.4f}")
         logger.info(f"💸 Fees acumulados: {total_fees:.4f} USDT")
 

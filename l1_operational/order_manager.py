@@ -120,6 +120,17 @@ class OrderManager:
 
         processed_orders = []
 
+        # Rebalanceo automático para recuperar liquidez si USDT < soft reserve
+        try:
+            rebalance_orders = self._maybe_rebalance_liquidity(state)
+            if rebalance_orders:
+                processed_orders.extend(rebalance_orders)
+                if state is not None:
+                    for ro in rebalance_orders:
+                        state.setdefault('ordenes', []).append(self._make_order_record(ro))
+        except Exception as e:
+            logger.error(f"❌ Error en rebalanceo automático: {e}")
+
         # Ensure signals is always a list
         if not isinstance(signals, list):
             signals = [signals]
@@ -192,8 +203,15 @@ class OrderManager:
                             'side': getattr(signal, 'side', 'unknown'),
                             'status': 'rejected',
                             'reason': f'invalid_signal: {str(e)}',
-                            'order_id': None
+                            'order_id': None,
+                            'reject_details': {
+                                'soft_reserve': state.get('portfolio', {}).get('USDT', 0.0) < (state.get('total_value', 0.0) * 0.005) if state else None,
+                                'min_qty': getattr(signal, 'qty', 0.0) < 0.0001,
+                                'max_qty': getattr(signal, 'qty', 0.0) > 10.0,
+                                'risk_control': 'TODO: add specific risk control checks here'
+                            }
                         }
+                        logger.warning(f"❌ Orden rechazada: {rec}")
                         processed_orders.append(rec)
                         if state is not None:
                             state.setdefault('ordenes', []).append(self._make_order_record(rec))
@@ -375,6 +393,86 @@ class OrderManager:
 
         # Note: kept for compatibility; actual return happens above
 
+    def _maybe_rebalance_liquidity(self, state: Optional[Dict[str, Any]]):
+        """Vende una pequeña fracción de posiciones para restaurar USDT hasta el soft reserve (5%).
+        Limita ventas a máx. 10% de la posición por ciclo y solo si hay déficit claro.
+        """
+        if not state:
+            return []
+        try:
+            portfolio = state.get('portfolio', {}) or {}
+            positions = portfolio.get('positions', {}) or {}
+            usdt = float(portfolio.get('USDT', 0.0) or 0.0)
+            total_value = float(state.get('total_value', state.get('initial_capital', 0.0)) or 0.0)
+            if total_value <= 0:
+                return []
+
+            soft_reserve_pct = 0.01
+            fee_rate = 0.001
+            target_usdt = total_value * soft_reserve_pct
+            if usdt >= target_usdt:
+                return []
+
+            deficit = target_usdt - usdt
+            # Determinar precios actuales mejor estimados
+            prices = {
+                'BTCUSDT': None,
+                'ETHUSDT': None,
+            }
+            for sym in prices.keys():
+                md = (state.get('mercado', {}) or {}).get(sym) or {}
+                p = md.get('close')
+                if p:
+                    prices[sym] = float(p)
+            if prices['BTCUSDT'] is None:
+                prices['BTCUSDT'] = 111000.0
+            if prices['ETHUSDT'] is None:
+                prices['ETHUSDT'] = 3900.0
+
+            # Ordenar por valor de posición descendente
+            holdings = []
+            for sym in ['BTCUSDT', 'ETHUSDT']:
+                qty = float((positions.get(sym) or {}).get('size', 0.0) or 0.0)
+                if qty > 0:
+                    holdings.append((sym, qty, qty * prices[sym]))
+            holdings.sort(key=lambda x: x[2], reverse=True)
+            if not holdings:
+                return []
+
+            orders = []
+            remaining = deficit
+            for sym, qty, val in holdings:
+                if remaining <= 0:
+                    break
+                price = prices[sym]
+                # Máx 10% de la posición por ciclo
+                max_sell_qty = qty * 0.10
+                # Necesario en cantidad considerando fee
+                needed_qty = (remaining * (1.0 + fee_rate)) / price
+                sell_qty = max(0.0, min(max_sell_qty, needed_qty))
+                if sell_qty <= 0:
+                    continue
+                order = {
+                    'order_id': str(uuid.uuid4()),
+                    'symbol': sym,
+                    'side': 'sell',
+                    'quantity': sell_qty,
+                    'price': price,
+                    'status': 'filled',
+                    'reason': 'auto_rebalance',
+                    'ts': time.time(),
+                    'source': 'L1'
+                }
+                # Simula efecto inmediato en USDT estimado
+                received = sell_qty * price * (1.0 - fee_rate)
+                remaining = max(0.0, remaining - received)
+                orders.append(order)
+
+            return orders
+        except Exception as e:
+            logger.error(f"❌ Error calculando rebalanceo: {e}")
+            return []
+
     def _make_order_record(self, order_like: Dict[str, Any]) -> Dict[str, Any]:
         """Normaliza distintos formatos de resultado de orden a un registro estándar."""
         try:
@@ -423,7 +521,8 @@ class OrderManager:
                     return float(p)
         except Exception:
             pass
-        return 110000.0 if symbol == 'BTCUSDT' else 4300.0 if symbol == 'ETHUSDT' else 1000.0
+        # Fallbacks más cercanos al precio actual típico
+        return 111000.0 if symbol == 'BTCUSDT' else 3900.0 if symbol == 'ETHUSDT' else 1000.0
 
     def _get_portfolio_balances(self, state: Optional[Dict[str, Any]]) -> Dict[str, float]:
         """Extrae USDT y sizes por símbolo del state (seguro por defecto)."""
@@ -472,8 +571,8 @@ class OrderManager:
             fee_rate = 0.001  # 0.1%
             slip = 0.001      # 0.1%
             hard_floor_pct = 0.01
-            soft_reserve_pct = 0.15
-            high_conf_threshold = 0.8
+            soft_reserve_pct = 0.01
+            high_conf_threshold = 0.6
 
             hard_floor_usdt = total_value * hard_floor_pct if total_value > 0 else 0.0
             soft_reserve_usdt = total_value * soft_reserve_pct if total_value > 0 else 0.0

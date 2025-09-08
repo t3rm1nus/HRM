@@ -56,7 +56,8 @@ async def execute_l3_pipeline(state=None):
     # Validar el state antes de usarlo
     from core.state_manager import validate_state_structure
     state = validate_state_structure(state)
-    market_data = state.get("mercado", {})
+    # Obtener datos completos de mercado, no solo los precios de cierre
+    market_data = state.get("market_data_full", {})
     market_data_serializable = {
         k: v.reset_index().to_dict(orient="records") if isinstance(v, (pd.Series, pd.DataFrame)) else v
         for k, v in market_data.items()
@@ -66,8 +67,9 @@ async def execute_l3_pipeline(state=None):
         texts_for_sentiment = [
             "macro neutral", "crypto sentiment mixed"
         ]
-        generate_l3_output(market_data_serializable, texts_for_sentiment)
+        l3_output = generate_l3_output(market_data_serializable, texts_for_sentiment)
         logger.info("\x1b[32m✅ L3 (pipeline completo) output regenerado\x1b[0m")
+        return l3_output
     except Exception as e:
         logger.error(f"❌ L3 completo falló, usando pipeline ligero: {e}", exc_info=True)
         try:
@@ -76,8 +78,10 @@ async def execute_l3_pipeline(state=None):
             else:
                 procesar_l3_main({"mercado": market_data_serializable})
             logger.info("\x1b[32m✅ L3 (pipeline ligero) output regenerado\x1b[0m")
+            return {"strategic_context": {}}
         except Exception as e2:
             logger.error(f"❌ Error ejecutando L3 ligero: {e2}", exc_info=True)
+            return {"strategic_context": {}}
 
 def load_l3_output():
     logger.debug("[DEBUG] Entrando en load_l3_output, logger id: %s" % id(logger))
@@ -89,27 +93,33 @@ def load_l3_output():
             if isinstance(data, dict) and 'strategic_context' not in data:
                 return {"strategic_context": data}
             return data
-    logger.warning("⚠️ No se encontró l3_output.json, usando fallback")
-    market_data_example = {}
-    texts_example = ["neutral"]
-    try:
-        data = generate_l3_output(market_data_example, texts_example)
-        return {"strategic_context": data}
-    except Exception:
-        return {"strategic_context": {}}
+    logger.warning("⚠️ No se encontró l3_output.json, usando fallback vacío")
+    # No ejecutar L3 sin datos de mercado - retornar contexto vacío
+    return {"strategic_context": {}}
 
 async def l3_periodic_task(state):
     logger.debug("[DEBUG] Entrando en l3_periodic_task, logger id: %s" % id(logger))
     """Ejecuta L3 periódicamente y actualiza el contexto estratégico"""
+    # Esperar a que L3 inicial se haya ejecutado en main_loop
+    await asyncio.sleep(1)  # Dar tiempo para que main_loop ejecute L3 inicial
+    
     while True:
         try:
             try:
-                await asyncio.wait_for(execute_l3_pipeline(state), timeout=L3_TIMEOUT)
+                l3_output = await asyncio.wait_for(execute_l3_pipeline(state), timeout=L3_TIMEOUT)
+                if l3_output:
+                    state["estrategia"] = l3_output.get("strategic_context", {})
+                    logger.info("🔄 l3_output actualizado en state['estrategia']")
+                else:
+                    # Fallback: cargar desde archivo si execute_l3_pipeline falló
+                    l3_context = load_l3_output()
+                    state["estrategia"] = l3_context.get("strategic_context", {})
+                    logger.info("🔄 l3_output.json actualizado en state['estrategia']")
             except asyncio.TimeoutError:
                 logger.warning(f"⏱️ Timeout ejecutando L3 (>{L3_TIMEOUT}s), usando última estrategia conocida")
-            l3_context = load_l3_output()
-            state["estrategia"] = l3_context.get("strategic_context", {})
-            logger.info("🔄 l3_output.json actualizado en state['estrategia']")
+                l3_context = load_l3_output()
+                state["estrategia"] = l3_context.get("strategic_context", {})
+                logger.info("🔄 l3_output.json actualizado en state['estrategia']")
             await asyncio.sleep(L3_UPDATE_INTERVAL)
         except asyncio.CancelledError:
             logger.info("🛑 Tarea L3 cancelada")
@@ -161,11 +171,8 @@ async def main():
         logger.info(f"✅ Componentes iniciados, símbolos: {config['SYMBOLS']}")
         logger.info(f"🛡️ RiskControlManager inicializado para stop-loss y take-profit")
 
-        # Forzar L3 inicial
-        await execute_l3_pipeline(state)
-        initial_l3 = load_l3_output()
-        state["estrategia"] = initial_l3.get("strategic_context", {})
-        logger.info("🔄 l3_output.json inicial cargado en state['estrategia']")
+        # L3 se ejecutará después de obtener datos de mercado por primera vez
+        logger.info("🔄 L3 se ejecutará después de obtener datos de mercado")
 
         # Ejecutar L3 periódico
         asyncio.create_task(l3_periodic_task(state))
@@ -208,6 +215,7 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
     """Loop principal L2/L1"""
     consecutive_zero_signals = 0  # Contador para detectar 0 señales persistentes
     max_zero_signals = 5  # Umbral para fallback
+    l3_initialized = False  # Flag para ejecutar L3 inicial solo una vez
 
     while True:
         try:
@@ -234,6 +242,7 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
                 market_data = await data_feed.get_market_data()
                 if not market_data or all(df.empty for df in market_data.values()):
                     logger.warning("⚠️ No se obtuvieron datos de mercado válidos, usando valores por defecto")
+                    logger.error("🚨 ALERTA: Usando precios fallback por falta de conectividad real. Revisa la conexión a Binance/DataFeed.")
                     market_data = {
                         "BTCUSDT": pd.DataFrame({'close': [110758.76]}, index=[pd.Timestamp.utcnow()]),
                         "ETHUSDT": pd.DataFrame({'close': [4301.11]}, index=[pd.Timestamp.utcnow()])
@@ -255,18 +264,34 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
                 logger.debug(f"Technical indicators {symbol} dtypes: {df.dtypes if not df.empty else 'empty'}")
             state["technical_indicators"] = technical_indicators
 
+            # 🚀 Ejecutar L3 inicial si es la primera vez que tenemos datos de mercado
+            if not l3_initialized and market_data and not all(df.empty for df in market_data.values()):
+                logger.info("🚀 Ejecutando L3 inicial con datos de mercado disponibles")
+                l3_output = await execute_l3_pipeline(state)
+                if l3_output:
+                    state["estrategia"] = l3_output.get("strategic_context", {})
+                    logger.info("🔄 l3_output inicial cargado en state['estrategia']")
+                else:
+                    # Fallback: cargar desde archivo si execute_l3_pipeline falló
+                    initial_l3 = load_l3_output()
+                    state["estrategia"] = initial_l3.get("strategic_context", {})
+                    logger.info("🔄 l3_output.json inicial cargado en state['estrategia']")
+                l3_initialized = True
+
             # 3️⃣ Generar señales técnicas
             logger.debug("Generating technical signals")
             technical_signals = await l2_processor.technical_signals(market_data, technical_indicators)
             state["technical_signals"] = technical_signals
             logger.debug(f"Señales técnicas generadas: {len(technical_signals)}")
 
-            # 4️⃣ Actualizar market_data para L1
+            # 4️⃣ Actualizar market_data para L1 y L3
             state["mercado"] = {
                 symbol: {
                     'close': float(technical_indicators[symbol]['close'].iloc[-1] if symbol in technical_indicators and not technical_indicators[symbol].empty else (110758.76 if symbol == "BTCUSDT" else 4301.11))
                 } for symbol in config["SYMBOLS"]
             }
+            # Guardar datos completos para L3
+            state["market_data_full"] = market_data
             l1_order_manager.market_data = state["mercado"]
 
             # 5️⃣ Procesar señales en L2
@@ -360,6 +385,11 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
             # Log cycle data with updated counts
             await log_cycle_data(state, cycle_id, ciclo_start)
 
+
+            # Log extra: timeframe y duración del ciclo
+            timeframe = config.get('INTERVAL', '10s')
+            logger.info(f"⏱️ Timeframe: {timeframe} | Ciclo {cycle_id} | Duración: {state['cycle_stats']['cycle_time']:.2f}s")
+
             logger.info(f"📊 Ciclo {cycle_id} completado en {state['cycle_stats']['cycle_time']:.2f}s con " + 
                        f"{state['cycle_stats']['signals_count']} señales y {state['cycle_stats']['orders_count']} órdenes " +
                        f"({state['cycle_stats']['rejected_orders']} rechazadas)")
@@ -379,3 +409,5 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
 if __name__ == "__main__":
     load_dotenv()
     asyncio.run(main())
+
+  

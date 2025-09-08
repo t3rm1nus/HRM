@@ -57,10 +57,12 @@ class HRMBacktester:
                 'mode': 'full',
                 'lookback_days': 7,
                 'symbols': ['BTCUSDT', 'ETHUSDT'],
-                'intervals': ['1h', '5m', '15m', '1m'],
+                'intervals': ['5m', '15m', '1h'],
                 'start_date': None,
                 'end_date': None,
-                'initial_capital': 100000.0,
+                'initial_capital': 3000.0,
+                'position_size': 0.15,
+                'confianza_minima': 0.65,
             },
             'analysis': {
                 'generate_charts': True,
@@ -121,11 +123,9 @@ class HRMBacktester:
             start_date = tcfg.get('start_date')
             end_date = tcfg.get('end_date')
             if not (start_date and end_date):
-                lookback = int(tcfg.get('lookback_days', 7) or 7)
-                from datetime import datetime, timedelta
-                # Usar fechas de 2023 para coincidir con el parquet
-                end_date = '2023-12-31'
-                start_date = '2023-01-01'
+                # Usar todo el rango disponible del parquet (últimos 5 años)
+                end_date = '2025-09-08'  # Fecha actual
+                start_date = '2020-09-08'  # 5 años atrás
 
             historical_data = await self.data_collector.collect_historical_data(
                 symbols=symbols,

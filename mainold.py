@@ -797,7 +797,9 @@ async def update_portfolio_from_orders(state, orders):
                 
                 if change != 0:
                     change_str = f"{'+'if change > 0 else ''}{change:.6f}"
+                    logger.info(f"*******************************************************************************************************************")
                     logger.info(f"📊 Portfolio actualizado: {asset} {current_balance:.6f} -> {new_balance:.6f} ({change_str})")
+                    logger.info(f"*******************************************************************************************************************")
         else:
             logger.info("No se realizaron cambios en el portfolio")
         

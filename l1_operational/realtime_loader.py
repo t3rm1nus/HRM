@@ -12,7 +12,7 @@ class RealTimeDataLoader:
         self.binance_client = BinanceClient(self.config)
         logger.info("✅ RealTimeDataLoader inicializado")
 
-    async def fetch_realtime_data(self, symbol: str, timeframe: str = '1m', limit: int = 50) -> pd.DataFrame:
+    async def fetch_realtime_data(self, symbol: str, timeframe: str = '1m', limit: int = 200) -> pd.DataFrame:
         """
         Obtiene datos OHLCV en tiempo real para un símbolo.
         """
@@ -39,7 +39,7 @@ class RealTimeDataLoader:
         Obtiene datos en tiempo real para todos los símbolos.
         """
         try:
-            tasks = [self.fetch_realtime_data(symbol) for symbol in self.symbols]
+            tasks = [self.fetch_realtime_data(symbol, limit=200) for symbol in self.symbols]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             market_data = {}

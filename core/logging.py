@@ -35,7 +35,26 @@ def setup_logger(level: int = logging.INFO):
     """Configura logger centralizado"""
     # --- loguru ---
     logger.remove()  # quitar handlers por defecto
-    logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}", level=level)
+    # Formato con color: CRITICAL en violeta y bold para TODO el mensaje
+    logger.add(
+        sys.stderr,
+        format=(
+            "{time:YYYY-MM-DD HH:mm:ss} | "
+            "<level>{level}</level> | {name} | "
+            "{message}"
+        ),
+        level=level,
+        colorize=True,
+        filter=lambda record: record["level"].name != "CRITICAL"
+    )
+    
+    # Handler separado para CRITICAL con todo el mensaje en violeta
+    logger.add(
+        sys.stderr,
+        format="\x1b[95m\x1b[1m{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}\x1b[0m",
+        level="CRITICAL",
+        colorize=False
+    )
     
     # --- logging estándar ---
     logging.basicConfig(handlers=[InterceptHandler()], level=level, force=True)

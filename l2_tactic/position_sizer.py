@@ -117,9 +117,9 @@ class PositionSizerManager:
         total_capital = float(portfolio_state.get("total_capital", 0.0) or 0.0)
         available_capital = float(portfolio_state.get("available_capital", total_capital))
 
-        # Reservas de caja: hard floor 1%, soft reserve 15% (puede relajarse con alta confianza)
+        # Reservas de caja: hard floor 1%, soft reserve 5% (puede relajarse con alta confianza)
         hard_floor_pct = 0.01
-        soft_reserve_pct = 0.15
+        soft_reserve_pct = 0.05
         high_conf_threshold = 0.8
         hard_floor_usd = total_capital * hard_floor_pct
         soft_reserve_usd = total_capital * soft_reserve_pct

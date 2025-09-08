@@ -9,7 +9,7 @@
   "testing": {
       "start_date": "2023-01-01",
       "end_date": "2023-12-31",
-      "initial_capital": 100000.0,
+      "initial_capital": 3000.0,
       "strategy_name": "FinRL_MultiAsset_Ensemble",
       "output_dir": "backtesting/results"
   },

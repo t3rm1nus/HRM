@@ -64,23 +64,10 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 ### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO  
 **Rol:** Ejecución determinista y segura de órdenes
 **Funciones operativas:**
-- ✅ **Validación de señales** con 3 modelos IA (LogReg, RF, LightGBM)
-- ✅ **Trend AI** con ensemble de modelos ML
-- ✅ **Gestión de portfolio** automática (BTC, ETH, USDT)
-- ✅ **Conexión a Binance Spot** (real y testnet)
-- ✅ **Order management** con timeouts y reintentos
-- ✅ **Logging persistente** y métricas en tiempo real
-- ✅ **Monitoreo de posiciones** con activación automática de SL/TP
-- ✅ **Costos reales de trading** (comisiones 0.1% Binance)
-- ✅ **RiskControlManager** integrado para gestión de riesgo
 
 ### 🚧 **NIVEL L3** - NO IMPLEMENTADO
-- **L3 Estratégico:** Planificado pero no desarrollado
-- **Nota:** El sistema actual opera efectivamente con L2+L1
-- ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
 
-🆕 Features incluidas (actualizado)
-表格
+✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
 复制
 Tipo	Descripción
 Precio	delta_close, EMA/SMA

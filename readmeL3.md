@@ -3,8 +3,8 @@
 
 L3_Strategic es el nivel superior de toma de decisiones que define la estrategia global del sistema de trading. Analiza condiciones macroeconómicas, tendencias de mercado y patrones a largo plazo para establecer el régimen de mercado, asignación de activos y apetito de riesgo que guiarán las decisiones tácticas de L2.
 
-## ⚠️ ESTADO ACTUAL: NO IMPLEMENTADO
-**El sistema HRM actualmente opera con L2+L1 únicamente. L3 está planificado pero no desarrollado.**
+## 🚀 ESTADO ACTUAL: FUNCIONAL
+**El sistema HRM opera con L3+L2+L1. L3 está implementado y operativo, ejecutando el pipeline estratégico, cargando modelos y generando outputs para L2 y L1.**
 
 🚫 Lo que L3 NO hace
 ❌ No hace
