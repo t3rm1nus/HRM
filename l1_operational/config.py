@@ -8,21 +8,21 @@ import os
 # Modo de operación
 OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
 
-# Límites de riesgo por operación
+# Límites de riesgo por operación - OPTIMIZADOS PARA 3K USDT
 RISK_LIMITS = {
-    "MAX_ORDER_SIZE_BTC": 0.01,      # ~$1,084 por orden - RAZONABLE
-    "MAX_ORDER_SIZE_USDT": 500,      # Reducir máximo
-    "MIN_ORDER_SIZE_USDT": 30,       # Reducir mínimo
-    "MAX_ORDER_SIZE_ETH": 0.1,       # ~$437 por orden - RAZONABLE  
-    "MAX_ORDER_SIZE_ADA": 100,       # Reducir
+    "MAX_ORDER_SIZE_BTC": 0.05,      # ~$5,420 por orden (más agresivo)
+    "MAX_ORDER_SIZE_USDT": 1500,     # Máximo 50% del capital por orden
+    "MIN_ORDER_SIZE_USDT": 25,       # Mínimo reducido para más flexibilidad
+    "MAX_ORDER_SIZE_ETH": 0.5,       # ~$2,185 por orden (más agresivo)
+    "MAX_ORDER_SIZE_ADA": 100,       # Sin cambios
 }
-# Límites de riesgo por portafolio
+# Límites de riesgo por portafolio - OPTIMIZADOS
 PORTFOLIO_LIMITS = {
-    "MAX_PORTFOLIO_EXPOSURE_BTC": 0.2,  # máximo 20% del portafolio en BTC
-    "MAX_PORTFOLIO_EXPOSURE_ETH": 0.15, # máximo 15% del portafolio en ETH
-    "MAX_DAILY_DRAWDOWN": 0.05,         # máximo 5% de drawdown diario
-    "MIN_ACCOUNT_BALANCE_USDT": 20,     # umbral mínimo de capital (fixed key name)
-    "MAX_LEVERAGE": 1.0,                # sin apalancamiento
+    "MAX_PORTFOLIO_EXPOSURE_BTC": 0.40,  # máximo 40% del portafolio en BTC
+    "MAX_PORTFOLIO_EXPOSURE_ETH": 0.30,  # máximo 30% del portafolio en ETH
+    "MAX_DAILY_DRAWDOWN": 0.08,          # aumentado a 8% de drawdown diario
+    "MIN_ACCOUNT_BALANCE_USDT": 50,      # Reducido para más flexibilidad
+    "MAX_LEVERAGE": 1.0,                 # sin apalancamiento
 }
 
 # Configuración de ejecución
@@ -72,7 +72,7 @@ class ConfigObject:
     """
     
     # Atributos de clase (para acceso directo tipo ConfigObject.RISK_LIMITS)
-    OPERATION_MODE = OPERATION_MODE
+    OPERATION_MODE = 'TESTNET'
     RISK_LIMITS = RISK_LIMITS
     PORTFOLIO_LIMITS = PORTFOLIO_LIMITS
     EXECUTION_CONFIG = EXECUTION_CONFIG

@@ -10,15 +10,17 @@ Genera un output jerárquico para L2 combinando:
 """
 import os
 import json
-import pickle
+import torch
+from datetime import datetime
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from datetime import datetime
-import torch
 from transformers import BertTokenizer, BertForSequenceClassification
-from tensorflow.keras.models import load_model
-
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+except ImportError:
+    tf = None
+    load_model = None
 from core import logging as log
 
 # ---------------------------
@@ -45,7 +47,13 @@ WARMUP_VOL = 0.03
 # Helpers
 # ---------------------------
 def save_json(data: dict, output_path: str):
+    # Ruta original
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Ruta de copia para charniRich
+    charni_path = "C:\\proyectos\\charniRich\\envs\\grok\\train\\data\\datos_inferencia\\l3_output.json"
+    os.makedirs(os.path.dirname(charni_path), exist_ok=True)
+    
     def make_serializable(obj):
         if isinstance(obj, (np.float32, np.float64)):
             return float(obj)
@@ -54,9 +62,19 @@ def save_json(data: dict, output_path: str):
         if isinstance(obj, set):
             return list(obj)
         raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    
+    # Guardar en la ruta original
     with open(output_path, "w") as f:
         json.dump(data, f, indent=4, default=make_serializable)
     log.info(f"L3 output guardado en {output_path}")
+    
+    # Guardar copia en charniRich
+    try:
+        with open(charni_path, "w") as f:
+            json.dump(data, f, indent=4, default=make_serializable)
+        log.info(f"L3 output copiado a {charni_path}")
+    except Exception as e:
+        log.error(f"Error al copiar L3 output a charniRich: {e}")
 
 # ---------------------------
 # Load Models
@@ -72,29 +90,67 @@ def load_regime_model():
     # Log y persistencia de las features esperadas, si existen
     try:
         if hasattr(model, 'feature_names_in_'):
-            names = list(getattr(model, 'feature_names_in_'))
-            log.info(f"Regime features esperadas ({len(names)}): {names}")
+            names = sorted(list(getattr(model, 'feature_names_in_')))
+            log.info(f"Regime features esperadas ({len(names)}):")
+            # Agrupar features por tipo para mejor visualización
+            return_features = sorted([f for f in names if f.startswith('return_')])
+            vol_features = sorted([f for f in names if f.startswith('volatility_')])
+            basic_features = sorted([f for f in names if not (f.startswith('return_') or f.startswith('volatility_'))])
+            
+            log.info("Basic features: " + ", ".join(basic_features))
+            log.info("Return features: " + ", ".join(return_features))
+            log.info("Volatility features: " + ", ".join(vol_features))
+            
             os.makedirs(os.path.dirname(FEATURES_FILE), exist_ok=True)
             with open(FEATURES_FILE, 'w', encoding='utf-8') as f:
-                json.dump({"feature_names_in_": names}, f, indent=2)
+                json.dump({
+                    "feature_names_in_": names,
+                    "grouped_features": {
+                        "basic": basic_features,
+                        "returns": return_features,
+                        "volatility": vol_features
+                    }
+                }, f, indent=2)
     except Exception as e:
         log.warning(f"No se pudieron registrar las features de Regime: {e}")
     return model
 
 def load_sentiment_model():
+    global _sentiment_tokenizer, _sentiment_model
+    if '_sentiment_tokenizer' in globals() and _sentiment_tokenizer is not None and _sentiment_model is not None:
+        log.info("Modelo BERT de sentimiento reutilizado de memoria")
+        return _sentiment_tokenizer, _sentiment_model
     log.info("Cargando modelo BERT de Sentimiento")
-    tokenizer = BertTokenizer.from_pretrained(SENTIMENT_MODEL_DIR)
-    model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_DIR)
+    _sentiment_tokenizer = BertTokenizer.from_pretrained(SENTIMENT_MODEL_DIR)
+    _sentiment_model = BertForSequenceClassification.from_pretrained(SENTIMENT_MODEL_DIR)
     log.info("Modelo BERT cargado")
-    return tokenizer, model
+    return _sentiment_tokenizer, _sentiment_model
 
 def load_vol_models():
+    """Carga modelos de volatilidad GARCH y LSTM con fallback seguro si TensorFlow no está disponible."""
     import joblib
     log.info("Cargando modelos de volatilidad GARCH y LSTM")
-    garch_btc = joblib.load(VOL_GARCH_PATH_BTC)
-    garch_eth = joblib.load(VOL_GARCH_PATH_ETH)
-    lstm_btc = load_model(VOL_LSTM_PATH_BTC, compile=False)
-    lstm_eth = load_model(VOL_LSTM_PATH_ETH, compile=False)
+    
+    # Cargar modelos GARCH (no dependen de TensorFlow)
+    try:
+        garch_btc = joblib.load(VOL_GARCH_PATH_BTC)
+        garch_eth = joblib.load(VOL_GARCH_PATH_ETH)
+    except Exception as e:
+        log.error(f"Error cargando modelos GARCH: {e}")
+        garch_btc = garch_eth = None
+    
+    # Cargar modelos LSTM solo si TensorFlow está disponible
+    lstm_btc = lstm_eth = None
+    if tf is not None and load_model is not None:
+        try:
+            lstm_btc = load_model(VOL_LSTM_PATH_BTC, compile=False)
+            lstm_eth = load_model(VOL_LSTM_PATH_ETH, compile=False)
+        except Exception as e:
+            log.error(f"Error cargando modelos LSTM: {e}")
+            lstm_btc = lstm_eth = None
+    else:
+        log.warning("TensorFlow no disponible, modelos LSTM no serán cargados")
+    
     log.info("Modelos de volatilidad cargados")
     return garch_btc, garch_eth, lstm_btc, lstm_eth
 
@@ -111,16 +167,71 @@ def load_portfolio():
 # Inference Functions
 # ---------------------------
 def predict_regime(features: pd.DataFrame, model):
-    # Si el modelo es un ensemble dict, usa el clasificador 'rf' por defecto
-    if isinstance(model, dict) and 'rf' in model:
-        regime = model['rf'].predict(features)[0]
+    """
+    Predice el régimen usando las features calculadas y el ensemble de modelos
+    """
+    # Obtener features requeridas
+    if isinstance(model, dict) and 'features' in model:
+        required_features = model['features']
+    elif hasattr(model, 'feature_names_in_'):
+        required_features = list(model.feature_names_in_)
     else:
-        regime = model.predict(features)[0]
-    log.info(f"Regime detectado: {regime}")
-    return regime
+        required_features = features.columns.tolist()
+        
+    if not required_features:
+        log.error("No se pudieron determinar las features requeridas")
+        return "neutral"
+        
+    # Validar features
+    if features.empty:
+        log.error("DataFrame de features vacío")
+        return "neutral"
+        
+    # Verificar NaN
+    nan_count = features[required_features].isna().sum().sum()
+    if nan_count > 0:
+        log.warning(f"⚠️ Hay {nan_count} valores NaN antes de la validación")
+        features = features.fillna(0)
+        
+    # Verificar dimensiones
+    if len(features) == 0:
+        log.error("No hay datos en features")
+        return "neutral"
+    
+    try:
+        # Convertir a numpy con el tipo correcto
+        X = features[required_features].astype(float).values
+        
+        # Ensemble prediction
+        if isinstance(model, dict) and all(k in model for k in ['rf', 'et', 'hgb', 'label_encoder']):
+            # Predicción por probabilidad promedio
+            rf_prob = model['rf'].predict_proba(X)
+            et_prob = model['et'].predict_proba(X)
+            hgb_prob = model['hgb'].predict_proba(X)
+            
+            # Promedio de probabilidades
+            avg_prob = (rf_prob + et_prob + hgb_prob) / 3
+            pred_idx = np.argmax(avg_prob, axis=1)[0]
+            
+            # Convertir índice a etiqueta
+            regime = model['label_encoder'].inverse_transform([pred_idx])[0]
+        else:
+            # Fallback para modelo simple
+            regime = model.predict(X)[0]
+            
+        log.info(f"Regime detectado: {regime}")
+        return regime
+        
+    except Exception as e:
+        log.error(f"Error en predicción de regime: {e}")
+        return "neutral"  # Valor por defecto seguro
 
 def predict_sentiment(texts: list, tokenizer, model):
+    import torch
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
     inputs = tokenizer(texts or ["market"], padding=True, truncation=True, return_tensors="pt")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     with torch.no_grad():
         outputs = model(**inputs)
         probs = torch.softmax(outputs.logits, dim=-1)
@@ -132,169 +243,232 @@ def predict_sentiment(texts: list, tokenizer, model):
         else:
             score = probs[:, -1]
         sentiment_score = float(torch.mean(score))
-    log.info(f"Score de sentimiento calculado: {sentiment_score}")
+    log.info(f"Score de sentimiento calculado: {sentiment_score} (device: {device})")
     return sentiment_score
 
 def predict_vol_garch(model, returns: np.ndarray):
-    vol = float(model.forecast(returns))
-    log.info(f"Volatilidad GARCH: {vol}")
-    return vol
+        """Predice volatilidad usando modelo GARCH."""
+        # Validar dimensiones: GARCH espera 1D array de retornos
+        arr = np.asarray(returns).flatten()
+        
+        # Verificar longitud mínima
+        if arr.shape[0] < MIN_VOL_BARS:
+            log.warning(f"GARCH: Insuficientes datos ({arr.shape[0]}), usando WARMUP_VOL={WARMUP_VOL}")
+            return WARMUP_VOL
+            
+        try:
+            # Preparar datos para GARCH
+            # 1. Calcular retornos porcentuales si son precios
+            if np.mean(arr) > 1:  # Probablemente son precios
+                rets = np.diff(np.log(arr)) * 100
+            else:  # Ya son retornos
+                rets = arr * 100
+                
+            # 2. Remover NaN y validar
+            rets = rets[~np.isnan(rets)]
+            if len(rets) < MIN_VOL_BARS:
+                log.warning(f"GARCH: Insuficientes retornos válidos ({len(rets)})")
+                return WARMUP_VOL
+                
+            # 3. Forecast - Usar el modelo GARCH ya entrenado
+            last_ret = rets[-250:] if len(rets) > 250 else rets
+            
+            # Obtener pronóstico usando el último valor
+            forecast = model.forecast(reindex=False)
+            vol = float(np.sqrt(forecast.variance.values[-1]))
+            log.info(f"Volatilidad GARCH: {vol:.4f}")
+            return vol / 100  # Convertir de porcentaje a decimal
+            
+        except Exception as e:
+            log.critical(f"GARCH: Error en forecast: {e}. Usando WARMUP_VOL={WARMUP_VOL}")
+            return WARMUP_VOL
 
 def predict_vol_lstm(model, returns: np.ndarray):
-    returns = returns.reshape(-1,1,1)
-    pred = model.predict(returns, verbose=0)
-    vol = float(pred[-1,0])
-    log.info(f"Volatilidad LSTM: {vol}")
-    return vol
+        """Predice volatilidad usando modelo LSTM."""
+        # Validar dimensiones: LSTM espera (n, window, 1)
+        arr = np.asarray(returns).flatten()
+        
+        # Verificar longitud mínima
+        if arr.shape[0] < MIN_VOL_BARS:
+            log.warning(f"LSTM: Insuficientes datos ({arr.shape[0]}), usando WARMUP_VOL={WARMUP_VOL}")
+            return WARMUP_VOL
+            
+        try:
+            # Preparar datos para LSTM
+            # 1. Calcular retornos porcentuales si son precios
+            if np.mean(arr) > 1:  # Probablemente son precios
+                rets = np.diff(np.log(arr)) * 100
+            else:  # Ya son retornos
+                rets = arr * 100
+                
+            # 2. Remover NaN y validar
+            rets = rets[~np.isnan(rets)]
+            if len(rets) < MIN_VOL_BARS:
+                log.warning(f"LSTM: Insuficientes retornos válidos ({len(rets)})")
+                return WARMUP_VOL
+                
+            # 3. Preparar ventana para LSTM
+            window = 20  # Ventana fija de 20 períodos
+            if len(rets) < window:
+                log.warning(f"LSTM: Datos insuficientes para ventana de {window}")
+                return WARMUP_VOL
+                
+            # Tomar últimos datos y formatear para LSTM
+            x = rets[-window:].reshape(1, window, 1)
+            
+            # 4. Predicción - el modelo ya da volatilidad en porcentaje
+            pred = model.predict(x, verbose=0)
+            vol = float(pred[0, 0])  # Ya garantizado positivo por softplus
+            # Validar rango
+            vol = np.clip(vol, 0.1, 200.0)  # Limitar entre 0.1% y 200%
+            log.info(f"Volatilidad LSTM: {vol:.4f}")
+            return vol / 100  # Convertir de porcentaje a decimal
+            
+        except Exception as e:
+            log.critical(f"LSTM: Error en predict: {e}. Usando WARMUP_VOL={WARMUP_VOL}")
+            return WARMUP_VOL
 
-def compute_risk_appetite(volatility_avg, sentiment_score):
-    if volatility_avg > 0.05:
-        base = 0.3
-    else:
-        base = 0.6
-    appetite = base + 0.4 * np.tanh(sentiment_score)
-    if appetite < 0.2:
+def compute_risk_appetite(volatility_avg, sentiment_score, regime="range"):
+    # 1. Ajuste por volatilidad (más volatilidad -> más conservador)
+    vol_factor = np.exp(-5 * volatility_avg)  # Decae exponencialmente con volatilidad
+    
+    # 2. Ajuste por sentimiento (-1 a 1 -> 0 a 1)
+    sent_factor = (sentiment_score + 1) / 2
+    
+    # 3. Ajuste por régimen
+    regime_factors = {
+        "bull": 1.2,
+        "bear": 0.6,
+        "range": 0.9,
+        "volatile": 0.7
+    }
+    regime_factor = regime_factors.get(regime.lower().replace("_market", ""), 0.9)
+    
+    # Combinar factores (vol y sent entre 0-1, regime modifica el resultado)
+    appetite_score = (0.6 * vol_factor + 0.4 * sent_factor) * regime_factor
+    
+    # Mapear score a categorías
+    if appetite_score < 0.33:
         ra = "conservative"
-    elif appetite < 0.5:
+    elif appetite_score < 0.66:
         ra = "moderate"
     else:
         ra = "aggressive"
-    log.info(f"Risk appetite calculado: {ra}")
+    
+    log.info(f"Risk appetite calculado: {ra} (score={appetite_score:.2f}, vol={vol_factor:.2f}, sent={sent_factor:.2f}, regime={regime_factor:.2f})")
     return ra
 
 # ---------------------------
 # Main L3 Output
 # ---------------------------
 def _build_regime_features(market_data: dict, model) -> pd.DataFrame:
-    """Construye un DataFrame con EXACTAMENTE las columnas que el modelo espera.
-    - Si el modelo expone feature_names_in_, se crean todas con defaults 0.0 y se rellenan las disponibles.
-    - Calcula rápidamente algunas features comunes (return, log_return, bollinger, macd) si hay serie de cierres.
-    """
-    # Columnas esperadas
-    if hasattr(model, 'feature_names_in_'):
+    """Construye un DataFrame con EXACTAMENTE las columnas que el modelo espera."""
+    from .regime_features import calculate_regime_features, validate_regime_features
+    import pandas as pd
+    import numpy as np
+    
+    # Columnas esperadas - desde el modelo ensemble
+    if isinstance(model, dict) and 'features' in model:
+        expected = model['features']
+    elif hasattr(model, 'feature_names_in_'):
         expected = list(getattr(model, 'feature_names_in_'))
     else:
+        # Features requeridas por el modelo (de training)
         expected = [
-            'open','high','low','close','volume',
-            'return','log_return','macd','macdsig','macdhist',
-            'boll_lower','boll_middle','boll_upper'
+            'open', 'high', 'low', 'close', 'volume',
+            'rsi', 'macd', 'macdsig', 'macdhist',
+            'boll_upper', 'boll_middle', 'boll_lower',
+            'return', 'log_return'
         ]
-
-    row = {name: 0.0 for name in expected}
-
-    # Helpers de OHLCV
-    def _series(sym: str):
-        val = market_data.get(sym)
-        if isinstance(val, list) and val:
-            return pd.DataFrame(val)
-        if isinstance(val, dict):
-            return pd.DataFrame([val])
-        if isinstance(val, pd.DataFrame):
-            return val
-        if isinstance(val, pd.Series):
-            return pd.DataFrame({'close': val})
-        return pd.DataFrame()
-
-    def _last_ohlcv(df: pd.DataFrame, key: str) -> float:
-        try:
-            if key in df.columns and not df.empty:
-                return float(df[key].iloc[-1])
-        except Exception:
-            pass
-        return 0.0
-
+        # Añadir features de volatilidad y retornos
+        for w in [5, 15, 30, 60, 120]:
+            expected.extend([f'volatility_{w}', f'return_{w}'])
+    
+    # Preparar DataFrame vacío para casos de error
+    empty_df = pd.DataFrame([[0.0] * len(expected)], columns=expected)
+    
+    # Obtener los datos primarios (BTC o ETH)
     primary = 'BTCUSDT' if 'BTCUSDT' in market_data else ('ETHUSDT' if 'ETHUSDT' in market_data else None)
-    dfp = _series(primary) if primary else pd.DataFrame()
-
-    # Mapear OHLCV básicos
-    for key in ('open','high','low','close','volume'):
-        if key in row:
-            row[key] = _last_ohlcv(dfp, key)
-
-    # Si hay serie de cierres suficiente, calcular retornos y MACD/Bollinger mínimos
-    try:
-        if not dfp.empty and 'close' in dfp.columns:
-            close = pd.to_numeric(dfp['close'], errors='coerce').dropna()
-            if len(close) >= 2:
-                ret = close.pct_change().iloc[-1]
-                lret = np.log(close).diff().iloc[-1]
-                if 'return' in row:
-                    row['return'] = float(ret if np.isfinite(ret) else 0.0)
-                if 'log_return' in row:
-                    row['log_return'] = float(lret if np.isfinite(lret) else 0.0)
-
-            # Bollinger 20
-            if len(close) >= 20:
-                ma = close.rolling(20).mean().iloc[-1]
-                std = close.rolling(20).std().iloc[-1]
-                if 'boll_middle' in row: row['boll_middle'] = float(ma if np.isfinite(ma) else 0.0)
-                if 'boll_upper' in row: row['boll_upper'] = float((ma + 2*std) if np.isfinite(ma) and np.isfinite(std) else 0.0)
-                if 'boll_lower' in row: row['boll_lower'] = float((ma - 2*std) if np.isfinite(ma) and np.isfinite(std) else 0.0)
-
-            # MACD (12,26,9) simple con EMA
-            if len(close) >= 35:
-                ema12 = close.ewm(span=12, adjust=False).mean()
-                ema26 = close.ewm(span=26, adjust=False).mean()
-                macd = (ema12 - ema26)
-                macdsig = macd.ewm(span=9, adjust=False).mean()
-                macdhist = macd - macdsig
-                if 'macd' in row: row['macd'] = float(macd.iloc[-1])
-                if 'macdsig' in row: row['macdsig'] = float(macdsig.iloc[-1])
-                if 'macdhist' in row: row['macdhist'] = float(macdhist.iloc[-1])
-    except Exception:
-        pass
-
-    # Devolver DataFrame en el orden exacto esperado
-    df = pd.DataFrame([row])
-    # Garantizar todas las columnas y el orden
-    for c in expected:
-        if c not in df.columns:
-            df[c] = 0.0
     
-    # Debug: log de features esperadas vs proporcionadas
-    missing_features = [c for c in expected if c not in df.columns or df[c].iloc[0] == 0.0]
-    if missing_features:
-        log.debug(f"Features faltantes o en 0: {missing_features[:10]}...")  # Solo primeras 10
+    if not primary:
+        log.error("No hay datos de BTC ni ETH disponibles para regime detection")
+        return empty_df
     
-    # Log detallado de features return_*
-    return_features = [c for c in expected if isinstance(c, str) and c.startswith('return_')]
-    if return_features:
-        log.info(f"Features return_* esperadas: {return_features[:5]}...")  # Solo primeras 5
-    # Si el modelo espera columnas tipo return_{N}, calcularlas dinámicamente
+    # Convertir datos a DataFrame
+    data = market_data.get(primary)
+    if not data:
+        log.error(f"No hay datos disponibles para {primary}")
+        return empty_df
+    
     try:
-        if not dfp.empty and 'close' in dfp.columns:
-            close_full = pd.to_numeric(dfp['close'], errors='coerce').dropna()
-            log.info(f"Calculando retornos con {len(close_full)} puntos de datos")
-            
-            # Calcular todos los retornos de una vez
-            for name in expected:
-                if isinstance(name, str) and name.startswith('return_'):
-                    try:
-                        n = int(name.split('_', 1)[1])
-                        if n > 0 and len(close_full) > n:
-                            # Calcular retorno de N períodos hacia atrás
-                            current_price = close_full.iloc[-1]
-                            past_price = close_full.iloc[-n-1]
-                            if past_price > 0:
-                                r = (current_price / past_price) - 1.0
-                                df.loc[0, name] = float(r) if np.isfinite(r) else 0.0
-                                log.info(f"Calculado {name}: {df.loc[0, name]:.6f}")
-                            else:
-                                df.loc[0, name] = 0.0
-                        else:
-                            # Si no hay suficientes datos, usar 0.0
-                            df.loc[0, name] = 0.0
-                            log.info(f"Insuficientes datos para {name}: {len(close_full)} < {n+1}")
-                    except (ValueError, IndexError, ZeroDivisionError) as e:
-                        log.debug(f"Error calculando {name}: {e}")
-                        df.loc[0, name] = 0.0
+        # Convertir a DataFrame según el tipo de entrada
+        if isinstance(data, list) and data:
+            dfp = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            dfp = pd.DataFrame([data])
+        elif isinstance(data, pd.DataFrame):
+            dfp = data.copy()
         else:
-            log.info(f"No hay datos suficientes: dfp.empty={dfp.empty}, close in columns={'close' in dfp.columns if not dfp.empty else False}")
+            log.error(f"Formato de datos inválido para {primary}: {type(data)}")
+            return empty_df
+            
+        # Procesar timestamp si existe
+        if 'timestamp' in dfp.columns:
+            dfp.index = pd.to_datetime(dfp['timestamp'], unit='ms')
+            dfp = dfp.drop('timestamp', axis=1)
+            
+        # Validación de datos
+        if len(dfp) < 120:
+            log.error(f"Insuficientes datos para regime detection: {len(dfp)} < 120")
+            return empty_df
+            
+        # Validar y convertir columnas OHLCV
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in required_cols:
+            if col not in dfp.columns:
+                log.error(f"Falta columna requerida: {col}")
+                return empty_df
+            try:
+                dfp[col] = pd.to_numeric(dfp[col], errors='coerce')
+                if dfp[col].isna().all():
+                    log.error(f"La columna {col} no contiene datos numéricos válidos")
+                    return empty_df
+            except Exception as e:
+                log.error(f"Error convirtiendo columna {col}: {str(e)}")
+                return empty_df
+                
+        # Calcular features
+        log.info(f"Calculando features con {len(dfp)} puntos de datos")
+        features = calculate_regime_features(dfp)
+        
+        if features.empty:
+            log.error("No se generaron features")
+            return empty_df
+            
+        # Validar y completar features requeridas
+        features = validate_regime_features(features, expected)
+        
+        # Tomar última fila y validar
+        df = features.iloc[[-1]][expected].copy()
+        
+        # Validar y rellenar NaN
+        if df.isna().any().any():
+            log.warning("Detectados NaN en features finales, rellenando con 0")
+            df = df.fillna(0)
+            
+        # Diagnóstico de features
+        feature_stats = {
+            'valid': len(df.columns[(~df.isna().any()) & (df != 0).any()]),
+            'zero': len(df.columns[df.eq(0).all()]),
+            'total': len(expected)
+        }
+        log.info(f"Features calculadas: {feature_stats['valid']} válidas, {feature_stats['zero']} en cero, de {feature_stats['total']} totales")
+        
+        return df
+        
     except Exception as e:
-        log.debug(f"Error en cálculo de retornos: {e}")
-        pass
-    df = df[expected]
-    return df
+        log.error(f"Error procesando features de regime detection: {str(e)}")
+        return empty_df
 
 def _safe_close_series(val) -> np.ndarray:
     """Convierte market_data[symbol] a un np.array de cierres de longitud >=1."""
@@ -331,28 +505,47 @@ def generate_l3_output(market_data: dict, texts_for_sentiment: list):
         log.critical(f"Sentiment fallback por error: {e}")
         sentiment_score = 0.0
 
-    # Volatilidad (con warmup forzado si hay pocas velas)
+    # Volatilidad (con fallback si modelos no están disponibles)
     try:
+        # Cargar modelos
         garch_btc, garch_eth, lstm_btc, lstm_eth = load_vol_models()
+        
+        # Obtener series de precios
         btc_series = _safe_close_series(market_data.get('BTCUSDT'))
         eth_series = _safe_close_series(market_data.get('ETHUSDT'))
+        
+        # Verificar longitud mínima
         if len(btc_series) < MIN_VOL_BARS or len(eth_series) < MIN_VOL_BARS:
-            log.warning(f"Volatility warmup: series cortas (BTC={len(btc_series)}, ETH={len(eth_series)}), usando valor por defecto {WARMUP_VOL}")
-            vol_btc = WARMUP_VOL
-            vol_eth = WARMUP_VOL
+            log.warning(f"Volatility warmup: series cortas (BTC={len(btc_series)}, ETH={len(eth_series)})")
+            vol_btc = vol_eth = WARMUP_VOL
         else:
-            vol_btc = 0.5*(predict_vol_garch(garch_btc, btc_series)+predict_vol_lstm(lstm_btc, btc_series))
-            vol_eth = 0.5*(predict_vol_garch(garch_eth, eth_series)+predict_vol_lstm(lstm_eth, eth_series))
+            # Calcular volatilidad BTC
+            btc_vols = []
+            if garch_btc is not None:
+                btc_vols.append(predict_vol_garch(garch_btc, btc_series))
+            if lstm_btc is not None and tf is not None:
+                btc_vols.append(predict_vol_lstm(lstm_btc, btc_series))
+            vol_btc = np.mean(btc_vols) if btc_vols else WARMUP_VOL
+            
+            # Calcular volatilidad ETH
+            eth_vols = []
+            if garch_eth is not None:
+                eth_vols.append(predict_vol_garch(garch_eth, eth_series))
+            if lstm_eth is not None and tf is not None:
+                eth_vols.append(predict_vol_lstm(lstm_eth, eth_series))
+            vol_eth = np.mean(eth_vols) if eth_vols else WARMUP_VOL
+            
     except Exception as e:
-        log.critical(f"Volatility fallback por error: {e}")
-        vol_btc = WARMUP_VOL
-        vol_eth = WARMUP_VOL
-
+        log.critical(f"Error en cálculo de volatilidad: {e}")
+        vol_btc = vol_eth = WARMUP_VOL
+    
+    # Calcular promedio de volatilidad
     volatility_avg = float(np.mean([vol_btc, vol_eth]))
 
     # Black-Litterman / pesos
     try:
         cov_matrix, optimal_weights = load_portfolio()
+        risk_appetite = compute_risk_appetite(volatility_avg, sentiment_score, regime=regime)
         first_row = optimal_weights.iloc[0]
         # Filtrar solo columnas cripto conocidas o numéricas
         allowed = {"BTC","ETH","CASH","BTCUSDT","ETHUSDT"}
@@ -369,12 +562,39 @@ def generate_l3_output(market_data: dict, texts_for_sentiment: list):
 
     risk_appetite = compute_risk_appetite(volatility_avg, sentiment_score)
 
+    # Convertir risk_appetite a valor numérico
+    risk_map = {
+        "low": 0.2,
+        "moderate": 0.5,
+        "aggressive": 0.8,
+        "high": 0.8
+    }
+    risk_value = risk_map.get(str(risk_appetite).lower(), 0.5)
+
+    # Asegurar que asset_allocation tiene los campos correctos
+    total_allocation = sum(asset_allocation.values())
+    if abs(total_allocation - 1.0) > 0.01 or "CASH" not in asset_allocation:
+        # Reajustar allocations si no suman 1 o falta CASH
+        base_alloc = {
+            "BTC": 0.4,
+            "ETH": 0.3,
+            "CASH": 0.3
+        }
+        if regime == "bullish":
+            base_alloc = {"BTC": 0.5, "ETH": 0.3, "CASH": 0.2}
+        elif regime == "bearish":
+            base_alloc = {"BTC": 0.3, "ETH": 0.2, "CASH": 0.5}
+        asset_allocation = base_alloc
+
     strategic_guidelines = {
         "regime": regime,
         "asset_allocation": asset_allocation,
-        "risk_appetite": risk_appetite,
-        "sentiment_score": sentiment_score,
-        "volatility_forecast": {"BTCUSDT": vol_btc, "ETHUSDT": vol_eth},
+        "risk_appetite": risk_value,
+        "sentiment_score": float(sentiment_score),
+        "volatility_forecast": {
+            "BTCUSDT": float(vol_btc),
+            "ETHUSDT": float(vol_eth)
+        },
         "timestamp": datetime.utcnow().isoformat()
     }
 

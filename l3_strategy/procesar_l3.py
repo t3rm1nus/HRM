@@ -110,21 +110,31 @@ def main(state: Optional[Dict[str, Any]] = None, fallback: bool = True) -> Dict[
     logger.info("⚡ Ejecutando L3 main()")
 
     if state is None:
-        # No ejecutar L3 automáticamente con datos vacíos
+        market_data = {}
+        texts = []
+        initial_output = generate_l3_output(market_data, texts)
         state = {
-            "senales": [],
+            "senales": initial_output.get("signals", []),
             "mercado": {},
-            "regime": "neutral",
-            "asset_allocation": {},
-            "risk_appetite": "neutral",
-            "strategic_guidelines": {}
+            "regime": initial_output.get("regime"),
+            "asset_allocation": initial_output.get("asset_allocation"),
+            "risk_appetite": initial_output.get("risk_appetite"),
+            "strategic_guidelines": initial_output.get("strategic_guidelines")
         }
 
-    # Esta función solo define el comportamiento, no se ejecuta automáticamente
-    # La ejecución se hace desde main.py cuando hay datos de mercado
+    state = procesar_l3(state)
+    # Asegura que la clave 'strategic_context' exista en el output
+    if "strategic_context" not in state:
+        state["strategic_context"] = {}
+
+    # Guardar output
+    os.makedirs(os.path.dirname(L3_OUTPUT), exist_ok=True)
+    with open(L3_OUTPUT, "w") as f:
+        json.dump(make_json_serializable(state), f, indent=2)
+
+    logger.info(f"✅ L3 output guardado en {L3_OUTPUT}")
     return state
 
 
-# Comentado para evitar ejecución automática al importar
-# if __name__ == "__main__":
-#     main(fallback=True)
+if __name__ == "__main__":
+    main(fallback=True)

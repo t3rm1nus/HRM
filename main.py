@@ -2,6 +2,8 @@
 import asyncio
 import sys
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import json
 import pandas as pd
 from datetime import datetime
@@ -14,6 +16,7 @@ from l2_tactic.signal_generator import L2TacticProcessor
 from l2_tactic.models import L2State, TacticalSignal
 from l2_tactic.risk_controls.manager import RiskControlManager
 from l1_operational.order_manager import OrderManager
+from l1_operational.binance_client import BinanceClient
 from comms.config import config
 from l2_tactic.config import L2Config
 from l1_operational.realtime_loader import RealTimeDataLoader
@@ -56,17 +59,79 @@ async def execute_l3_pipeline(state=None):
     # Validar el state antes de usarlo
     from core.state_manager import validate_state_structure
     state = validate_state_structure(state)
-    # Obtener datos completos de mercado, no solo los precios de cierre
-    market_data = state.get("market_data_full", {})
-    market_data_serializable = {
-        k: v.reset_index().to_dict(orient="records") if isinstance(v, (pd.Series, pd.DataFrame)) else v
-        for k, v in market_data.items()
-    }
+    
+    # Intentar obtener datos de diferentes fuentes en orden de prioridad
+    market_data = state.get("market_data", {})  # Datos OHLCV recién obtenidos
+    if not market_data or all(not isinstance(v, pd.DataFrame) or v.empty for v in market_data.values()):
+        market_data = state.get("market_data_full", {})  # Backup: datos históricos
+        
+    # Debug de datos de mercado
+    logger.debug(f"[L3] Market data keys: {list(market_data.keys())}")
+    logger.debug("[L3] Estado de los DataFrames:")
+    for k, v in market_data.items():
+        if isinstance(v, pd.DataFrame):
+            logger.debug(f"[L3] {k} shape: {v.shape}, columns: {v.columns.tolist()}")
+            
+    # Serializar manteniendo la estructura OHLCV
+    market_data_serializable = {}
+    for symbol, df in market_data.items():
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            # Asegurar que tenemos las columnas necesarias
+            needed_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in needed_cols):
+                logger.warning(f"[L3] {symbol} falta alguna columna OHLCV")
+                continue
+                
+            # Convertir a lista de diccionarios preservando el orden temporal
+            try:
+                df_clean = df[needed_cols].copy()
+                # Convertir a valores numéricos
+                for col in needed_cols:
+                    df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+                # Eliminar NaN y convertir a lista de diccionarios
+                df_clean = df_clean.dropna()
+                market_data_serializable[symbol] = df_clean.to_dict(orient="records")
+                logger.debug(f"[L3] {symbol} serializado: {len(market_data_serializable[symbol])} registros")
+            except Exception as e:
+                logger.error(f"[L3] Error serializando {symbol}: {e}")
+                continue
+        else:
+            logger.warning(f"[L3] {symbol} DataFrame vacío o inválido")
     try:
-        # Intentar pipeline completo (Regime, Sentiment BERT, Vol GARCH+LSTM, BL)
-        texts_for_sentiment = [
-            "macro neutral", "crypto sentiment mixed"
-        ]
+        # Descargar y analizar sentimiento
+        texts_for_sentiment = []
+        try:
+            import l3_strategy.sentiment_inference as si
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Si ya hay un loop, usar create_task y await
+                    import nest_asyncio
+                    nest_asyncio.apply()
+                    df_reddit = loop.run_until_complete(si.download_reddit())
+                else:
+                    df_reddit = loop.run_until_complete(si.download_reddit())
+            except Exception as e:
+                logger.error(f"⚠️ Error en event loop Reddit: {e}")
+                df_reddit = pd.DataFrame()
+            df_news = si.download_news()
+            
+            # Combinar textos
+            for df in [df_reddit, df_news]:
+                if not df.empty:
+                    texts_for_sentiment.extend(df['text'].tolist())
+            logger.info(f"✅ Descargados {len(texts_for_sentiment)} textos para análisis de sentimiento")
+        except Exception as e:
+            logger.error(f"⚠️ Error descargando datos de sentimiento: {e}")
+            texts_for_sentiment = []  # Fallback
+            
+        if not texts_for_sentiment:  # Usar fallback si no hay textos
+            texts_for_sentiment = [
+                "macro neutral", "crypto sentiment mixed", "btc outlook uncertain",
+                "eth consolidation phase", "crypto market sentiment cautious"
+            ]
+            
         l3_output = generate_l3_output(market_data_serializable, texts_for_sentiment)
         logger.info("\x1b[32m✅ L3 (pipeline completo) output regenerado\x1b[0m")
         return l3_output
@@ -100,27 +165,63 @@ def load_l3_output():
 async def l3_periodic_task(state):
     logger.debug("[DEBUG] Entrando en l3_periodic_task, logger id: %s" % id(logger))
     """Ejecuta L3 periódicamente y actualiza el contexto estratégico"""
-    # Esperar a que L3 inicial se haya ejecutado en main_loop
-    await asyncio.sleep(1)  # Dar tiempo para que main_loop ejecute L3 inicial
     
     while True:
         try:
+            # Verificar que tenemos datos válidos
+            market_data = state.get("market_data", {})
+            if not market_data:
+                logger.warning("⚠️ L3: No hay datos de mercado disponibles")
+                await asyncio.sleep(10)
+                continue
+                
+            # Verificar que tenemos suficientes datos
+            min_rows = 120  # Necesitamos al menos 120 períodos
+            data_valid = True
+            data_info = []
+            
+            for symbol, df in market_data.items():
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    logger.warning(f"⚠️ L3: {symbol} sin datos válidos")
+                    data_valid = False
+                    continue
+                    
+                if len(df) < min_rows:
+                    logger.warning(f"⚠️ L3: {symbol} insuficientes datos ({len(df)} < {min_rows})")
+                    data_valid = False
+                    continue
+                    
+                if not all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+                    logger.warning(f"⚠️ L3: {symbol} faltan columnas OHLCV")
+                    data_valid = False
+                    continue
+                    
+                data_info.append(f"{symbol}: {len(df)}")
+            
+            if not data_valid:
+                logger.warning("⚠️ L3: Esperando datos válidos...")
+                await asyncio.sleep(10)
+                continue
+                
+            # Ejecutar L3 con datos válidos
+            logger.info(f"🔄 L3: Ejecutando con datos ({', '.join(data_info)})")
             try:
                 l3_output = await asyncio.wait_for(execute_l3_pipeline(state), timeout=L3_TIMEOUT)
                 if l3_output:
                     state["estrategia"] = l3_output.get("strategic_context", {})
-                    logger.info("🔄 l3_output actualizado en state['estrategia']")
+                    logger.info("✅ L3: Output actualizado en state['estrategia']")
                 else:
                     # Fallback: cargar desde archivo si execute_l3_pipeline falló
                     l3_context = load_l3_output()
                     state["estrategia"] = l3_context.get("strategic_context", {})
-                    logger.info("🔄 l3_output.json actualizado en state['estrategia']")
+                    logger.info("⚠️ L3: Usando output desde archivo")
             except asyncio.TimeoutError:
-                logger.warning(f"⏱️ Timeout ejecutando L3 (>{L3_TIMEOUT}s), usando última estrategia conocida")
+                logger.warning(f"⏱️ L3: Timeout ({L3_TIMEOUT}s), usando última estrategia")
                 l3_context = load_l3_output()
                 state["estrategia"] = l3_context.get("strategic_context", {})
-                logger.info("🔄 l3_output.json actualizado en state['estrategia']")
+                
             await asyncio.sleep(L3_UPDATE_INTERVAL)
+            
         except asyncio.CancelledError:
             logger.info("🛑 Tarea L3 cancelada")
             break
@@ -163,7 +264,8 @@ async def main():
         state = validate_state_structure(state)
         bus_adapter = BusAdapterAsync(config, state)
         l2_processor = L2TacticProcessor(config)
-        l1_order_manager = OrderManager(market_data=state["mercado"])
+        binance_client = BinanceClient()
+        l1_order_manager = OrderManager(binance_client=binance_client, market_data=state["mercado"])
         
         # Inicializar RiskControlManager
         l2_config = L2Config()
@@ -174,7 +276,34 @@ async def main():
         # L3 se ejecutará después de obtener datos de mercado por primera vez
         logger.info("🔄 L3 se ejecutará después de obtener datos de mercado")
 
-        # Ejecutar L3 periódico
+        # Obtener datos iniciales antes de iniciar cualquier tarea
+        logger.info("🔄 Obteniendo datos iniciales de mercado...")
+        initial_data = await loader.get_realtime_data()
+        if not initial_data or all(df.empty for df in initial_data.values()):
+            initial_data = await data_feed.get_market_data()
+            
+        if initial_data and not all(df.empty for df in initial_data.values()):
+            formatted_data = {}
+            for symbol, df in initial_data.items():
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    if all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+                        formatted_data[symbol] = df
+                        logger.info(f"✅ Datos iniciales {symbol}: {len(df)} períodos")
+                    else:
+                        logger.warning(f"⚠️ {symbol} falta alguna columna OHLCV: {df.columns.tolist()}")
+                        
+            if formatted_data:
+                state["market_data"] = formatted_data
+                state["market_data_full"] = formatted_data.copy()
+                logger.info("✅ Datos iniciales cargados en state")
+            else:
+                logger.error("❌ No se pudieron obtener datos iniciales válidos")
+                return
+        else:
+            logger.error("❌ No se pudieron obtener datos iniciales")
+            return
+
+        # Ejecutar L3 periódico solo después de tener datos
         asyncio.create_task(l3_periodic_task(state))
 
         # Ejecutar loop principal L2/L1
@@ -248,15 +377,46 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
                         "ETHUSDT": pd.DataFrame({'close': [4301.11]}, index=[pd.Timestamp.utcnow()])
                     }
 
-            logger.debug(f"Market data keys: {list(market_data.keys())}")
+            # Verificar y formatear datos de mercado
+            formatted_market_data = {}
             for symbol, df in market_data.items():
-                logger.debug(f"Market data {symbol} shape: {df.shape if not df.empty else 'empty'}")
-                logger.debug(f"Market data {symbol} columns: {df.columns.tolist() if not df.empty else 'empty'}")
-                logger.debug(f"Market data {symbol} dtypes: {df.dtypes if not df.empty else 'empty'}")
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    # Asegurar que tenemos las columnas correctas
+                    if all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+                        formatted_market_data[symbol] = df
+                        logger.debug(f"Market data {symbol} shape: {df.shape}")
+                        logger.debug(f"Market data {symbol} columns: {df.columns.tolist()}")
+                    else:
+                        logger.warning(f"⚠️ {symbol} falta alguna columna OHLCV: {df.columns.tolist()}")
 
-            # 2️⃣ Calcular indicadores técnicos
+            if not formatted_market_data:
+                logger.error("❌ No hay datos de mercado válidos después del formateo")
+                return
+                
+            # Guardar datos completos para L3
+            state["market_data"] = formatted_market_data
+            state["market_data_full"] = formatted_market_data.copy()
+
+            # 2️⃣ Calcular indicadores técnicos y enriquecer con L3
             logger.debug("Calculating technical indicators")
-            technical_indicators = calculate_technical_indicators(market_data)
+            technical_indicators = calculate_technical_indicators(formatted_market_data)
+            
+            # Ejecutar L3 después de tener los datos formateados
+            if not l3_initialized and formatted_market_data:
+                min_rows = 120  # Necesitamos al menos 120 períodos para los retornos
+                if all(len(df) >= min_rows for df in formatted_market_data.values()):
+                    logger.info(f"🚀 Ejecutando L3 inicial (datos: {[f'{k}: {len(v)}' for k,v in formatted_market_data.items()]})")
+                    l3_output = await execute_l3_pipeline(state)
+                    if l3_output:
+                        state["estrategia"] = l3_output.get("strategic_context", {})
+                        logger.info("🔄 L3 output inicial cargado")
+                        l3_initialized = True
+                    
+            # Integrar features con datos de L3
+            l3_context = state.get("estrategia", {})
+            technical_indicators = integrate_features_with_l2(technical_indicators, l3_context)
+            debug_l2_features(technical_indicators)  # Debug para ver los features integrados
+            
             logger.debug(f"Technical indicators keys: {list(technical_indicators.keys())}")
             for symbol, df in technical_indicators.items():
                 logger.debug(f"Technical indicators {symbol} shape: {df.shape if not df.empty else 'empty'}")
@@ -265,18 +425,51 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
             state["technical_indicators"] = technical_indicators
 
             # 🚀 Ejecutar L3 inicial si es la primera vez que tenemos datos de mercado
-            if not l3_initialized and market_data and not all(df.empty for df in market_data.values()):
-                logger.info("🚀 Ejecutando L3 inicial con datos de mercado disponibles")
-                l3_output = await execute_l3_pipeline(state)
-                if l3_output:
-                    state["estrategia"] = l3_output.get("strategic_context", {})
-                    logger.info("🔄 l3_output inicial cargado en state['estrategia']")
+            if not l3_initialized and formatted_market_data:
+                # Verificar que tenemos suficientes datos (120 períodos mínimo para features L3)
+                min_rows_l3 = 120  # Necesitamos 120 períodos para calcular features como return_120
+                data_valid = all(
+                    isinstance(df, pd.DataFrame) and 
+                    len(df) >= min_rows_l3 and
+                    all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume'])
+                    for df in formatted_market_data.values()
+                )
+                if not data_valid:
+                    logger.warning(f"⚠️ Insuficientes datos para L3. Se necesitan {min_rows_l3} períodos con OHLCV completo")
+                min_rows = 120  # Necesitamos al menos 120 períodos para calcular todos los retornos
+                
+                for symbol, df in market_data.items():
+                    if not isinstance(df, pd.DataFrame) or df.empty:
+                        logger.warning(f"[L3] {symbol}: Sin datos válidos")
+                        data_valid = False
+                        continue
+                    
+                    if len(df) < min_rows:
+                        logger.warning(f"[L3] {symbol}: Insuficientes datos ({len(df)} < {min_rows})")
+                        data_valid = False
+                        continue
+                        
+                    if not all(col in df.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+                        logger.warning(f"[L3] {symbol}: Faltan columnas OHLCV. Columnas: {df.columns.tolist()}")
+                        data_valid = False
+                        continue
+                        
+                    logger.info(f"[L3] {symbol}: {len(df)} períodos disponibles, columnas OK")
+                
+                if data_valid:
+                    logger.info("🚀 Ejecutando L3 inicial con datos de mercado disponibles")
+                    l3_output = await execute_l3_pipeline(state)
+                    if l3_output:
+                        state["estrategia"] = l3_output.get("strategic_context", {})
+                        logger.info("🔄 l3_output inicial cargado en state['estrategia']")
+                    else:
+                        # Fallback: cargar desde archivo si execute_l3_pipeline falló
+                        initial_l3 = load_l3_output()
+                        state["estrategia"] = initial_l3.get("strategic_context", {})
+                        logger.info("🔄 l3_output.json inicial cargado en state['estrategia']")
+                    l3_initialized = True
                 else:
-                    # Fallback: cargar desde archivo si execute_l3_pipeline falló
-                    initial_l3 = load_l3_output()
-                    state["estrategia"] = initial_l3.get("strategic_context", {})
-                    logger.info("🔄 l3_output.json inicial cargado en state['estrategia']")
-                l3_initialized = True
+                    logger.warning("⚠️ No hay suficientes datos para L3, esperando más datos...")
 
             # 3️⃣ Generar señales técnicas
             logger.debug("Generating technical signals")
@@ -290,8 +483,16 @@ async def main_loop(state, data_feed: DataFeed, realtime_loader: RealTimeDataLoa
                     'close': float(technical_indicators[symbol]['close'].iloc[-1] if symbol in technical_indicators and not technical_indicators[symbol].empty else (110758.76 if symbol == "BTCUSDT" else 4301.11))
                 } for symbol in config["SYMBOLS"]
             }
+            
             # Guardar datos completos para L3
-            state["market_data_full"] = market_data
+            state["market_data"] = market_data  # Datos OHLCV actuales
+            state["market_data_full"] = market_data.copy()  # Copia para histórico
+            
+            # Debug de datos guardados
+            logger.debug(f"[DEBUG] Market data guardado - shapes:")
+            for symbol, df in market_data.items():
+                if isinstance(df, pd.DataFrame):
+                    logger.debug(f"  {symbol}: {df.shape}, columnas: {df.columns.tolist()}")
             l1_order_manager.market_data = state["mercado"]
 
             # 5️⃣ Procesar señales en L2
@@ -410,4 +611,3 @@ if __name__ == "__main__":
     load_dotenv()
     asyncio.run(main())
 
-  

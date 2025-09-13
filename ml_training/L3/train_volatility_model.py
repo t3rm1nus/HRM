@@ -79,9 +79,18 @@ if __name__ == "__main__":
     X, y = create_dataset(series, window=window_size)
     X = X.reshape((X.shape[0], X.shape[1], 1))
 
+    # Create target volatility (realized vol over next period)
+    volatilities = []
+    for i in range(len(log_returns)-window_size):
+        next_period = log_returns.values[i+window_size:i+window_size+20]  # 20-day forward vol
+        vol = np.std(next_period) * np.sqrt(252)  # Annualized
+        volatilities.append(vol)
+    y = np.array(volatilities) * 100  # Convert to percentage
+    
     model = Sequential([
         LSTM(64, activation='tanh', input_shape=(window_size,1)),
-        Dense(1)
+        Dense(32, activation='relu'),
+        Dense(1, activation='softplus')  # Ensure positive output
     ])
     model.compile(optimizer='adam', loss='mse')
     es = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)

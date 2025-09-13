@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from transformers import BertTokenizer, BertForSequenceClassification
 import torch
 from dotenv import load_dotenv
-import praw
+import asyncpraw
 import requests
 
 # ======== CONFIG ========
@@ -32,22 +32,27 @@ model.eval()  # modo evaluación
 # =========================
 # DESCARGA DE DATOS
 # =========================
-def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=1000):
+async def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=1000):
     if not (REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT):
         print("⚠️ Reddit API keys no configuradas. Saltando Reddit.")
         return pd.DataFrame()
 
-    reddit = praw.Reddit(client_id=REDDIT_CLIENT_ID,
-                         client_secret=REDDIT_CLIENT_SECRET,
-                         user_agent=REDDIT_USER_AGENT)
+    reddit = asyncpraw.Reddit(client_id=REDDIT_CLIENT_ID,
+                              client_secret=REDDIT_CLIENT_SECRET,
+                              user_agent=REDDIT_USER_AGENT)
     posts = []
     for sub in subreddits:
         try:
-            for post in reddit.subreddit(sub).hot(limit=limit):
+            subreddit = await reddit.subreddit(sub)
+            count = 0
+            async for post in subreddit.hot(limit=limit):
                 posts.append({
                     "date": datetime.fromtimestamp(post.created_utc),
                     "text": f"{post.title} {post.selftext}"
                 })
+                count += 1
+                if count >= limit:
+                    break
         except Exception as e:
             print(f"⚠️ Error descargando Reddit {sub}: {e}")
     return pd.DataFrame(posts)

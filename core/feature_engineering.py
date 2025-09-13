@@ -4,138 +4,157 @@ from core.logging import logger
 import json
 
 
-def integrate_features_with_l2(df_symbol, df_other, l3_path):
+def integrate_features_with_l2(technical_indicators: dict, l3_context: dict) -> dict:
     """
-    Integrate technical indicators, cross-asset features, and L3 strategic context.
+    Integrate technical indicators with L3 strategic context.
     
     Args:
-        df_symbol (pd.DataFrame): Indicators for the primary symbol (e.g., BTCUSDT).
-        df_other (pd.DataFrame): Indicators for other symbols (e.g., ETHUSDT).
-        l3_path (str): Path to L3 output JSON.
+        technical_indicators (dict): Dict of DataFrames with technical indicators per symbol
+        l3_context (dict): L3 strategic context dict from state['estrategia']
     
     Returns:
-        pd.DataFrame: Integrated features or empty DataFrame with expected columns if failed.
-    """
-    expected_columns = [
-        'rsi', 'macd', 'bollinger_upper', 'bollinger_lower', 'delta_close',
-        'eth_btc_ratio', 'rolling_corr_10', 'l3_regime', 'l3_risk_appetite',
-        'l3_alloc_BTC', 'l3_alloc_ETH', 'l3_alloc_CASH'
-    ]
+        dict: Technical indicators enriched with L3 features
     
-    if df_symbol is None or not isinstance(df_symbol, pd.DataFrame) or df_symbol.empty:
-        logger.warning(f"⚠️ Invalid or empty df_symbol, returning empty DataFrame")
-        return pd.DataFrame(columns=expected_columns)
+    Raises:
+        ValueError: If inputs are not dictionaries or have invalid format
+    """
+    # Validación de inputs
+    if not isinstance(technical_indicators, dict):
+        raise ValueError("technical_indicators debe ser un diccionario")
+    if not isinstance(l3_context, dict):
+        raise ValueError("l3_context debe ser un diccionario")
+
+    # Crear copia para no modificar el original
+    enriched_indicators = {}
     
     try:
-        logger.debug(f"Processing features with shape: {df_symbol.shape}, columns: {list(df_symbol.columns)}")
+        # Procesar cada símbolo
+        for symbol, df in technical_indicators.items():
+            if not isinstance(df, pd.DataFrame):
+                logger.warning(f"Saltando {symbol}: no es un DataFrame")
+                continue
+            if df.empty:
+                logger.warning(f"Saltando {symbol}: DataFrame vacío")
+                continue
+            if 'close' not in df.columns:
+                logger.warning(f"Saltando {symbol}: falta columna 'close'")
+                continue
+                
+            try:
+                # Copiar el DataFrame original
+                enriched_df = df.copy()
+                
+                # Añadir features de L3 con validación
+                regime = str(l3_context.get('regime', 'neutral')).lower()
+                regime_value = {
+                    'bull': 1.0,
+                    'neutral': 0.5,
+                    'bear': 0.0
+                }.get(regime, 0.5)
+                enriched_df['l3_regime'] = regime_value
+                
+                try:
+                    risk_appetite = float(l3_context.get('risk_appetite', 0.5))
+                    risk_appetite = max(0.0, min(1.0, risk_appetite))  # Clamp entre 0 y 1
+                except (ValueError, TypeError):
+                    risk_appetite = 0.5
+                enriched_df['l3_risk_appetite'] = risk_appetite
+                
+                # Validar y procesar asset allocation
+                asset_allocation = l3_context.get('asset_allocation', {})
+                if not isinstance(asset_allocation, dict):
+                    asset_allocation = {}
+                    
+                for asset in ['BTC', 'ETH', 'CASH']:
+                    try:
+                        value = float(asset_allocation.get(asset, 0.0))
+                        value = max(0.0, min(1.0, value))  # Clamp entre 0 y 1
+                    except (ValueError, TypeError):
+                        value = 0.0 if asset != 'CASH' else 1.0
+                    enriched_df[f'l3_alloc_{asset}'] = value
+                
+                # Calcular ratios entre pares con validación
+                if symbol in ['BTCUSDT', 'ETHUSDT']:
+                    other_symbol = 'ETHUSDT' if symbol == 'BTCUSDT' else 'BTCUSDT'
+                    if other_symbol in technical_indicators:
+                        other_df = technical_indicators[other_symbol]
+                        if not other_df.empty and 'close' in other_df.columns:
+                            try:
+                                # Asegurar que los close son numéricos
+                                symbol_close = pd.to_numeric(enriched_df['close'], errors='coerce')
+                                other_close = pd.to_numeric(other_df['close'], errors='coerce')
+                                
+                                if symbol == 'BTCUSDT':
+                                    ratio = other_close / symbol_close
+                                else:  # ETHUSDT
+                                    ratio = symbol_close / other_close
+                                    
+                                enriched_df['eth_btc_ratio'] = ratio.fillna(method='ffill').fillna(1.0)
+                                
+                                # Correlación con ventana mínima de datos válidos
+                                valid_mask = ~(symbol_close.isna() | other_close.isna())
+                                if valid_mask.sum() >= 5:  # Mínimo 5 puntos válidos
+                                    corr = symbol_close.rolling(10, min_periods=5).corr(other_close)
+                                    enriched_df['rolling_corr_10'] = corr.fillna(method='ffill')
+                                else:
+                                    enriched_df['rolling_corr_10'] = pd.NA
+                                    
+                            except Exception as calc_error:
+                                logger.error(f"Error calculando ratios para {symbol}: {calc_error}")
+                                enriched_df['eth_btc_ratio'] = 1.0
+                                enriched_df['rolling_corr_10'] = pd.NA
+                
+                # Guardar el DataFrame enriquecido
+                enriched_indicators[symbol] = enriched_df
+                
+                # Debug info detallado
+                l3_cols = [col for col in enriched_df.columns if col.startswith('l3_')]
+                logger.debug(f"{symbol} enriched with {len(l3_cols)} L3 features: {l3_cols}")
+                
+            except Exception as symbol_error:
+                logger.error(f"Error procesando {symbol}: {symbol_error}")
+                enriched_indicators[symbol] = df  # Mantener datos originales en caso de error
+            
+        return enriched_indicators
         
-        # Updated to match actual column names from calculate_technical_indicators
-        required_cols = ['close', 'RSI_14', 'MACD', 'BB_upper', 'BB_lower']
-        missing_cols = [col for col in required_cols if col not in df_symbol.columns]
-        if missing_cols:
-            logger.error(f"❌ Missing required columns: {missing_cols}")
-            return pd.DataFrame(columns=expected_columns)
-        
-        # Copy required columns and rename to expected output format
-        features = df_symbol[required_cols].copy()
-        features = features.rename(columns={
-            'RSI_14': 'rsi',
-            'MACD': 'macd',
-            'BB_upper': 'bollinger_upper',
-            'BB_lower': 'bollinger_lower'
-        })
-        
-        # Handle missing values
-        features = features.fillna(0.0)
-        
-        # Add cross-asset features
-        if df_other is not None and not df_other.empty and 'close' in df_other.columns:
-            features['eth_btc_ratio'] = df_symbol['close'] / df_other['close']
-            features['rolling_corr_10'] = df_symbol['close'].rolling(window=10).corr(df_other['close'])
-            features['rolling_corr_10'] = features['rolling_corr_10'].fillna(0.0)
-        else:
-            logger.warning("⚠️ df_other is empty or missing 'close' column")
-            features['eth_btc_ratio'] = 0.0
-            features['rolling_corr_10'] = 0.0
-        
-        # Load L3 strategic context
-        try:
-            with open(l3_path, 'r') as f:
-                l3_data = json.load(f)
-            features['l3_regime'] = l3_data.get('regime', 'neutral')
-            features['l3_risk_appetite'] = l3_data.get('risk_appetite', 'moderate')
-            features['l3_alloc_BTC'] = l3_data.get('asset_allocation', {}).get('BTC', 0.5)
-            features['l3_alloc_ETH'] = l3_data.get('asset_allocation', {}).get('ETH', 0.5)
-            features['l3_alloc_CASH'] = l3_data.get('asset_allocation', {}).get('CASH', 0.0)
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to load L3 data from {l3_path}: {e}")
-            features['l3_regime'] = 'neutral'
-            features['l3_risk_appetite'] = 'moderate'
-            features['l3_alloc_BTC'] = 0.5
-            features['l3_alloc_ETH'] = 0.5
-            features['l3_alloc_CASH'] = 0.0
-        
-        # Add delta_close
-        features['delta_close'] = df_symbol['close'].pct_change().fillna(0.0)
-        
-        # Ensure all expected columns are present
-        for col in expected_columns:
-            if col not in features.columns:
-                features[col] = 0.0
-        
-        logger.debug(f"Features integrated successfully, shape: {features.shape}")
-
-        # Añadir columna market_data con estructura esperada por FinRL
-        if not features.empty and isinstance(df_symbol, pd.DataFrame) and not df_symbol.empty:
-            last_row = df_symbol.iloc[-1].to_dict()
-            # Separar OHLCV y los indicadores relevantes
-            ohlcv_keys = ['open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'trades', 'taker_buy_base', 'taker_buy_quote', 'ignored']
-            indicator_keys = ['rsi', 'macd', 'macd_signal', 'bollinger_upper', 'bollinger_lower', 'sma_20', 'ema_12', 'sma_10', 'ema_10']
-            ohlcv = {k: last_row[k] for k in ohlcv_keys if k in last_row}
-            indicators = {k: last_row[k] for k in indicator_keys if k in last_row}
-            # Para compatibilidad, también incluir variantes de nombres
-            if 'RSI_14' in last_row and 'rsi' not in indicators:
-                indicators['rsi'] = last_row['RSI_14']
-            if 'MACD' in last_row and 'macd' not in indicators:
-                indicators['macd'] = last_row['MACD']
-            if 'MACD_signal' in last_row and 'macd_signal' not in indicators:
-                indicators['macd_signal'] = last_row['MACD_signal']
-            if 'BB_upper' in last_row and 'bollinger_upper' not in indicators:
-                indicators['bollinger_upper'] = last_row['BB_upper']
-            if 'BB_lower' in last_row and 'bollinger_lower' not in indicators:
-                indicators['bollinger_lower'] = last_row['BB_lower']
-            if 'SMA_20' in last_row and 'sma_20' not in indicators:
-                indicators['sma_20'] = last_row['SMA_20']
-            if 'EMA_12' in last_row and 'ema_12' not in indicators:
-                indicators['ema_12'] = last_row['EMA_12']
-            if 'SMA_10' in last_row and 'sma_10' not in indicators:
-                indicators['sma_10'] = last_row['SMA_10']
-            if 'EMA_10' in last_row and 'ema_10' not in indicators:
-                indicators['ema_10'] = last_row['EMA_10']
-            # Construir market_data estructurado
-            market_data_struct = {'ohlcv': ohlcv, 'indicators': indicators}
-            features['market_data'] = [market_data_struct] * len(features)
-        else:
-            features['market_data'] = [{}] * len(features)
-
-        return features
-    
     except Exception as e:
-        logger.error(f"❌ Error integrating features: {e}", exc_info=True)
-        return pd.DataFrame(columns=expected_columns)
+        logger.error(f"❌ Error general enriqueciendo features con L3: {e}", exc_info=True)
+        return technical_indicators
+
 # ----------------------
 # Debug L2 Features
 # ----------------------
-def debug_l2_features(features: dict, n: int = 5):
+def debug_l2_features(features: dict):
     """
-    Debug de features L2.
-    features: dict[symbol -> pd.DataFrame]
+    Debug de features L2 enfocado en datos de L3.
+    
+    Args:
+        features (dict): Dict de DataFrames con indicadores por símbolo
     """
-    logger.info("=== L2 Features Preview ===")
+    logger.info("=== L2 Features L3 Integration Debug ===")
+    l3_columns = ['l3_regime', 'l3_risk_appetite', 'l3_alloc_BTC', 'l3_alloc_ETH', 'l3_alloc_CASH']
+    cross_columns = ['eth_btc_ratio', 'rolling_corr_10']
+    
     for symbol, df in features.items():
         if df is None or df.empty:
             logger.warning(f"{symbol}: DataFrame vacío")
             continue
-        logger.info(f"{symbol} head:\n{df.head(n)}")
-        logger.info(f"{symbol} dtypes:\n{df.dtypes.value_counts()}")
-        logger.info(f"{symbol} memoria: {df.memory_usage().sum() / 1024:.2f} KB")
+            
+        # Debug L3 features
+        if any(col in df.columns for col in l3_columns):
+            last_row = df.iloc[-1]
+            l3_values = {col: last_row.get(col, 'N/A') for col in l3_columns if col in df.columns}
+            logger.info(f"{symbol} L3 features: {l3_values}")
+        else:
+            logger.warning(f"{symbol}: No L3 features found")
+            
+        # Debug cross features
+        if any(col in df.columns for col in cross_columns):
+            last_row = df.iloc[-1]
+            cross_values = {col: last_row.get(col, 'N/A') for col in cross_columns if col in df.columns}
+            logger.info(f"{symbol} Cross features: {cross_values}")
+        else:
+            logger.warning(f"{symbol}: No cross features found")
+            
+        # Shape y memoria
+        logger.info(f"{symbol} shape: {df.shape}, memoria: {df.memory_usage().sum() / 1024:.2f} KB")

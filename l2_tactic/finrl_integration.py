@@ -10,10 +10,8 @@ from typing import Dict, Any, Optional, List
 import os
 import torch
 from loguru import logger
-from .models import TacticalSignal
 from datetime import datetime
 from .models import TacticalSignal
-from datetime import datetime
 
 class FinRLProcessor:
     def __init__(self, model_path: str):
@@ -83,11 +81,17 @@ class FinRLProcessor:
             return False
 
     def load_stable_baselines3_model(self, zip_path: str) -> bool:
-        """Load stable_baselines3 PPO model from ZIP"""
+        """Load stable_baselines3 PPO model from ZIP with correct architecture and device"""
         try:
             from stable_baselines3 import PPO
-            logger.info(f"Loading stable_baselines3 PPO model from: {zip_path}")
-            self.model = PPO.load(zip_path, device='cpu')
+            import torch
+            policy_kwargs = dict(
+                activation_fn=torch.nn.ReLU,
+                net_arch=dict(pi=[256, 256], vf=[256, 256])
+            )
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logger.info(f"Loading stable_baselines3 PPO model from: {zip_path} with device={device} and policy_kwargs={policy_kwargs}")
+            self.model = PPO.load(zip_path, device=device, policy_kwargs=policy_kwargs)
             self.is_loaded = True
             logger.info(f"PPO model loaded successfully via stable_baselines3! Policy: {type(self.model.policy)}")
             return True
@@ -118,15 +122,15 @@ class FinRLProcessor:
             # Define observation space (matching the saved model)
             from gymnasium.spaces import Box
             import numpy as np
-            obs_space = Box(low=-np.inf, high=np.inf, shape=(63,), dtype=np.float32)  # 63 features
-            action_space = Box(low=0, high=2, shape=(2,), dtype=np.float32)  # 2 outputs
+            obs_space = Box(low=-np.inf, high=np.inf, shape=(257,), dtype=np.float32)  # Match saved model
+            action_space = Box(low=0, high=1, shape=(1,), dtype=np.float32)  # Single output
             
-            # Create policy with matching architecture
+            # Create policy matching saved architecture
             policy = ActorCriticPolicy(
                 observation_space=obs_space,
                 action_space=action_space,
                 lr_schedule=lambda _: 0.0,  # Dummy schedule since we're just using for inference
-                net_arch=[dict(pi=[256, 128], vf=[256, 128])]  # Match saved architecture
+                net_arch=[dict(pi=[64, 64], vf=[64, 64])]  # Match saved 64-unit architecture
             )
             
             # Load state dict
@@ -151,26 +155,16 @@ class FinRLProcessor:
             # 1️⃣ Preparar observación
             obs = self.prepare_observation(market_data or features or indicators)
 
-            # 2️⃣ Llamada al modelo (policy)
-            with torch.no_grad():
-                obs_tensor = torch.FloatTensor(obs)
-                
-                # Forward pass through the policy network
-                # This gets both the features and action distribution
-                features, dist = self.model.mlp_extractor(obs_tensor)
-                
-                # Get value prediction
-                value = self.model.value_net(features).cpu().numpy()[0]
-                
-                # Get action logits and convert to probabilities
-                action_logits = self.model.action_net(features)
-                probs = torch.softmax(action_logits, dim=-1)
-                action_probs = probs.cpu().numpy()[0]  # Remove batch dimension
-                
-                logger.debug(f"Action probs: {action_probs}, Value: {value}")
-                
-            # 3️⃣ Convert probabilities to signal and return
-            signal = self._action_to_signal(action_probs, symbol, value)
+            # 2️⃣ Llamada al modelo PPO (Stable Baselines3)
+            action, _states = self.model.predict(obs, deterministic=True)
+            # action puede ser un array, tomar el valor si es necesario
+            if isinstance(action, (list, tuple, np.ndarray)):
+                action_value = float(action[0])
+            else:
+                action_value = float(action)
+            logger.debug(f"Action value: {action_value}")
+            # No hay value head accesible directamente, así que se pasa None
+            signal = self._action_to_signal(action_value, symbol, value=None)
             return signal
             
         except Exception as e:
@@ -190,8 +184,7 @@ class FinRLProcessor:
 
     def prepare_observation(self, data: Dict[str, Any]) -> np.ndarray:
         """
-        Prepare observation as a flat np.ndarray[float32] matching Box obs_space.
-        Extends basic features to match the 63-dimensional input expected by the model.
+        Prepare observation as a flat np.ndarray[float32] matching Box obs_space (13 features).
         """
         try:
             # Si viene como dict anidado desde feature_engineering
@@ -204,109 +197,58 @@ class FinRLProcessor:
             elif isinstance(data, pd.DataFrame):
                 data = data.iloc[-1]
 
-            # Base features (19 dimensions)
-            base_features = [
-                'open','high','low','close','volume',
-                'sma_20','sma_50','ema_12','ema_26','macd','macd_signal','rsi',
-                'bollinger_middle','bollinger_std','bollinger_upper','bollinger_lower',
-                'vol_mean_20','vol_std_20','vol_zscore'
+            # Define the 13 features expected by the model
+            feature_names = [
+                'open', 'high', 'low', 'close', 'volume',
+                'sma_20', 'sma_50', 'rsi',
+                'bollinger_upper', 'bollinger_lower',
+                'ema_12', 'ema_26', 'macd'
             ]
-            
-            # Get base feature values
-            base_values = [float(data.get(f, 0.0)) for f in base_features]
-            
-            # Add derived features to reach 63 dimensions
-            derived_values = []
-            
-            # Price momentum features
-            if len(base_values) >= 4:  # If we have OHLCV data
-                price = base_values[3]  # Close price
-                derived_values.extend([
-                    price / base_values[0] - 1,  # Returns vs open
-                    price / base_values[1] - 1,  # Returns vs high
-                    price / base_values[2] - 1,  # Returns vs low
-                ])
-            else:
-                derived_values.extend([0.0] * 3)
-                
-            # Normalized indicators
-            if len(base_values) >= 12:  # If we have technical indicators
-                rsi = base_values[11]
-                derived_values.extend([
-                    (rsi - 50) / 50,  # Normalized RSI
-                    base_values[9] / abs(base_values[10]) if abs(base_values[10]) > 0 else 0,  # MACD ratio
-                ])
-            else:
-                derived_values.extend([0.0] * 2)
-                
-            # Pad remaining dimensions with zeros
-            remaining_dims = 63 - (len(base_values) + len(derived_values))
-            derived_values.extend([0.0] * remaining_dims)
-            
-            # Combine base and derived features
-            obs_values = base_values + derived_values
-            obs = np.array(obs_values, dtype=np.float32)
-            
-            # Add batch dimension and validate shape
-            obs = obs.reshape(1, -1)
-            if obs.shape[1] != 63:
-                raise ValueError(f"Invalid observation shape: {obs.shape}, expected (1, 63)")
-                
+            obs_values = []
+            for f in feature_names:
+                try:
+                    obs_values.append(float(data.get(f, 0.0)))
+                except (ValueError, TypeError):
+                    obs_values.append(0.0)
+
+            obs = np.array(obs_values, dtype=np.float32).reshape(1, -1)
             return obs
-            
         except Exception as e:
             logger.error(f"Error preparing observation: {e}", exc_info=True)
-            # Return zero vector as fallback
-            return np.zeros((1, 63), dtype=np.float32)
-        except Exception as e:
-            logger.error(f"Error preparing flat observation: {e}", exc_info=True)
-            return np.zeros((1, 19), dtype=np.float32)
+            # Return zero vector matching expected size
+            return np.zeros((1, 13), dtype=np.float32)
 
-    def _action_to_signal(self, action_probs, symbol: str, value: float = None):
+    def _action_to_signal(self, action_value: float, symbol: str, value: float = None):
         """
-        Convert model outputs to a tactical signal
+        Convert model action value to a tactical signal
         
         Args:
-            action_probs: Probabilities from the model's action head
+            action_value: Single value between 0-1 representing model's action
             symbol: The trading symbol
             value: Optional value prediction from the model's value head
         """
         try:
-            # Convert to numpy array if needed
-            probs = np.array(action_probs).flatten() if isinstance(action_probs, (list, np.ndarray)) else np.array([action_probs])
+            # Map action value to probabilities:
+            # 0.0-0.33: Strong sell
+            # 0.33-0.66: Hold
+            # 0.66-1.0: Strong buy
             
-            # Convert numpy values to native Python types and get action strength
-            probs = [abs(float(p)) for p in probs]
-            action_strength = max(probs)  # Get raw action strength
+            # Convert action value to normalized probabilities
+            action_val = float(action_value)  # Ensure Python float
             
-            # Scale action strength to [0,1]
-            action_strength = min(1.0, (np.tanh(action_strength) + 1) / 2)
-            
-            # Handle different output formats
-            # Calculate probabilities based on action space
-            if len(probs) == 2:  # Binary action space (buy/sell)
-                buy_prob, sell_prob = probs
-                hold_prob = max(0.0, 1.0 - (buy_prob + sell_prob))  # Implicit hold probability
-            elif len(probs) == 3:  # Trinary action space (buy/hold/sell)
-                buy_prob, hold_prob, sell_prob = probs
-            elif len(probs) == 1:  # Continuous action space [-1, 1]
-                action_val = probs[0]
-                # Convert to probabilities while maintaining strength
-                if action_val > 0.2:
-                    buy_prob = action_strength  # Use scaled strength
-                    hold_prob = 0.2
-                    sell_prob = 1.0 - buy_prob - hold_prob
-                elif action_val < -0.2:
-                    sell_prob = action_strength  # Use scaled strength
-                    hold_prob = 0.2
-                    buy_prob = 1.0 - sell_prob - hold_prob
-                else:
-                    hold_prob = 0.4
-                    buy_prob = sell_prob = (1.0 - hold_prob) / 2
+            # Calculate probabilities based on action value ranges
+            if action_val <= 0.33:
+                sell_prob = 1.0 - (action_val * 3)  # Decreases as we approach 0.33
+                hold_prob = action_val * 3          # Increases as we approach 0.33
+                buy_prob = 0.0
+            elif action_val <= 0.66:
+                sell_prob = 0.0
+                hold_prob = 1.0 - ((action_val - 0.33) * 3)  # Decreases from 1.0
+                buy_prob = (action_val - 0.33) * 3           # Increases toward 1.0
             else:
-                logger.warning(f"Unexpected probability shape: {len(probs)}")
-                buy_prob = sell_prob = action_strength / 3
-                hold_prob = 1.0 - (buy_prob + sell_prob)
+                sell_prob = 0.0
+                hold_prob = 0.0
+                buy_prob = action_val
             
             # Get action value/strength directly from probabilities
             action_strength = max(buy_prob, sell_prob)  # Hold prob doesn't affect strength
@@ -380,15 +322,24 @@ class FinRLProcessor:
 
 if __name__ == "__main__":
     try:
-        processor = FinRLProcessor('models/L2/ai_model_data_multiasset/policy.pth')
+        processor = FinRLProcessor('models/L2/ai_model_data_multiasset.zip')
         print("SUCCESS: Model loaded")
         test_data = {
             'open': 108000.0, 'high': 109000.0, 'low': 107500.0, 'close': 108790.92,
             'volume': 1500000.0, 'rsi': 45.0, 'macd': -50.0, 'bollinger_upper': 110000.0,
             'bollinger_lower': 107000.0, 'ema_12': 108500.0, 'ema_26': 108200.0,
+            'sma_20': 108000.0, 'sma_50': 107500.0, 'vol_mean_20': 1200000.0,
+            'vol_std_20': 200000.0, 'vol_zscore': 1.5
         }
-        signal = processor.generate_signal(test_data)
+        signal = processor.generate_signal("BTCUSDT", market_data=test_data)
         print(f"Test signal: {signal}")
+
+        # Print debug info
+        obs = processor.prepare_observation(test_data)
+        print(f"\nObservation shape: {obs.shape}")
+        print(f"Non-zero features: {np.count_nonzero(obs)}")
+        print(f"Value range: [{obs.min():.2f}, {obs.max():.2f}]")
+
     except Exception as e:
         print(f"FAILED: {e}")
         import traceback

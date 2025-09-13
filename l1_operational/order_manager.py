@@ -27,12 +27,16 @@ class OrderManager:
         self.execution_stats = {}
         self.risk_limits = ConfigObject.RISK_LIMITS
         self.portfolio_limits = ConfigObject.PORTFOLIO_LIMITS
-        self.execution_config = ConfigObject.EXECUTION_CONFIG
         
         self._load_ai_models_async()
         
         logger.info(f"✅ OrderManager inicializado - Modo: {ConfigObject.OPERATION_MODE}")
         logger.info(f"✅ Límites BTC: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_BTC']}, ETH: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_ETH']}")
+        self.execution_config = ConfigObject.EXECUTION_CONFIG
+        # Forzar testnet siempre
+        self.config.OPERATION_MODE = 'TESTNET'
+        self.execution_config['PAPER_MODE'] = True
+        self.execution_config['USE_TESTNET'] = True
 
     def _load_ai_models_async(self):
         """
@@ -176,7 +180,7 @@ class OrderManager:
                             signal_dict['qty'] = float(original_qty)
                             logger.debug(f"✅ Usando cantidad existente: {original_qty:.8f}")
                         else:
-                            calculated_qty = self._calculate_order_quantity(signal)
+                            calculated_qty = self._calculate_order_quantity(signal, state)
                             signal_dict['qty'] = calculated_qty
                             logger.debug(f"✅ Usando cantidad calculada: {calculated_qty:.8f}")
                         
@@ -329,7 +333,7 @@ class OrderManager:
                     qty_from_signal = getattr(signal_obj, 'qty', None)
                     logger.info(f"💫 Cantidad en señal: {qty_from_signal}")
                     
-                    quantity = qty_from_signal if qty_from_signal is not None else self._calculate_order_quantity(signal_obj)
+                    quantity = qty_from_signal if qty_from_signal is not None else self._calculate_order_quantity(signal_obj, state)
                     logger.info(f"📊 Cantidad calculada: {quantity}")
                     # Ajuste por capital/holdings disponible antes de ejecutar
                     quantity_adj = self._adjust_quantity_for_capital_and_holdings(signal_obj, float(quantity), state)
@@ -425,9 +429,11 @@ class OrderManager:
                 if p:
                     prices[sym] = float(p)
             if prices['BTCUSDT'] is None:
-                prices['BTCUSDT'] = 111000.0
+                logger.error("❌ No se encontró precio real para BTCUSDT. Operación rechazada.")
+                return  # O rechazar la operación según contexto
             if prices['ETHUSDT'] is None:
-                prices['ETHUSDT'] = 3900.0
+                logger.error("❌ No se encontró precio real para ETHUSDT. Operación rechazada.")
+                return  # O rechazar la operación según contexto
 
             # Ordenar por valor de posición descendente
             holdings = []
@@ -505,7 +511,7 @@ class OrderManager:
             }
 
     def _get_current_price(self, symbol: str, signal) -> float:
-        """Obtiene el precio actual del símbolo desde la señal/market_data (con fallback)."""
+        """Obtiene el precio actual del símbolo desde la señal/market_data. Si no hay datos, retorna None y rechaza la orden."""
         try:
             if hasattr(signal, 'price') and signal.price:
                 return float(signal.price)
@@ -521,8 +527,9 @@ class OrderManager:
                     return float(p)
         except Exception:
             pass
-        # Fallbacks más cercanos al precio actual típico
-        return 111000.0 if symbol == 'BTCUSDT' else 3900.0 if symbol == 'ETHUSDT' else 1000.0
+        # No usar precios ficticios/fallback
+        logger.error(f"❌ No se pudo obtener precio real para {symbol}. Orden rechazada por falta de conectividad/market data.")
+        return None
 
     def _get_portfolio_balances(self, state: Optional[Dict[str, Any]]) -> Dict[str, float]:
         """Extrae USDT y sizes por símbolo del state (seguro por defecto)."""
@@ -571,43 +578,46 @@ class OrderManager:
             fee_rate = 0.001  # 0.1%
             slip = 0.001      # 0.1%
             hard_floor_pct = 0.01
-            soft_reserve_pct = 0.01
+            # soft_reserve_pct = 0.01
             high_conf_threshold = 0.6
 
             hard_floor_usdt = total_value * hard_floor_pct if total_value > 0 else 0.0
-            soft_reserve_usdt = total_value * soft_reserve_pct if total_value > 0 else 0.0
+            # soft_reserve_usdt = total_value * soft_reserve_pct if total_value > 0 else 0.0
 
             if side == 'buy':
                 denom = price * (1.0 + fee_rate + slip)
                 # Capacidad sin romper hard floor
                 capacity_hard = max(0.0, usdt - hard_floor_usdt)
-                # Capacidad respetando soft reserve (por defecto)
-                capacity_soft = max(0.0, usdt - soft_reserve_usdt)
-                # Alta convicción permite usar hasta hard floor
-                confidence = 0.0
-                try:
-                    confidence = float(getattr(signal, 'confidence', 0.0) or 0.0)
-                except Exception:
-                    confidence = 0.0
-                allowed_spend = capacity_hard if confidence >= high_conf_threshold else capacity_soft
+                # Desactivado soft reserve temporalmente
+                allowed_spend = capacity_hard
 
                 affordable = (allowed_spend / denom) if denom > 0 else 0.0
                 if affordable < quantity:
-                    # Mensaje específico según el motivo del ajuste
-                    if allowed_spend == capacity_soft and soft_reserve_usdt > 0:
-                        logger.info(
-                            f"🟦 Soft reserve activa ({soft_reserve_pct*100:.0f}%): {quantity:.8f} -> {affordable:.8f} "
-                            f"(USDT={usdt:.2f}, reserve={soft_reserve_usdt:.2f})"
-                        )
-                    else:
-                        logger.warning(
-                            f"⚠️ Ajuste por USDT/fees en {symbol}: {quantity:.8f} -> {affordable:.8f} (USDT={usdt:.2f})"
-                        )
+                    logger.warning(
+                        f"⚠️ Ajuste por USDT/fees en {symbol}: {quantity:.8f} -> {affordable:.8f} (USDT={usdt:.2f})"
+                    )
                 quantity = min(quantity, max(0.0, affordable))
             elif side == 'sell':
                 if holdings < quantity:
                     logger.warning(f"⚠️ Ajuste por holdings en {symbol}: {quantity:.8f} -> {holdings:.8f}")
                 quantity = min(quantity, max(0.0, holdings))
+
+            # Validar orden mínima en USDT
+            min_order_usdt = float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40))
+            order_value = quantity * price if price else 0
+
+            if order_value < min_order_usdt:
+                logger.warning(f"❌ Orden muy pequeña para {symbol}: {order_value:.2f} USDT < mínimo {min_order_usdt} USDT")
+                return 0.0
+
+            # Evitar órdenes microscópicas por cantidad
+            min_qty_btc = 0.0015 if symbol == 'BTCUSDT' else 0.0
+            min_qty_eth = 0.02 if symbol == 'ETHUSDT' else 0.0
+            min_qty = min_qty_btc if symbol == 'BTCUSDT' else min_qty_eth
+
+            if min_qty > 0 and quantity < min_qty:
+                logger.warning(f"❌ Cantidad muy pequeña para {symbol}: {quantity:.8f} < mínimo {min_qty}")
+                return 0.0
 
             return float(quantity if quantity and quantity > 0 else 0.0)
         except Exception as e:
@@ -831,7 +841,7 @@ class OrderManager:
             logger.error(f"❌ Error en validación AI: {str(e)}")
             return {'approved': False, 'reason': str(e), 'score': 0.0}
 
-    def _calculate_order_quantity(self, signal) -> float:
+    def _calculate_order_quantity(self, signal, state=None) -> float:
         """
         Calcula la cantidad a operar para una señal basada en position sizing dinámico
         """
@@ -853,25 +863,62 @@ class OrderManager:
                 
             # Calcular cantidad base según el balance y el símbolo
             # Usar balance por defecto si no hay portfolio manager
-            usdt_balance = 3000.0  # Default 3000 USDT
+            # Usar balance real del portfolio si está disponible
+            usdt_balance = 0.0
+            try:
+                if hasattr(self, 'market_data') and self.market_data:
+                    usdt_balance = float(self.market_data.get('USDT', 0.0))
+                state_ref = state
+                if usdt_balance == 0.0 and state_ref:
+                    usdt_balance = float(state_ref.get('total_value', state_ref.get('initial_capital', 3000.0)))
+            except Exception:
+                usdt_balance = 3000.0
+
+            # Capital mínimo requerido (desde config)
+            min_account_balance = float(self.portfolio_limits.get('MIN_ACCOUNT_BALANCE_USDT', 80))
+            min_order_size = float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40))
             
-            # Usar un máximo del 10% del balance por operación
-            max_usdt = usdt_balance * 0.10
+            if usdt_balance < min_account_balance:
+                logger.warning(f"❌ Capital total insuficiente para operar {symbol}: USDT={usdt_balance:.2f} < mínimo requerido {min_account_balance}")
+                return 0.0
             
+            # Verificar que hay suficiente capital para hacer una orden válida
+            if usdt_balance < min_order_size * 1.1:  # 10% extra para fees/slippage
+                logger.warning(f"❌ Capital disponible insuficiente para orden mínima en {symbol}: USDT={usdt_balance:.2f} < mínimo orden {min_order_size}")
+                return 0.0
+
+            # Ajustar porcentaje base según capital disponible de forma más conservadora
+            base_pct = 0.15 if usdt_balance > 200 else 0.10 if usdt_balance > 100 else 0.05
+            max_usdt = usdt_balance * base_pct
+
             # Ajustar por la fuerza de la señal (0.5 a 1.5x)
             signal_strength = float(getattr(signal, 'strength', 0.5))
             position_size = max_usdt * (0.5 + signal_strength)
-            
-            # Convertir a cantidad según el símbolo
+
+            # Mínimos absolutos reales Binance
+            min_qty_btc = 0.0015  # Para asegurar que la orden sea > 40 USDT incluso con fees
+            min_qty_eth = 0.02    # Para asegurar que la orden sea > 40 USDT incluso con fees
+
+            # Convertir a cantidad según el símbolo con límites estrictos
             if symbol == 'BTCUSDT':
-                current_price = float(signal.features.get('close', 110000))  # Precio aproximado si no hay
+                current_price = self._get_current_price(symbol, signal)
+                if not current_price:
+                    return 0.0  # Rechazar si no hay precio válido
                 qty = position_size / current_price
-                min_qty = self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01)
+                min_qty = max(self.risk_limits.get('MAX_ORDER_SIZE_BTC', 0.01), min_qty_btc)
+                order_value = qty * current_price
+                if order_value < float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40)):
+                    qty = float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40)) / current_price  # Forzar mínimo
                 return max(min_qty, min(qty, min_qty * 10))  # Entre min_qty y 10x min_qty
             elif symbol == 'ETHUSDT':
-                current_price = float(signal.features.get('close', 4000))  # Precio aproximado si no hay
+                current_price = self._get_current_price(symbol, signal)
+                if not current_price:
+                    return 0.0  # Rechazar si no hay precio válido
                 qty = position_size / current_price
-                min_qty = self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1)
+                min_qty = max(self.risk_limits.get('MAX_ORDER_SIZE_ETH', 0.1), min_qty_eth)
+                order_value = qty * current_price
+                if order_value < float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40)):
+                    qty = float(self.risk_limits.get('MIN_ORDER_SIZE_USDT', 40)) / current_price  # Forzar mínimo
                 return max(min_qty, min(qty, min_qty * 10))  # Entre min_qty y 10x min_qty
             
             logger.warning(f"❌ Símbolo no soportado: {symbol}")

@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import snscrape.modules.twitter as sntwitter
 import requests
-import praw
+import asyncpraw
 from dotenv import load_dotenv
 
 # ======== CONFIG ========
@@ -27,12 +27,12 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT")
 # =========================================================
 # REDDIT con PRAW
 # =========================================================
-def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=1000):
+async def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=1000):
     if not (REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT):
         print("⚠️ Reddit API keys no configuradas en .env. Saltando Reddit.")
         return pd.DataFrame()
 
-    reddit = praw.Reddit(
+    reddit = asyncpraw.Reddit(
         client_id=REDDIT_CLIENT_ID,
         client_secret=REDDIT_CLIENT_SECRET,
         user_agent=REDDIT_USER_AGENT
@@ -41,8 +41,9 @@ def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=
     posts = []
     try:
         for sub in subreddits:
-            subreddit = reddit.subreddit(sub)
-            for post in subreddit.hot(limit=limit):
+            subreddit = await reddit.subreddit(sub)
+            count = 0
+            async for post in subreddit.hot(limit=limit):
                 posts.append({
                     "date": datetime.fromtimestamp(post.created_utc),
                     "title": post.title,
@@ -52,6 +53,9 @@ def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=
                     "subreddit": sub,
                     "url": post.url
                 })
+                count += 1
+                if count >= limit:
+                    break
         df = pd.DataFrame(posts)
         path = os.path.join(OUTPUT_DIR, "reddit.csv")
         df.to_csv(path, index=False)
@@ -114,8 +118,9 @@ def download_news(query="crypto OR bitcoin OR ethereum", start_date=START_DATE, 
 if __name__ == "__main__":
     print("⏳ Descargando datos de sentimiento...")
 
-    df_twitter = download_twitter()
-    df_reddit = download_reddit()
+    import asyncio
+    # df_twitter = await download_twitter() # Si tienes una versión asíncrona, usa await
+    df_reddit = asyncio.run(download_reddit())
     df_news = download_news()
 
     print("\n📊 Resumen de datos descargados:")

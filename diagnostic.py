@@ -5,6 +5,8 @@ Identifies and fixes common issues in the HRM trading system
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import sys
 import time
 import logging
@@ -42,14 +44,17 @@ def test_binance_connection():
         client = BinanceClient()
 
         # Probar con klines ya que no existe get_server_time ni get_symbol_price
-        try:
-            klines = client.get_klines(symbol="BTCUSDT", interval="1m", limit=5)
+        import asyncio
+        async def run():
+            klines = await client.get_klines(symbol="BTCUSDT", timeframe="1m", limit=5)
             if klines:
                 print(f"✅ Binance conectado. Datos BTCUSDT: {len(klines)} velas recibidas")
                 return True
             else:
                 print("❌ No se pudieron obtener velas desde Binance")
                 return False
+        try:
+            return asyncio.run(run())
         except Exception as e:
             print(f"❌ Error al obtener klines: {e}")
             return False
@@ -66,25 +71,33 @@ def test_data_feed():
     try:
         from l1_operational.data_feed import DataFeed
 
-        # Intentar instanciar sin argumentos
-        try:
-            data_feed = DataFeed()
-        except TypeError:
-            # Si requiere símbolos explícitos, usa una lista por defecto
-            data_feed = DataFeed(symbols=['BTCUSDT', 'ETHUSDT'])
+        # Instanciar con configuración mínima
+        config = {
+            "SYMBOLS": ["BTCUSDT", "ETHUSDT"],
+            "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY"),
+            "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET"),
+            "USE_TESTNET": os.getenv("USE_TESTNET", "false").lower() == "true"
+        }
+        data_feed = DataFeed(config)
 
-        if hasattr(data_feed, "get_latest_data") and callable(data_feed.get_latest_data):
-            data = data_feed.get_latest_data()
-            if data and len(data) > 0:
-                print(f"✅ Data feed working: {len(data)} símbolos con datos")
-                for symbol, symbol_data in data.items():
+        # Usar método asíncrono para obtener datos
+        import asyncio
+        async def run():
+            market_data = await data_feed.get_market_data()
+            if market_data and len(market_data) > 0:
+                print(f"✅ Data feed working: {len(market_data)} símbolos con datos")
+                for symbol, symbol_data in market_data.items():
                     print(f"  - {symbol}: {len(symbol_data)} registros")
+                await data_feed.close()
                 return True
             else:
                 print("❌ Data feed retornó vacío")
+                await data_feed.close()
                 return False
-        else:
-            print("⚠️ DataFeed no tiene método 'get_latest_data'")
+        try:
+            return asyncio.run(run())
+        except Exception as e:
+            print(f"❌ Data feed error: {e}")
             return False
 
     except Exception as e:

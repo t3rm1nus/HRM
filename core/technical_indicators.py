@@ -55,6 +55,11 @@ def calculate_technical_indicators(market_data: dict) -> dict:
         avg_loss = loss.rolling(window=14, min_periods=14).mean()
         rs = avg_gain / (avg_loss + 1e-9)  # Evitar división por cero
         df_ind['rsi'] = 100 - (100 / (1 + rs))
+        # Log especial si RSI es 0 por falta de variación
+        if (df_ind['rsi'] == 0).all():
+            logger.warning(f"{symbol}: RSI=0 en todos los puntos. Posible datos corruptos o sin variación de precios.")
+            indicators[symbol] = pd.DataFrame()
+            continue
 
         # Bollinger Bands
         df_ind['bollinger_middle'] = df_ind['close'].rolling(window=20, min_periods=20).mean()

@@ -21,9 +21,9 @@ class L2TacticProcessor:
     """
 
     # --- Configuración del vector esperado por FinRL ---
-    FINRL_OBS_DIM = 63
-    BASE_FEATURES_DIM = 52       # features base por símbolo (p.ej. generate_features del repo HRM)
-    CROSS_FEATURES_DIM = 11      # cross/L3 para completar hasta 63
+    FINRL_OBS_DIM = 257         # Dimensión del modelo guardado
+    BASE_FEATURES_DIM = 246      # Features base por símbolo 
+    CROSS_FEATURES_DIM = 11      # Features adicionales para completar 257
 
     # Si tienes un orden de columnas “canónico” del entrenamiento, defínelo aquí.
     # Si no, tomamos las columnas numéricas disponibles en orden estable.

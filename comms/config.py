@@ -35,7 +35,7 @@ config = {
         "correlation_limit": CORRELATION_LIMIT
     },
     "FINRL_CONFIG": {
-        "model_path": "models/L2/ai_model_data_multiasset/policy.pth"
+    "model_path": "models/L2/ai_model_data_multiasset.zip"
     },
     "SIGNALS": {
         "universe": SYMBOLS,

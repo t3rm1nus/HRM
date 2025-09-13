@@ -23,7 +23,7 @@ class AIModelConfig:
     model_name: str = "modeloL2_multiasset"
     model_params: Dict[str, Any] = field(default_factory=dict)
     signal_horizon_minutes: int = 5
-    model_path: str = "models/L2/ai_model_data_multiasset"  # Path adaptado para multiasset
+    model_path: str = "models/L2/ai_model_data_multiasset.zip"  # Path correcto para PPO SB3
     model_type: str = "stable_baselines3"  # tipo de modelo
     prediction_threshold: float = 0.3
     max_batch_size: int = 100
@@ -67,20 +67,20 @@ class PositionSizingConfig:
     lookback_days: int = 20
     vol_adjustment_factor: float = 1.0
 
-    # Límites por operación (específicos por asset)
+    # Límites por operación (específicos por asset) - OPTIMIZADOS
     max_position_pct: Dict[str, float] = field(default_factory=lambda: {
-        "BTC/USDT": 0.10,
-        "ETH/USDT": 0.15  # Mayor para ETH, por ejemplo
+        "BTC/USDT": 0.40,  # Aumentado al 40%
+        "ETH/USDT": 0.30   # Aumentado al 30%
     })
-    min_position_usd: float = 50.0
-    max_position_usd: float = 10000.0
+    min_position_usd: float = 25.0    # Reducido para más flexibilidad
+    max_position_usd: float = 1500.0  # 50% del capital inicial
 
-    # Ajustes por liquidez
-    liquidity_penalty_threshold: float = 0.5
-    liquidity_size_reduction: float = 0.5
+    # Ajustes por liquidez - MÁS AGRESIVOS
+    liquidity_penalty_threshold: float = 0.7   # Más tolerante
+    liquidity_size_reduction: float = 0.3      # Menor reducción
 
-    # Capital de referencia (necesario para sizing)
-    capital_total_usd: float = 100000.0
+    # Capital de referencia actualizado
+    capital_total_usd: float = 3000.0
 
 
 @dataclass
