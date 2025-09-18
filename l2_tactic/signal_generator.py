@@ -1,5 +1,5 @@
-# l2_tactic/signal_generator.py
 import asyncio
+import os
 from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
@@ -10,71 +10,184 @@ from .technical.multi_timeframe import MultiTimeframeTechnical
 from .risk_overlay import RiskOverlay
 from .signal_composer import SignalComposer
 from .finrl_integration import FinRLProcessor
+from .signal_validator import validate_signal_list, validate_tactical_signal, create_fallback_signal
 
 class L2TacticProcessor:
     """
     Generador de señales tácticas para L2.
-    ARREGLADO: Usa FinRLProcessor correctamente integrado.
-    ARREGLADO: Manejo robusto de DataFrames de features.
-    ARREGLADO: Construcción de observación (1, 63) para FinRL con cross-features.
-    ARREGLADO: Usa L2State para state['l2'] en lugar de dict.
     """
 
-    # --- Configuración del vector esperado por FinRL ---
-    FINRL_OBS_DIM = 257         # Dimensión del modelo guardado
-    BASE_FEATURES_DIM = 246      # Features base por símbolo 
-    CROSS_FEATURES_DIM = 11      # Features adicionales para completar 257
-
-    # Si tienes un orden de columnas “canónico” del entrenamiento, defínelo aquí.
-    # Si no, tomamos las columnas numéricas disponibles en orden estable.
-    PREFERRED_BASE_COLS: Optional[List[str]] = None  # e.g.: ["price_rsi", "price_macd", ...]  (52 exactas)
-
-    def __init__(self, config: dict):
+    def __init__(self, config):
+        """Inicializa el procesador táctico."""
         self.config = config
-        self.technical = MultiTimeframeTechnical(config)
-        self.risk = RiskOverlay(config)
-        self.signal_composer = SignalComposer(config)
-        # Case-insensitive key check
-        finrl_config = None
-        for key in config:
-            if key.lower() == "finrl_config":
-                finrl_config = config[key]
-                break
-        if not finrl_config:
-            logger.error(f"Available config keys: {list(config.keys())}")
-            raise ValueError("No FINRL_CONFIG found in config")
-        model_path = finrl_config.get("model_path")
-        if not model_path:
-            raise ValueError("No model_path specified in FINRL_CONFIG")
-        self.finrl_model = FinRLProcessor(model_path)
-        logger.info("🎯 L2TacticProcessor inicializado correctamente")
+        self.multi_timeframe = MultiTimeframeTechnical(config)
+        self.risk_overlay = RiskOverlay(config)
+        # ✅ FIXED: Pass the correct config object to SignalComposer
+        signal_config = getattr(config, 'signals', config) if hasattr(config, 'signals') else config
+        self.signal_composer = SignalComposer(signal_config)
 
-    # ------------------- UTILIDADES FINRL -------------------
+        # Usar el atributo model_path de la configuración L2Config
+        model_path = getattr(config.ai_model, "model_path", None) if hasattr(config, 'ai_model') else None
+        logger.info(f"🔍 Intentando cargar modelo desde: {model_path}")
+        if model_path:
+            logger.info(f"🔍 Ruta absoluta del modelo: {os.path.abspath(model_path)}")
+            logger.info(f"🔍 Existe archivo?: {os.path.exists(model_path)}")
+        if not model_path:
+            logger.warning("⚠️ No se encontró model_path en la configuración L2. Usando fallback.")
+            model_path = "models/L2/deepseek.zip"
+            logger.info(f"🔍 Usando ruta fallback: {model_path}")
+            logger.info(f"🔍 Ruta absoluta fallback: {os.path.abspath(model_path)}")
+        
+        try:
+            self.finrl_processor = FinRLProcessor(model_path)
+        except Exception as e:
+            logger.error(f"❌ Error cargando FinRL processor: {e}")
+            self.finrl_processor = None
+
+    async def process_signals(self, state: Dict[str, Any]) -> List[TacticalSignal]:
+        """
+        Procesa datos de mercado para generar señales tácticas.
+        """
+        try:
+            # Try different market data sources in order of preference
+            market_data = state.get("market_data_simple") or state.get("market_data", {})
+            if not market_data:
+                logger.warning("⚠️ L2: No hay datos de mercado disponibles")
+                return []
+
+            signals = []
+            
+            for symbol, data in market_data.items():
+                # Handle different data formats from backtesting
+                if isinstance(data, dict):
+                    # Backtesting format: dict with 'historical_data' key
+                    if 'historical_data' in data and isinstance(data['historical_data'], pd.DataFrame):
+                        df = data['historical_data']
+                        if len(df) >= 200:
+                            logger.info(f"✅ L2: Usando datos históricos para {symbol}: {len(df)} puntos")
+                        else:
+                            logger.warning(f"⚠️ L2: Datos históricos insuficientes para {symbol}: {len(df)} < 200 puntos requeridos")
+                            continue
+                    else:
+                        # Single data point format - skip during warmup
+                        logger.warning(f"⚠️ L2: Datos insuficientes para {symbol}: formato single point (warmup)")
+                        continue
+                elif isinstance(data, pd.DataFrame):
+                    # Direct DataFrame format
+                    df = data
+                    if df.empty or len(df) < 200:
+                        logger.warning(f"⚠️ L2: Datos insuficientes para {symbol}: {len(df)} < 200 puntos requeridos")
+                        continue
+                else:
+                    logger.warning(f"⚠️ L2: Formato de datos inválido para {symbol}: {type(data)}")
+                    continue
+
+                # Calcular indicadores técnicos multi-timeframe
+                indicators = self.multi_timeframe.calculate_technical_indicators(df)
+                
+                finrl_signal = await self.finrl_processor.get_action(
+                    state, 
+                    symbol,
+                    indicators
+                )
+                if not finrl_signal:
+                    logger.warning(f"⚠️ No hay señal FinRL para {symbol}")
+                    continue
+
+                # ✅ CRITICAL FIX: Improved L3→L2 synchronization with proper context sharing
+                l3_context = self._check_l3_context_freshness(state, symbol, df)
+
+                # CRITICAL FIX: Always try to use L3 context from cache first, fallback to l3_output
+                l3_context_cache = state.get("l3_context_cache", {})
+                l3_output = l3_context_cache.get("last_output", {})
+
+                # If no L3 data in cache, try fallback to l3_output
+                if not l3_output:
+                    l3_output = state.get("l3_output", {})
+                    logger.debug(f"Using l3_output fallback for {symbol}")
+
+                if l3_output and l3_context['is_fresh']:
+                    logger.info(f"✅ L3 context fresh for {symbol} - using FinRL + L3 context")
+                    # Use FinRL signal with L3 context available
+                    risk_filtered = finrl_signal
+
+                    # Apply risk overlay with L3 context
+                    risk_market_data = {symbol: df}
+                    risk_signals = await self.risk_overlay.generate_risk_signals(
+                        market_data=risk_market_data,
+                        portfolio_data=state.get("portfolio", {}),
+                        l3_context=l3_output  # Pass L3 context to risk overlay
+                    )
+
+                    if risk_signals:
+                        logger.info(f"⚠️ Risk signals detected for {symbol}: {len(risk_signals)}")
+                        # Apply risk-adjusted logic
+                        risk_filtered = self._apply_risk_adjustment(finrl_signal, risk_signals, l3_output)
+
+                elif l3_output and not l3_context['is_fresh']:
+                    logger.warning(f"⚠️ L3 context exists but stale for {symbol} - using tactical fallback")
+                    # L3 exists but is stale - use tactical analysis
+                    tactical_signal = self._generate_tactical_fallback_signal(symbol, df, indicators)
+                    if tactical_signal:
+                        logger.info(f"🎯 Tactical fallback signal for {symbol}: {tactical_signal.side} (conf={tactical_signal.confidence:.3f})")
+                        risk_filtered = tactical_signal
+                    else:
+                        risk_filtered = finrl_signal
+                else:
+                    logger.warning(f"❌ No L3 context available for {symbol} - using FinRL only")
+                    # No L3 context at all - use FinRL signal as-is
+                    risk_filtered = finrl_signal
+
+                tactical_signal = self.signal_composer.compose_signal(
+                    symbol=symbol,
+                    base_signal=risk_filtered,
+                    indicators=indicators,
+                    state=state
+                )
+
+                if tactical_signal:
+                    validated_signal = validate_tactical_signal(tactical_signal)
+                    if validated_signal:
+                        signals.append(validated_signal)
+                        logger.info(f"✅ L2: Señal generada para {symbol}: {tactical_signal.side} (conf={tactical_signal.confidence:.3f}, strength={tactical_signal.strength:.3f})")
+                    else:
+                        logger.warning(f"⚠️ Invalid signal for {symbol}, creating fallback")
+                        fallback = create_fallback_signal(symbol, "invalid_tactical")
+                        signals.append(fallback)
+                else:
+                    logger.warning(f"⚠️ No tactical signal composed for {symbol}, creating fallback")
+                    fallback = create_fallback_signal(symbol, "no_composition")
+                    signals.append(fallback)
+
+            # Validate signals before returning
+            validated_signals = validate_signal_list(signals)
+            return validated_signals
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando señales L2: {e}", exc_info=True)
+            return []
+
+    FINRL_OBS_DIM = 257
+    BASE_FEATURES_DIM = 246
+    CROSS_FEATURES_DIM = 11
+    PREFERRED_BASE_COLS: Optional[List[str]] = None
 
     def _select_base_features_row(self, features_df: pd.DataFrame) -> List[float]:
-        """
-        Selecciona hasta 52 features numéricos de la última fila del DataFrame de features.
-        - Si PREFERRED_BASE_COLS está definida y existen en el DF, usa ese orden.
-        - Si no, usa columnas numéricas en orden estable (por nombre).
-        - Rellena con ceros si hay menos de 52.
-        """
+        """Selects up to 52 numeric features from the last row of the features DataFrame."""
         if not isinstance(features_df, pd.DataFrame) or features_df.empty:
             return [0.0] * self.BASE_FEATURES_DIM
 
         last_row = features_df.iloc[-1]
 
-        # Determinar columnas candidatas
         if self.PREFERRED_BASE_COLS:
             cols = [c for c in self.PREFERRED_BASE_COLS if c in features_df.columns]
         else:
-            # columnas numéricas disponibles (ordenadas por nombre para estabilidad)
             numeric_cols = [
                 c for c in features_df.columns
-                if pd.api.types.is_numeric_dtype(features_df[c])
+                if pd.api.types.is_numeric_dtype(features_df[c]) or features_df[c].dtype in ['int64', 'float64', 'int32', 'float32']
             ]
             cols = sorted(numeric_cols)
 
-        # Extraer valores
         values = []
         for c in cols[:self.BASE_FEATURES_DIM]:
             try:
@@ -83,11 +196,9 @@ class L2TacticProcessor:
             except Exception:
                 values.append(0.0)
 
-        # Rellenar hasta 52
         if len(values) < self.BASE_FEATURES_DIM:
             values.extend([0.0] * (self.BASE_FEATURES_DIM - len(values)))
 
-        # Cortar por si acaso
         return values[:self.BASE_FEATURES_DIM]
 
     def _get_key_metrics(self, features_df: pd.DataFrame) -> Dict[str, float]:
@@ -105,12 +216,9 @@ class L2TacticProcessor:
         }
 
     def _compute_eth_btc_ratio(self, market_data: Dict[str, pd.DataFrame],
-                               features_by_symbol: Dict[str, pd.DataFrame]) -> float:
-        """
-        ETH/BTC close ratio con fallback.
-        """
+                              features_by_symbol: Dict[str, pd.DataFrame]) -> float:
+        """Compute ETH/BTC close ratio with fallback"""
         try:
-            # Prioriza features (si contienen 'close'), si no recurre a market_data
             for src in ("features", "market"):
                 if src == "features":
                     eth = features_by_symbol.get("ETHUSDT")
@@ -130,10 +238,7 @@ class L2TacticProcessor:
         return 0.0
 
     def _compute_btc_eth_corr30(self, market_data: Dict[str, pd.DataFrame]) -> float:
-        """
-        Correlación de 30 muestras entre returns de close BTC y ETH.
-        Si no hay suficientes datos, devuelve 0.0.
-        """
+        """Compute 30-sample correlation between BTC and ETH close returns"""
         try:
             eth = market_data.get("ETHUSDT")
             btc = market_data.get("BTCUSDT")
@@ -141,11 +246,9 @@ class L2TacticProcessor:
                 return 0.0
             if eth.empty or btc.empty or "close" not in eth.columns or "close" not in btc.columns:
                 return 0.0
-            # Alinear las últimas 30 muestras por índice si es posible
             n = 30
             eth_close = eth["close"].astype(float).tail(n)
             btc_close = btc["close"].astype(float).tail(n)
-            # si no coinciden longitudes tras tail, reindexa por la intersección del índice
             common_idx = eth_close.index.intersection(btc_close.index)
             eth_close = eth_close.loc[common_idx]
             btc_close = btc_close.loc[common_idx]
@@ -164,13 +267,9 @@ class L2TacticProcessor:
         return 0.0
 
     def _compute_spread_pct(self, market_data: Dict[str, pd.DataFrame],
-                            features_by_symbol: Dict[str, pd.DataFrame]) -> float:
-        """
-        (BTC - ETH*ratio_ref)/BTC como proxy simple de spread en %.
-        Aquí usamos (BTC - ETH)/BTC para tener algo informativo aunque no homogéneo de unidades.
-        """
+                           features_by_symbol: Dict[str, pd.DataFrame]) -> float:
+        """Compute (BTC - ETH)/BTC as simple spread proxy in %"""
         try:
-            # preferir market_data para homogeneidad
             eth = market_data.get("ETHUSDT")
             btc = market_data.get("BTCUSDT")
             if isinstance(eth, pd.DataFrame) and not eth.empty and isinstance(btc, pd.DataFrame) and not btc.empty:
@@ -183,35 +282,15 @@ class L2TacticProcessor:
         return 0.0
 
     def _build_cross_l3_features(self,
-                                 market_data: Dict[str, pd.DataFrame],
-                                 features_by_symbol: Dict[str, pd.DataFrame]) -> List[float]:
-        """
-        Construye 11 features cross/L3. Implementa algunos reales y el resto placeholders.
-        Orden propuesto (estable):
-          0: eth_btc_ratio
-          1: btc_eth_corr30
-          2: spread_pct
-          3: l3_regime               (placeholder 0.0 si no disponible)
-          4: l3_risk_appetite        (placeholder 0.5 por defecto)
-          5: l3_alloc_BTC            (placeholder 0.0)
-          6: l3_alloc_ETH            (placeholder 0.0)
-          7: l3_alloc_CASH           (placeholder 0.0)
-          8: cross_vol_ratio         (vol ETH / vol BTC últimas 20) si se puede
-          9: cross_vol_corr20        (corr 20 returns de volumen) si se puede
-          10: cross_momentum_spread  (MACD_BTC - MACD_ETH) si columnas existen
-        """
+                                market_data: Dict[str, pd.DataFrame],
+                                features_by_symbol: Dict[str, pd.DataFrame]) -> List[float]:
+        """Build 11 cross/L3 features"""
         feats = []
 
-        # 0: ETH/BTC ratio
         feats.append(self._compute_eth_btc_ratio(market_data, features_by_symbol))
-
-        # 1: Correlación 30 sobre returns de close
         feats.append(self._compute_btc_eth_corr30(market_data))
-
-        # 2: Spread %
         feats.append(self._compute_spread_pct(market_data, features_by_symbol))
 
-        # 3–7: L3 placeholders (si tienes estos en features, puedes mapearlos aquí)
         def pick_feature(df_map: Dict[str, pd.DataFrame], key: str, default: float) -> float:
             try:
                 btc_df = df_map.get("BTCUSDT")
@@ -222,13 +301,12 @@ class L2TacticProcessor:
                 pass
             return default
 
-        feats.append(pick_feature(features_by_symbol, "l3_regime", 0.0))         # 3
-        feats.append(pick_feature(features_by_symbol, "l3_risk_appetite", 0.5))  # 4
-        feats.append(pick_feature(features_by_symbol, "l3_alloc_BTC", 0.0))      # 5
-        feats.append(pick_feature(features_by_symbol, "l3_alloc_ETH", 0.0))      # 6
-        feats.append(pick_feature(features_by_symbol, "l3_alloc_CASH", 0.0))     # 7
+        feats.append(pick_feature(features_by_symbol, "l3_regime", 0.0))
+        feats.append(pick_feature(features_by_symbol, "l3_risk_appetite", 0.5))
+        feats.append(pick_feature(features_by_symbol, "l3_alloc_BTC", 0.0))
+        feats.append(pick_feature(features_by_symbol, "l3_alloc_ETH", 0.0))
+        feats.append(pick_feature(features_by_symbol, "l3_alloc_CASH", 0.0))
 
-        # 8–9: Cross volumen
         try:
             eth = market_data.get("ETHUSDT")
             btc = market_data.get("BTCUSDT")
@@ -239,10 +317,8 @@ class L2TacticProcessor:
                 common_idx = v_eth.index.intersection(v_btc.index)
                 v_eth = v_eth.loc[common_idx]
                 v_btc = v_btc.loc[common_idx]
-                # 8: ratio medias
                 ratio = float(v_eth.mean() / v_btc.mean()) if v_btc.mean() != 0 else 0.0
                 feats.append(ratio if np.isfinite(ratio) else 0.0)
-                # 9: correlación returns de volumen
                 v_eth_ret = v_eth.pct_change().dropna()
                 v_btc_ret = v_btc.pct_change().dropna()
                 common_idx = v_eth_ret.index.intersection(v_btc_ret.index)
@@ -256,7 +332,6 @@ class L2TacticProcessor:
         except Exception:
             feats.extend([0.0, 0.0])
 
-        # 10: Momentum spread (MACD_BTC - MACD_ETH) si existen columnas
         try:
             btc_f = features_by_symbol.get("BTCUSDT")
             eth_f = features_by_symbol.get("ETHUSDT")
@@ -269,7 +344,6 @@ class L2TacticProcessor:
         except Exception:
             feats.append(0.0)
 
-        # Ajuste a 11
         if len(feats) < self.CROSS_FEATURES_DIM:
             feats.extend([0.0] * (self.CROSS_FEATURES_DIM - len(feats)))
         elif len(feats) > self.CROSS_FEATURES_DIM:
@@ -277,241 +351,485 @@ class L2TacticProcessor:
 
         return [float(x) for x in feats]
 
-    def _build_finrl_observation(self,
-                                 market_data: Dict[str, pd.DataFrame],
-                                 features_by_symbol: Dict[str, pd.DataFrame]) -> np.ndarray:
+    async def ai_signals(self, state: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Construye la observación (1, 63) para el modelo FinRL:
-          - 52 features base de BTCUSDT (o lo que haya, respetando orden estable)
-          - 11 features cross/L3
-        Tolerante a sets de 19 columnas: rellena hasta 52.
-        """
-        # 1) Base features: BTCUSDT como principal
-        btc_features_df = features_by_symbol.get("BTCUSDT")
-        base_vec = self._select_base_features_row(btc_features_df)
-
-        # 2) Cross/L3
-        cross_vec = self._build_cross_l3_features(market_data, features_by_symbol)
-
-        # 3) Componer y garantizar forma
-        obs_vec = base_vec + cross_vec
-
-        if len(obs_vec) != self.FINRL_OBS_DIM:
-            logger.warning(f"⚠️ Observación de tamaño {len(obs_vec)}; ajustando a {self.FINRL_OBS_DIM}")
-            if len(obs_vec) < self.FINRL_OBS_DIM:
-                obs_vec.extend([0.0] * (self.FINRL_OBS_DIM - len(obs_vec)))
-            else:
-                obs_vec = obs_vec[:self.FINRL_OBS_DIM]
-
-        # Limpieza final
-        obs = np.array([obs_vec], dtype=np.float32)
-        obs[~np.isfinite(obs)] = 0.0
-        return obs
-
-    # ------------------- PIPELINE DE SEÑALES -------------------
-
-    async def ai_signals(self, market_data: Dict[str, pd.DataFrame], features_by_symbol: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
-        """
-        Genera señales basadas en el modelo PPO (FinRLProcessor).
-        Ahora construimos y pasamos 'observation' con forma (1, 63).
+        Genera señales de IA usando FinRL
         """
         signals = []
         try:
-            universe = self.config.get('signals', {}).get('universe', ['BTCUSDT', 'ETHUSDT'])
-            logger.debug(f"🤖 Generando señales IA para universo: {universe}")
-            # Preconstruimos una única observación global basada en BTC + cross con ETH
-            observation = self._build_finrl_observation(market_data, features_by_symbol)
-
-            for symbol in universe:
-                if symbol.upper() == "USDT":
+            if not self.finrl_processor:
+                logger.warning("⚠️ FinRL processor no disponible")
+                return []
+                
+            market_data = state.get("mercado", state.get("market_data", {}))
+            if not market_data:
+                logger.warning("⚠️ No hay datos de mercado para señales AI")
+                return []
+                
+            for symbol, df in market_data.items():
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    logger.warning(f"⚠️ Datos inválidos para {symbol}")
                     continue
 
-                # LOG DETALLADO DE ENTRADA
-                logger.info(f"[L2-DUMP] market_data[{symbol}]: shape={market_data.get(symbol, pd.DataFrame()).shape}")
-                features = features_by_symbol.get(symbol)
-                if isinstance(features, pd.DataFrame):
-                    logger.info(f"[L2-DUMP] features_by_symbol[{symbol}]: shape={features.shape}, columns={list(features.columns)}")
-                    logger.info(f"[L2-DUMP] Última fila features[{symbol}]: {features.iloc[-1].to_dict() if not features.empty else '{}'}")
-                else:
-                    logger.info(f"[L2-DUMP] features_by_symbol[{symbol}]: {features}")
-
-                # Comprobación segura de DataFrame
-                if not isinstance(features, pd.DataFrame) or features.empty:
-                    logger.warning(f"⚠️ Sin features válidos para {symbol} (vacío o no es DataFrame)")
-
-                try:
-                    # Paquete para FinRL: incluimos 'observation' (numpy array (1, 63)) además de ohlcv e indicadores
-                    last_md = market_data.get(symbol, pd.DataFrame())
-                    last_md_dict = last_md.iloc[-1].to_dict() if isinstance(last_md, pd.DataFrame) and not last_md.empty else {}
-
-                    feature_dict = features.iloc[-1].to_dict() if isinstance(features, pd.DataFrame) and not features.empty else {}
-
-                    market_data_symbol = {
-                        'ohlcv': last_md_dict,
-                        'indicators': feature_dict,
-                        'observation': observation,  # <- clave nueva: algunos wrappers la detectan directamente
-                        # Extras opcionales para logging/modelos que los busquen:
-                        'change_24h': feature_dict.get('change_24h', feature_dict.get('price_change_24h', 0.0)),
-                        'l3_regime': feature_dict.get('l3_regime', 0.0),
-                        'l3_risk_appetite': feature_dict.get('l3_risk_appetite', 0.5),
-                        'l3_alloc_BTC': feature_dict.get('l3_alloc_BTC', 0.0),
-                        'l3_alloc_ETH': feature_dict.get('l3_alloc_ETH', 0.0),
-                        'l3_alloc_CASH': feature_dict.get('l3_alloc_CASH', 0.0)
-                    }
-
-                    # Generar señal con FinRLProcessor
-                    signal = self.finrl_model.generate_signal(symbol=symbol, market_data=market_data_symbol)
-                    if signal:
-                        signals.append(signal)
-                        try:
-                            logger.info(f"🎯 Señal IA: {symbol} {signal.side} strength={getattr(signal, 'strength', 0.0):.3f}")
-                        except Exception:
-                            logger.info(f"🎯 Señal IA: {getattr(signal, 'symbol', symbol)} {getattr(signal, 'side', '?')}")
-                    else:
-                        logger.debug(f"🤖 Sin señal para {symbol}")
-                except Exception as e:
-                    logger.error(f"❌ Error procesando señal para {symbol}: {e}", exc_info=True)
+                # Verificar que hay suficientes datos históricos (>200 puntos)
+                if len(df) < 200:
+                    logger.warning(f"⚠️ Datos insuficientes para {symbol}: {len(df)} < 200 puntos requeridos")
                     continue
-            logger.info(f"🤖 Señales IA generadas: {len(signals)}")
-            return signals
+                    
+                # Calcular indicadores técnicos
+                indicators = self.multi_timeframe.calculate_technical_indicators(df)
+                
+                # Obtener señal de FinRL
+                finrl_signal = await self.finrl_processor.get_action(state, symbol, indicators)
+                if finrl_signal:
+                    # Asegurar que la señal tenga source='ai'
+                    finrl_signal.source = 'ai'
+                    signals.append(finrl_signal)
+                    logger.debug(f"✅ Señal AI generada para {symbol}: {finrl_signal.side}")
+                    
         except Exception as e:
-            logger.error(f"❌ Error generando señales IA: {e}", exc_info=True)
-            return []
+            logger.error(f"❌ Error generando señales AI: {e}", exc_info=True)
+            
+        logger.info(f"🤖 Señales AI generadas: {len(signals)}")
+        # Validate signals before returning
+        validated_signals = validate_signal_list(signals)
+        return validated_signals
 
-    async def technical_signals(self, market_data: Dict[str, pd.DataFrame], technical_indicators: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
+    async def technical_signals(self, state: Dict[str, Any]) -> List[TacticalSignal]:
         """
-        Genera señales técnicas usando MultiTimeframeTechnical.
+        Genera señales técnicas basadas en indicadores
         """
+        signals = []
         try:
-            logger.debug(f"📊 Datos de mercado para señales técnicas: {list(market_data.keys())}")
-            signals = await self.technical.generate_signals(market_data, technical_indicators)
-            logger.info(f"📊 Señales técnicas generadas: {len(signals)}")
-            if not signals:
-                logger.warning("⚠️ No se generaron señales técnicas, verificar datos de entrada o umbrales")
-            return signals
+            market_data = state.get("mercado", state.get("market_data", {}))
+            if not market_data:
+                logger.warning("⚠️ No hay datos de mercado para señales técnicas")
+                return []
+                
+            for symbol, df in market_data.items():
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    logger.warning(f"⚠️ Datos inválidos para {symbol}")
+                    continue
+                    
+                # Calcular indicadores técnicos
+                indicators = self.multi_timeframe.calculate_technical_indicators(df)
+                
+                # Generar señal técnica basada en indicadores
+                tech_signal = self._generate_technical_signal(symbol, indicators, df)
+                if tech_signal:
+                    signals.append(tech_signal)
+                    logger.debug(f"✅ Señal técnica generada para {symbol}: {tech_signal.side}")
+                    
         except Exception as e:
             logger.error(f"❌ Error generando señales técnicas: {e}", exc_info=True)
-            return []
-
-    async def risk_signals(self, market_data: Dict[str, pd.DataFrame], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
-        """
-        Genera señales de riesgo usando RiskOverlay.
-        """
-        try:
-            logger.debug(f"🛡️ Datos para señales de riesgo - Mercado: {list(market_data.keys())}, Portfolio: {portfolio_data}")
-            signals = await self.risk.generate_risk_signals(market_data, portfolio_data)
-            logger.info(f"🛡️ Señales de riesgo generadas: {len(signals)}")
-            if not signals:
-                logger.warning("⚠️ No se generaron señales de riesgo, verificar datos de entrada o umbrales")
-            return signals
-        except Exception as e:
-            logger.error(f"❌ Error generando señales de riesgo: {e}", exc_info=True)
-            return []
-
-    async def process(self, market_data: Dict[str, pd.DataFrame], features_by_symbol: Dict[str, pd.DataFrame], state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Ejecuta la capa Tactic:
-        - Genera señales (AI + técnico + riesgo)
-        - Combina y guarda en state['l2']
-        - Convierte señales a órdenes para L1
-        - Devuelve dict: {"signals", "orders_for_l1", "metadata"}
-        """
-        if features_by_symbol is None:
-            features_by_symbol = {}
-        ai_signals = []
-        technical_signals = []
-        risk_signals = []
-        all_signals = []
-
-        try:
-            logger.info("🎯 Iniciando procesamiento L2TacticProcessor")
-            logger.info(f"[L2-GLOBAL] market_data keys: {list(market_data.keys())}")
-            logger.info(f"[L2-GLOBAL] features_by_symbol keys: {list(features_by_symbol.keys())}")
-            portfolio_data = state.get("portfolio", {})
-
-            # Generación de señales
-            ai_signals = await self.ai_signals(market_data, features_by_symbol)
-            technical_signals = await self.technical_signals(market_data, features_by_symbol)
-            risk_signals = await self.risk_signals(market_data, portfolio_data)
-
-            # Combinar señales
-            all_signals = ai_signals + technical_signals + risk_signals
-            if all_signals:
-                try:
-                    all_signals = self.signal_composer.compose(all_signals)
-                    logger.info(f"✅ Señales compuestas: {len(all_signals)}")
-                    for signal in all_signals:
-                        symbol = getattr(signal, 'symbol', None) or (signal.get('symbol') if isinstance(signal, dict) else None)
-                        side = getattr(signal, 'side', None) or (signal.get('side') if isinstance(signal, dict) else None)
-                        if not symbol or not side:
-                            logger.error(f"❌ Señal inválida: {getattr(signal, '__dict__', signal)}")
-                            all_signals = []
-                            break
-                except Exception as e:
-                    logger.error(f"❌ Error al componer señales: {e}", exc_info=True)
-                    all_signals = []
-            else:
-                logger.warning("⚠️ No hay señales para componer")
-
-            # Guardar en state['l2']
-            now = pd.Timestamp.utcnow()
-            if not isinstance(state.get('l2'), L2State):
-                state['l2'] = L2State()
-            state['l2'].signals = all_signals
-            state['l2'].last_update = now
-            logger.debug(f"Actualizado state.l2.signals con {len(all_signals)} señales")
             
-            # Convertir señales a órdenes para L1
-            orders_for_l1 = []
-            for signal in all_signals:
-                try:
-                    def get_attr_or_key(obj, key, default=None):
-                        if hasattr(obj, key):
-                            return getattr(obj, key)
-                        if isinstance(obj, dict):
-                            return obj.get(key, default)
-                        return default
+        logger.info(f"📊 Señales técnicas generadas: {len(signals)}")
+        # Validate signals before returning
+        validated_signals = validate_signal_list(signals)
+        return validated_signals
 
-                    order = {
-                        "symbol": get_attr_or_key(signal, "symbol"),
-                        "side": get_attr_or_key(signal, "side"),
-                        "type": "market",
-                        "quantity": get_attr_or_key(signal, "quantity", 0.0),  # Agregar cantidad
-                        "strength": get_attr_or_key(signal, "strength"),
-                        "confidence": get_attr_or_key(signal, "confidence"),
-                        "signal_type": get_attr_or_key(signal, "signal_type", "tactical"),
-                        "timestamp": get_attr_or_key(signal, "timestamp", now),
-                        "metadata": get_attr_or_key(signal, "metadata", {})
+    def _generate_technical_signal(self, symbol: str, indicators: Dict, df: pd.DataFrame) -> Optional[TacticalSignal]:
+        """
+        Genera una señal técnica basada en indicadores
+        """
+        try:
+            if not indicators:
+                return None
+                
+            # Obtener valores actuales de indicadores
+            rsi = indicators.get('rsi')
+            macd = indicators.get('macd')
+            macd_signal = indicators.get('macd_signal')
+            bb_upper = indicators.get('bb_upper')
+            bb_lower = indicators.get('bb_lower')
+            
+            if not all(hasattr(ind, 'iloc') for ind in [rsi, macd, macd_signal] if ind is not None):
+                logger.warning(f"⚠️ Indicadores inválidos para {symbol}")
+                return None
+                
+            current_price = float(df['close'].iloc[-1])
+            rsi_val = float(rsi.iloc[-1]) if rsi is not None else 50.0
+            macd_val = float(macd.iloc[-1]) if macd is not None else 0.0
+            macd_signal_val = float(macd_signal.iloc[-1]) if macd_signal is not None else 0.0
+            
+            # Lógica de señales técnicas
+            signals_count = 0
+            buy_signals = 0
+            sell_signals = 0
+            
+            # RSI signals
+            if rsi_val < 30:  # Oversold
+                buy_signals += 1
+                signals_count += 1
+            elif rsi_val > 70:  # Overbought
+                sell_signals += 1
+                signals_count += 1
+                
+            # MACD signals
+            if macd_val > macd_signal_val:  # MACD above signal
+                buy_signals += 1
+                signals_count += 1
+            elif macd_val < macd_signal_val:  # MACD below signal
+                sell_signals += 1
+                signals_count += 1
+                
+            # Bollinger Bands signals
+            if bb_upper is not None and bb_lower is not None:
+                bb_upper_val = float(bb_upper.iloc[-1])
+                bb_lower_val = float(bb_lower.iloc[-1])
+                
+                if current_price <= bb_lower_val:  # Price at lower band
+                    buy_signals += 1
+                    signals_count += 1
+                elif current_price >= bb_upper_val:  # Price at upper band
+                    sell_signals += 1
+                    signals_count += 1
+                    
+            # Determinar señal final
+            if signals_count == 0:
+                return None
+                
+            if buy_signals > sell_signals:
+                side = 'buy'
+                strength = buy_signals / signals_count
+            elif sell_signals > buy_signals:
+                side = 'sell'
+                strength = sell_signals / signals_count
+            else:
+                side = 'hold'
+                strength = 0.5
+                
+            # Calcular confianza basada en la fuerza de los indicadores
+            confidence = min(0.9, strength * 0.8 + 0.2)  # Entre 0.2 y 0.9
+            
+            # Crear features dict
+            features = {
+                'rsi': rsi_val,
+                'macd': macd_val,
+                'macd_signal': macd_signal_val,
+                'close': current_price,
+                'signals_count': signals_count,
+                'buy_signals': buy_signals,
+                'sell_signals': sell_signals
+            }
+            
+            if bb_upper is not None and bb_lower is not None:
+                features.update({
+                    'bb_upper': bb_upper_val,
+                    'bb_lower': bb_lower_val
+                })
+                
+            return TacticalSignal(
+                symbol=symbol,
+                side=side,
+                strength=strength,
+                confidence=confidence,
+                signal_type='technical',
+                source='technical',
+                features=features,
+                timestamp=pd.Timestamp.now(),
+                metadata={
+                    'indicators_used': list(indicators.keys()),
+                    'signals_breakdown': {
+                        'buy': buy_signals,
+                        'sell': sell_signals,
+                        'total': signals_count
                     }
-                    if order["symbol"] and order["side"]:
-                        orders_for_l1.append(order)
-                    else:
-                        logger.warning(f"⚠️ Orden inválida para señal: {getattr(signal, '__dict__', signal)}")
-                except Exception as e:
-                    logger.error(f"❌ Error convirtiendo señal a orden: {e}", exc_info=True)
-
-            logger.info(f"✅ L2TacticProcessor completado: {len(all_signals)} señales, {len(orders_for_l1)} órdenes")
-
-            return {
-                "signals": all_signals,
-                "orders_for_l1": orders_for_l1,
-                "metadata": {
-                    "ai_signals": len(ai_signals),
-                    "technical_signals": len(technical_signals),
-                    "risk_signals": len(risk_signals),
-                    "total_signals": len(all_signals)
                 }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error generando señal técnica para {symbol}: {e}")
+            return None
+
+    def _check_l3_context_freshness(self, state: Dict[str, Any], symbol: str, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Check if L3 context is fresh or stale with improved timestamp logic
+        """
+        try:
+            # CRITICAL FIX: Read from the synced L3 context cache instead of l3_output
+            l3_context_cache = state.get("l3_context_cache", {})
+            l3_data = l3_context_cache.get("last_output", {})
+
+            # If no L3 data in cache, try fallback to l3_output
+            if not l3_data:
+                l3_data = state.get("l3_output", {})
+                logger.debug(f"Using l3_output fallback for {symbol}")
+
+            # If still no L3 data, consider it stale
+            if not l3_data:
+                logger.debug(f"No L3 data available for {symbol}")
+                return {
+                    'is_fresh': False,
+                    'reason': 'no_l3_data',
+                    'regime': 'unknown',
+                    'price_change_pct': 0.0
+                }
+
+            # Get current timestamp for comparison
+            current_time = pd.Timestamp.now()
+
+            # Check L3 timestamp with robust parsing
+            l3_timestamp_str = l3_data.get('timestamp')
+            if l3_timestamp_str:
+                try:
+                    # Handle different timestamp formats with timezone consistency
+                    if isinstance(l3_timestamp_str, str):
+                        if l3_timestamp_str.endswith('Z'):
+                            # Parse as UTC timezone-aware - handle both formats
+                            try:
+                                # Try direct parsing first
+                                l3_timestamp = pd.Timestamp(l3_timestamp_str)
+                            except:
+                                # Fallback to manual parsing
+                                l3_timestamp = pd.Timestamp(l3_timestamp_str.replace('Z', '+00:00'), tz='UTC')
+                        else:
+                            # Handle timestamps without Z suffix (from cached L3)
+                            try:
+                                # Try parsing as ISO format first
+                                l3_timestamp = pd.Timestamp(l3_timestamp_str)
+                                if l3_timestamp.tz is None:
+                                    # Make it timezone-aware UTC if it's naive
+                                    l3_timestamp = l3_timestamp.tz_localize('UTC')
+                            except:
+                                # Fallback: assume it's UTC and add timezone
+                                try:
+                                    l3_timestamp = pd.Timestamp(l3_timestamp_str, tz='UTC')
+                                except:
+                                    # Last resort: use current time minus small offset
+                                    l3_timestamp = current_time - pd.Timedelta(seconds=60)
+                                    logger.warning(f"Could not parse L3 timestamp '{l3_timestamp_str}', using current_time - 60s")
+                    else:
+                        l3_timestamp = pd.Timestamp(l3_timestamp_str)
+                        if l3_timestamp.tz is None:
+                            l3_timestamp = l3_timestamp.tz_localize('UTC')
+
+                    # Ensure current_time is also timezone-aware for comparison
+                    if current_time.tz is None:
+                        current_time = current_time.tz_localize('UTC')
+
+                    # Calculate time difference in seconds
+                    time_diff_seconds = (current_time - l3_timestamp).total_seconds()
+
+                    # For backtesting, use more lenient time thresholds to match L3 (increased to 45 minutes)
+                    max_age_seconds = 2700  # 45 minutes for backtesting (increased from 30)
+
+                    if time_diff_seconds > max_age_seconds:
+                        logger.info(f"L3 context stale for {symbol}: {time_diff_seconds:.1f}s > {max_age_seconds}s")
+                        return {
+                            'is_fresh': False,
+                            'reason': 'timestamp_too_old',
+                            'regime': l3_data.get('regime', 'unknown'),
+                            'price_change_pct': 0.0,
+                            'time_diff_seconds': time_diff_seconds
+                        }
+                    else:
+                        logger.debug(f"L3 context fresh for {symbol}: {time_diff_seconds:.1f}s old")
+
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error parsing L3 timestamp for {symbol}: {e}")
+                    # Don't fail completely - assume fresh if we can't parse
+                    logger.info(f"⚠️ Could not parse L3 timestamp for {symbol}, assuming fresh")
+                    # Continue to regime check instead of returning stale
+
+            # Check regime and market conditions
+            regime = l3_data.get('regime', 'unknown')
+
+            # Only check price movements for volatile/range regimes
+            if regime in ['volatile', 'range'] and len(df) >= 5:
+                try:
+                    recent_prices = df['close'].tail(5).astype(float)
+                    price_change_pct = ((recent_prices.iloc[-1] - recent_prices.iloc[0]) / recent_prices.iloc[0]) * 100
+
+                    # More lenient threshold for price movements (5% instead of 1%)
+                    if abs(price_change_pct) > 5.0:
+                        logger.info(f"Large price movement detected for {symbol}: {price_change_pct:.2f}%")
+                        return {
+                            'is_fresh': False,
+                            'reason': 'large_price_movement',
+                            'regime': regime,
+                            'price_change_pct': price_change_pct
+                        }
+                except Exception as e:
+                    logger.warning(f"Error checking price movement for {symbol}: {e}")
+
+            # If we get here, L3 context is considered fresh
+            return {
+                'is_fresh': True,
+                'reason': 'context_fresh',
+                'regime': regime,
+                'price_change_pct': 0.0
             }
 
         except Exception as e:
-            logger.error(f"❌ Error crítico en L2TacticProcessor.process(): {e}", exc_info=True)
-            now = pd.Timestamp.utcnow()
-            if not isinstance(state.get('l2'), L2State):
-                state['l2'] = L2State()
-            state['l2'].signals = []
-            state['l2'].last_update = now
+            logger.warning(f"Error checking L3 freshness for {symbol}: {e}")
             return {
-                "signals": [],
-                "orders_for_l1": [],
-                "metadata": {"error": str(e)}
+                'is_fresh': False,
+                'reason': 'error_checking',
+                'regime': 'unknown',
+                'price_change_pct': 0.0
             }
+
+    def _generate_tactical_fallback_signal(self, symbol: str, df: pd.DataFrame, indicators: Dict) -> Optional[TacticalSignal]:
+        """
+        Generate tactical signal based on recent price action when L3 context is stale
+        """
+        try:
+            if len(df) < 20:
+                return None
+
+            # Get recent price data
+            recent_prices = df['close'].tail(20).astype(float)
+            current_price = recent_prices.iloc[-1]
+            prev_price = recent_prices.iloc[-2]
+
+            # Calculate short-term trend
+            short_trend = (current_price - recent_prices.iloc[-5]) / recent_prices.iloc[-5] * 100
+            medium_trend = (current_price - recent_prices.iloc[-10]) / recent_prices.iloc[-10] * 100
+
+            # Calculate momentum
+            returns = recent_prices.pct_change().dropna()
+            momentum = returns.tail(5).mean() * 100  # 5-period average return
+
+            # Get technical indicators
+            rsi_val = indicators.get('rsi')
+            if hasattr(rsi_val, 'iloc'):
+                rsi_val = float(rsi_val.iloc[-1])
+            else:
+                rsi_val = 50.0
+
+            macd_val = indicators.get('macd')
+            macd_signal_val = indicators.get('macd_signal')
+            if hasattr(macd_val, 'iloc') and hasattr(macd_signal_val, 'iloc'):
+                macd_val = float(macd_val.iloc[-1])
+                macd_signal_val = float(macd_signal_val.iloc[-1])
+                macd_diff = macd_val - macd_signal_val
+            else:
+                macd_diff = 0.0
+
+            # Tactical decision logic
+            confidence = 0.6  # Base confidence for tactical signals
+            strength = 0.5    # Base strength
+
+            # Strong momentum signals
+            if abs(momentum) > 0.5:  # >0.5% average daily return
+                if momentum > 0:
+                    side = 'buy'
+                    confidence = min(0.8, 0.6 + abs(momentum) * 0.5)
+                else:
+                    side = 'sell'
+                    confidence = min(0.8, 0.6 + abs(momentum) * 0.5)
+                strength = min(0.8, 0.5 + abs(momentum) * 2.0)
+
+            # RSI-based signals
+            elif rsi_val < 35:  # Oversold
+                side = 'buy'
+                confidence = 0.7
+                strength = 0.6
+            elif rsi_val > 65:  # Overbought
+                side = 'sell'
+                confidence = 0.7
+                strength = 0.6
+
+            # MACD-based signals
+            elif abs(macd_diff) > 10:  # Significant MACD divergence
+                if macd_diff > 0:
+                    side = 'buy'
+                    confidence = 0.65
+                else:
+                    side = 'sell'
+                    confidence = 0.65
+                strength = 0.55
+
+            # Trend-following signals
+            elif abs(short_trend) > 1.0:  # >1% move in 5 periods
+                if short_trend > 0:
+                    side = 'buy'
+                    confidence = 0.6
+                else:
+                    side = 'sell'
+                    confidence = 0.6
+                strength = 0.5
+
+            else:
+                # No clear tactical signal
+                side = 'hold'
+                confidence = 0.4
+                strength = 0.3
+
+            # Create features dict
+            features = {
+                'close': current_price,
+                'price_change_pct': (current_price - prev_price) / prev_price * 100,
+                'short_trend_pct': short_trend,
+                'medium_trend_pct': medium_trend,
+                'momentum_pct': momentum,
+                'rsi': rsi_val,
+                'macd_diff': macd_diff,
+                'tactical_reason': 'l3_stale_fallback'
+            }
+
+            return TacticalSignal(
+                symbol=symbol,
+                side=side,
+                strength=strength,
+                confidence=confidence,
+                signal_type='tactical_fallback',
+                source='tactical_fallback',
+                features=features,
+                timestamp=pd.Timestamp.now(),
+                metadata={
+                    'l3_stale': True,
+                    'tactical_indicators': {
+                        'momentum': momentum,
+                        'rsi': rsi_val,
+                        'macd_diff': macd_diff,
+                        'short_trend': short_trend
+                    }
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error generating tactical fallback signal for {symbol}: {e}")
+            return None
+
+    def _apply_risk_adjustment(self, finrl_signal, risk_signals: List, l3_context: Dict) -> Any:
+        """
+        Apply risk-adjusted logic to FinRL signals based on L3 context and risk signals
+        """
+        try:
+            # Get risk appetite from L3 context
+            risk_appetite = l3_context.get('risk_appetite', 0.5)
+            regime = l3_context.get('regime', 'neutral')
+
+            # Analyze risk signals
+            high_risk_signals = [s for s in risk_signals if getattr(s, 'severity', 'medium') == 'high']
+            medium_risk_signals = [s for s in risk_signals if getattr(s, 'severity', 'medium') == 'medium']
+
+            # Apply risk adjustments based on context
+            if high_risk_signals:
+                # High risk - reduce position size significantly or cancel
+                if risk_appetite < 0.3:  # Conservative
+                    logger.warning("High risk signals + conservative appetite - canceling signal")
+                    return None
+                else:
+                    # Reduce strength significantly
+                    finrl_signal.strength *= 0.3
+                    finrl_signal.confidence *= 0.5
+
+            elif medium_risk_signals:
+                # Medium risk - moderate adjustment
+                if regime in ['volatile', 'bear']:
+                    finrl_signal.strength *= 0.6
+                    finrl_signal.confidence *= 0.7
+                else:
+                    finrl_signal.strength *= 0.8
+                    finrl_signal.confidence *= 0.8
+
+            # Log risk adjustment
+            logger.info(f"🎛️ Risk adjustment applied: strength={finrl_signal.strength:.2f}, confidence={finrl_signal.confidence:.2f}")
+            return finrl_signal
+
+        except Exception as e:
+            logger.error(f"Error applying risk adjustment: {e}")
+            return finrl_signal

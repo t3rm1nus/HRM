@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .models import TacticalSignal, MarketFeatures, PositionSize
 from .config import L2Config
@@ -116,6 +116,11 @@ class PositionSizerManager:
     ) -> Optional[PositionSize]:
         total_capital = float(portfolio_state.get("total_capital", 0.0) or 0.0)
         available_capital = float(portfolio_state.get("available_capital", total_capital))
+
+        # Check if we have sufficient funds before proceeding
+        if available_capital < self.min_position_notional:
+            logger.warning(f"Insufficient available capital ({available_capital:.2f} < {self.min_position_notional} USDT) for {signal.symbol}")
+            return None
 
         # Reservas de caja: hard floor 1%, soft reserve 5% (puede relajarse con alta confianza)
         hard_floor_pct = 0.01

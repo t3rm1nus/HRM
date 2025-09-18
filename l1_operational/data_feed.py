@@ -12,8 +12,14 @@ class DataFeed:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.symbols = config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
-        self.binance_client = BinanceClient(config) if BinanceClient else None
+        self.binance_client = None
         self.ccxt_exchange = None
+        self._closed = False
+        
+    async def _init_binance(self):
+        """Inicializa el cliente de Binance de forma segura"""
+        if not self.binance_client and BinanceClient:
+            self.binance_client = BinanceClient(self.config)
         if not self.binance_client:
             try:
                 import ccxt.async_support as ccxt
@@ -43,10 +49,27 @@ class DataFeed:
                 logger.error("❌ ccxt no instalado. Instale con: pip install ccxt")
                 raise ImportError("Falta ccxt para el fallback de BinanceClient")
 
+    async def close(self):
+        """Cierra apropiadamente las conexiones"""
+        if not self._closed:
+            try:
+                if self.binance_client:
+                    await self.binance_client.close()
+                if self.ccxt_exchange:
+                    await self.ccxt_exchange.close()
+                self._closed = True
+                logger.info("✅ DataFeed cerrado correctamente")
+            except Exception as e:
+                logger.error(f"❌ Error cerrando DataFeed: {e}")
+                
     async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 50) -> pd.DataFrame:
         """
         Obtiene datos OHLCV para un símbolo.
         """
+        # Asegurar que tenemos un cliente inicializado
+        if not self.binance_client and not self.ccxt_exchange:
+            await self._init_binance()
+            
         try:
             if self.binance_client:
                 data = await self.binance_client.get_klines(symbol, timeframe, limit=limit)

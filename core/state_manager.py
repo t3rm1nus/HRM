@@ -10,7 +10,11 @@ def initialize_state(symbols, initial_usdt=1000.0):
     return {
         'mercado': {symbol: {} for symbol in symbols},
         'estrategia': 'neutral',
-        'portfolio': {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': initial_usdt},
+        'portfolio': {
+            'BTCUSDT': {'position': 0.0, 'free': 0.0},
+            'ETHUSDT': {'position': 0.0, 'free': 0.0},
+            'USDT': {'free': initial_usdt}
+        },
         'universo': symbols,
         'exposicion': {symbol: 0.0 for symbol in symbols},
         "signals": [],
@@ -20,6 +24,11 @@ def initialize_state(symbols, initial_usdt=1000.0):
         'ciclo_id': 0,
         'l2': L2State(),
         'initial_capital': initial_usdt,  # Guardar capital inicial
+        'market_data': {},
+        'market_data_full': {},
+        'total_value': initial_usdt,
+        # Ensure L3 cache is fresh on startup - don't persist old cache
+        'l3_context_cache': {},
     }
 
 async def log_cycle_data(state, cycle_id, ciclo_start):
@@ -41,6 +50,11 @@ async def log_cycle_data(state, cycle_id, ciclo_start):
         signals = getattr(l2_obj, "signals", []) or []
     elif isinstance(l2_obj, dict):
         signals = l2_obj.get("signals", []) or []
+    elif isinstance(l2_obj, str):
+        # Handle string case - shouldn't happen but log it
+        from core.logging import logger
+        logger.warning(f"⚠️ state['l2'] is a string instead of L2State: {l2_obj[:50]}...")
+        signals = state.get("signals", []) or []
     else:
         # fallback a state['signals'] si existe
         signals = state.get("signals", []) or []
@@ -58,7 +72,13 @@ async def log_cycle_data(state, cycle_id, ciclo_start):
     
     # Actualizar state con stats
     state['cycle_stats'] = cycle_stats
-    state['portfolio'] = state.get('portfolio', {'BTCUSDT': 0.0, 'ETHUSDT': 0.0, 'USDT': 3000.0})
+    # Ensure portfolio has the correct structure
+    if 'portfolio' not in state or not isinstance(state['portfolio'], dict):
+        state['portfolio'] = {
+            'BTCUSDT': {'position': 0.0, 'free': 0.0},
+            'ETHUSDT': {'position': 0.0, 'free': 0.0},
+            'USDT': {'free': 3000.0}
+        }
     
     # Usar el logger centralizado
     await core_log_cycle_data(state, cycle_id, ciclo_start)
@@ -90,12 +110,19 @@ def validate_state_structure(state):
     # Asegurar otros campos básicos
     state.setdefault("mercado", {})
     state.setdefault("estrategia", "neutral")
-    state.setdefault("portfolio", {"BTCUSDT": 0.0, "ETHUSDT": 0.0, "USDT": 3000.0})
+    state.setdefault("portfolio", {
+        'BTCUSDT': {'position': 0.0, 'free': 0.0},
+        'ETHUSDT': {'position': 0.0, 'free': 0.0},
+        'USDT': {'free': 3000.0}
+    })
     state.setdefault("signals", [])
     state.setdefault("ordenes", [])
     state.setdefault("riesgo", {})
     state.setdefault("deriva", False)
     state.setdefault("ciclo_id", 0)
+    state.setdefault("market_data", {})
+    state.setdefault("market_data_full", {})
+    state.setdefault("total_value", 3000.0)
     
     logger.debug(f"[validate_state_structure] Salida state['l2'] tipo: {type(state.get('l2'))}")
     return state

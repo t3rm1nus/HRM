@@ -6,8 +6,9 @@ L1_Operational es el **núcleo operacional** del sistema HRM que maneja la **val
 
 ### ✅ **ESTADO ACTUAL: TOTALMENTE FUNCIONAL**
 - ✅ **OrderManager operativo** con validación de señales
-- ✅ **Gestión automática de portfolio** (BTC, ETH, USDT)  
+- ✅ **Gestión automática de portfolio** (BTC, ETH, USDT)
 - ✅ **DataFeed conectado a Binance** (real y testnet)
+- ✅ **Modelos IA funcionales** (LogReg, RF, LightGBM)
 - ✅ **Logging persistente** con métricas detalladas
 - ✅ **Integración completa con main.py** en producción
 

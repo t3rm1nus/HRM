@@ -12,13 +12,23 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import json
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.logging import logger  # Logger centralizado
 
 # Imports relativos dentro del paquete backtesting
-from .getdata import BinanceDataCollector
-from .hrm_tester import HRMStrategyTester
-from .performance_analyzer import PerformanceAnalyzer
-from .report_generator import ReportGenerator
+try:
+    from .getdata import BinanceDataCollector
+    from .hrm_tester import HRMStrategyTester
+    from .performance_analyzer import PerformanceAnalyzer
+    from .report_generator import ReportGenerator
+except ImportError:
+    # Fallback for direct execution
+    from getdata import BinanceDataCollector
+    from hrm_tester import HRMStrategyTester
+    from performance_analyzer import PerformanceAnalyzer
+    from report_generator import ReportGenerator
 
 
 class HRMBacktester:
@@ -33,13 +43,14 @@ class HRMBacktester:
         self.strategy_tester = HRMStrategyTester(self.config['testing'], self.data_collector)
         self.performance_analyzer = PerformanceAnalyzer(self.config['analysis'])
         self.report_generator = ReportGenerator(self.config['reporting'])
-        
+
         # Estado del backtesting
         self.results = {
             'overall': {},
             'l1_models': {},
             'l2_model': {},
-            'l3_models': {}
+            'l3_models': {},
+            'trades': []
         }
         
     def _load_config(self, config_path: str) -> Dict:

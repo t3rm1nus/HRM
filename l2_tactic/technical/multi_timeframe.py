@@ -28,6 +28,78 @@ class MultiTimeframeTechnical:
         self.macd_strength_factor = 50  # Reducido de 100 para mayor sensibilidad
         self.bb_strength_factor = 50   # Reducido de 100 para mayor sensibilidad
         self.sma_strength_factor = 50  # Reducido de 100 para mayor sensibilidad
+
+    def calculate_technical_indicators(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Calcula indicadores técnicos para un DataFrame."""
+        results = {}
+        
+        if data.empty:
+            return results
+            
+        try:
+            # RSI
+            delta = data['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            results['rsi'] = 100 - (100 / (1 + rs))
+            
+            # MACD
+            exp1 = data['close'].ewm(span=12, adjust=False).mean()
+            exp2 = data['close'].ewm(span=26, adjust=False).mean()
+            results['macd'] = exp1 - exp2
+            results['macd_signal'] = results['macd'].ewm(span=9, adjust=False).mean()
+            
+            # Bollinger Bands
+            sma = data['close'].rolling(window=20).mean()
+            std = data['close'].rolling(window=20).std()
+            results['bb_upper'] = sma + (std * 2)
+            results['bb_lower'] = sma - (std * 2)
+            results['bb_mid'] = sma
+            
+            # ATR (Average True Range)
+            high_low = data['high'] - data['low']
+            high_close = np.abs(data['high'] - data['close'].shift())
+            low_close = np.abs(data['low'] - data['close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = ranges.max(axis=1)
+            results['atr'] = true_range.rolling(window=14).mean()
+            
+            # ADX (Average Directional Index)
+            plus_dm = data['high'].diff()
+            minus_dm = data['low'].diff()
+            plus_dm[plus_dm < 0] = 0
+            minus_dm[minus_dm > 0] = 0
+            tr = true_range
+            plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / tr.ewm(alpha=1/14).mean())
+            minus_di = 100 * (minus_dm.ewm(alpha=1/14).mean() / tr.ewm(alpha=1/14).mean())
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+            results['adx'] = dx.ewm(alpha=1/14).mean()
+            
+            # Momentum
+            results['mom'] = data['close'].diff(10)
+            
+            # Volume
+            results['volume'] = data['volume']
+            
+            # Moving Averages
+            results['close_sma'] = data['close'].rolling(window=20).mean()
+            results['close_ema'] = data['close'].ewm(span=20, adjust=False).mean()
+            
+            # Volatilidad
+            returns = data['close'].pct_change()
+            results['volatility'] = returns.rolling(window=20).std() * np.sqrt(252)
+            
+            # Trend (usando la pendiente del SMA)
+            results['trend'] = results['close_sma'].diff()
+            
+            # Momentum adicional (ROC - Rate of Change)
+            results['momentum'] = data['close'].pct_change(periods=10) * 100
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculando indicadores técnicos: {e}")
+            
+        return results
         
     async def generate_signals(self, market_data: Dict[str, pd.DataFrame], technical_indicators: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
         """

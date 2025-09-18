@@ -7,9 +7,10 @@ L2_tactic es el **cerebro analítico** del sistema HRM que genera señales de tr
 ### ✅ **ESTADO ACTUAL: TOTALMENTE FUNCIONAL**
 - ✅ **L2TacticProcessor operativo** con ensemble de modelos
 - ✅ **Análisis técnico multi-timeframe** (RSI, MACD, Bollinger Bands)
-- ✅ **Modelos FinRL integrados** desde models/L2/
+- ✅ **Modelos FinRL integrados** con sistema de carga automático
 - ✅ **Signal composition** con pesos dinámicos
 - ✅ **Risk overlay** con controles pre-ejecución
+- ✅ **Validación de datos históricos** (>200 puntos requeridos)
 - ✅ **Integración completa con main.py** en producción
 
 ## 🚫 Lo que L2_tactic NO hace
@@ -79,14 +80,45 @@ Market Data (Binance) + Features
 - **signal_generator.py** - Orquestador de generación de señales (IA + técnico + patrones)
 - **signal_composer.py** - Composición dinámica y resolución de conflictos
 - **position_sizer.py** - Cálculo inteligente de tamaños de posición (Kelly + vol-targeting)
-- **ai_model_integration.py** - Carga modelo FinRL desde ../../models/L2/ai_model_data_multiasset/
+- **finrl_integration.py** - Sistema avanzado de carga de modelos FinRL con soporte multi-modelo
 - **performance_optimizer.py** - Optimizaciones de rendimiento (cache, batching)
 - **metrics.py** - Tracking de performance L2 (hit rate, Sharpe ratio, drawdown)
 - **procesar_l2.py** - Punto de entrada principal para ejecución en local
 - **technical/** - Indicadores técnicos y análisis multi-timeframe
 - **ensemble/** - Combinación de señales multi-fuente (voting, blending)
 - **risk_controls/** - Módulo modularizado de gestión de riesgo
-- **HRM RAIZ models/** - Modelos FinRL pre-entrenados descomprimidos en carpeta models/L2/ai_model_data_multiasset
+- **models/L2/** - Modelos FinRL pre-entrenados (deepseek.zip, gemini.zip, claude.zip, kimi.zip)
+
+### 🤖 **Sistema de Carga de Modelos FinRL**
+
+El sistema `finrl_integration.py` implementa un **cargador inteligente multi-modelo** que detecta automáticamente el tipo de modelo y aplica la configuración correcta:
+
+#### **Modelos Soportados:**
+| Modelo | Dimensiones | Arquitectura | Estado |
+|--------|-------------|--------------|--------|
+| **DeepSeek** | 257 | Multiasset + L3 context | ✅ Operativo |
+| **Gemini** | 13 | Legacy single-asset | ✅ Operativo |
+| **Claude** | 971 | Risk-aware features | ✅ Operativo |
+| **Kimi** | 6 | Custom features | ✅ Operativo |
+
+#### **Carga Automática:**
+```python
+# Detección por nombre de archivo
+if "deepseek.zip" in model_path:
+    # Carga con configuración DeepSeek
+elif "gemini.zip" in model_path:
+    # Carga con configuración Gemini
+elif "claude.zip" in model_path:
+    # Carga con configuración Claude
+elif "kimi.zip" in model_path:
+    # Carga con configuración Kimi
+```
+
+#### **Validación de Datos:**
+- ✅ **Mínimo 200 puntos históricos** requeridos
+- ✅ **Detección automática de dimensiones** del modelo
+- ✅ **Adaptación de observaciones** según arquitectura del modelo
+- ✅ **Logging detallado** de errores de carga
 
 ---
 

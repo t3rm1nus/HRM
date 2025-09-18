@@ -13,13 +13,87 @@ from core.portfolio_manager import update_portfolio_from_orders
 import asyncio
 from core.logging import logger
 
+# Importar componentes reales del sistema HRM
+from l2_tactic.signal_generator import L2TacticProcessor
+from l2_tactic.config import L2Config
+from l1_operational.order_manager import OrderManager
+from l1_operational.binance_client import BinanceClient
+from l3_strategy.l3_processor import generate_l3_output
+from core.state_manager import initialize_state, validate_state_structure
+
 class HRMStrategyTester:
-    """Clase principal para ejecutar y evaluar la estrategia HRM"""
+    """Clase principal para ejecutar y evaluar la estrategia HRM usando componentes reales"""
 
     def __init__(self, config: Dict, data_collector: BinanceDataCollector):
         self.config = config
         self.data_collector = data_collector
         self.logger = logger
+
+        # Inicializar componentes reales del sistema HRM
+        self.l2_processor = None
+        self.order_manager = None
+        self.binance_client = None
+
+        # Pre-cargar modelos para evitar recargas constantes
+        self.models_cache = {}
+        self._preload_models()
+
+    def _preload_models(self):
+        """Pre-carga todos los modelos ML para evitar recargas constantes durante el backtesting"""
+        try:
+            self.logger.info("🔄 Pre-cargando modelos ML para optimización de backtesting...")
+
+            # Importar funciones de carga de modelos
+            from l3_strategy.l3_processor import (
+                load_regime_model, load_sentiment_model, load_vol_models, load_portfolio
+            )
+
+            # Pre-cargar modelo de regime detection
+            try:
+                self.models_cache['regime'] = load_regime_model()
+                self.logger.info("✅ Modelo de regime detection pre-cargado")
+            except Exception as e:
+                self.logger.warning(f"⚠️ No se pudo pre-cargar modelo de regime: {e}")
+                self.models_cache['regime'] = None
+
+            # Pre-cargar modelos de sentimiento
+            try:
+                tokenizer, model = load_sentiment_model()
+                self.models_cache['sentiment'] = {'tokenizer': tokenizer, 'model': model}
+                self.logger.info("✅ Modelos de sentimiento pre-cargados")
+            except Exception as e:
+                self.logger.warning(f"⚠️ No se pudieron pre-cargar modelos de sentimiento: {e}")
+                self.models_cache['sentiment'] = {'tokenizer': None, 'model': None}
+
+            # Pre-cargar modelos de volatilidad
+            try:
+                garch_btc, garch_eth, lstm_btc, lstm_eth = load_vol_models()
+                self.models_cache['volatility'] = {
+                    'garch_btc': garch_btc, 'garch_eth': garch_eth,
+                    'lstm_btc': lstm_btc, 'lstm_eth': lstm_eth
+                }
+                self.logger.info("✅ Modelos de volatilidad pre-cargados")
+            except Exception as e:
+                self.logger.warning(f"⚠️ No se pudieron pre-cargar modelos de volatilidad: {e}")
+                self.models_cache['volatility'] = {
+                    'garch_btc': None, 'garch_eth': None,
+                    'lstm_btc': None, 'lstm_eth': None
+                }
+
+            # Pre-cargar modelo de portfolio
+            try:
+                cov_matrix, optimal_weights = load_portfolio()
+                self.models_cache['portfolio'] = {'cov': cov_matrix, 'weights': optimal_weights}
+                self.logger.info("✅ Modelo de portfolio pre-cargado")
+            except Exception as e:
+                self.logger.warning(f"⚠️ No se pudo pre-cargar modelo de portfolio: {e}")
+                self.models_cache['portfolio'] = {'cov': None, 'weights': None}
+
+            self.logger.info("🎯 Pre-carga de modelos completada")
+
+        except Exception as e:
+            self.logger.error(f"❌ Error durante pre-carga de modelos: {e}")
+            self.models_cache = {}
 
     async def run_full_backtest(self):
         # Ya no se accede a self.config['binance'], se usa self.data_collector
@@ -39,10 +113,29 @@ class HRMStrategyTester:
         return report_results
 
     async def run_hrm_strategy(self, data: Dict) -> Dict:
-        """Ejecuta la estrategia HRM simulando el flujo real del sistema con SL/TP y P&L realista."""
-        self.logger.info("🚀 Ejecutando estrategia HRM con flujo simulado...")
-        
+        """Ejecuta la estrategia HRM completa usando los componentes reales L1+L2+L3"""
+        self.logger.info("🚀 Ejecutando estrategia HRM completa con componentes reales...")
+
         try:
+            # Inicializar componentes reales del sistema HRM
+            if self.l2_processor is None:
+                try:
+                    l2_config = L2Config()
+                    self.l2_processor = L2TacticProcessor(l2_config)
+                    self.logger.info("✅ L2 Processor inicializado para backtesting")
+                except Exception as e:
+                    self.logger.error(f"❌ Error inicializando L2: {e}")
+                    raise
+
+            if self.order_manager is None:
+                try:
+                    self.binance_client = BinanceClient()
+                    self.order_manager = OrderManager(binance_client=self.binance_client, market_data={})
+                    self.logger.info("✅ Order Manager inicializado para backtesting")
+                except Exception as e:
+                    self.logger.error(f"❌ Error inicializando Order Manager: {e}")
+                    raise
+
             # Inicializar resultados
             results = {
                 'overall': {
@@ -60,236 +153,396 @@ class HRMStrategyTester:
                 'trades': []
             }
 
-            # Estado del portfolio simulado usando misma lógica que runtime
-            initial_capital = float(self.config.get('initial_capital', 100000.0)) if isinstance(self.config, dict) else 100000.0
-            state = {
-                'initial_capital': initial_capital,
-                'portfolio': {
-                    'USDT': initial_capital,
-                    'positions': {
-                        'BTCUSDT': {'size': 0.0},
-                        'ETHUSDT': {'size': 0.0}
-                    },
-                    'total_fees': 0.0,
-                    'drawdown': 0.0,
-                    'peak_value': initial_capital
-                },
-                'mercado': {}
-            }
+            # Track open positions for proper trade recording
+            open_positions = {}  # symbol -> {'entry_price': float, 'quantity': float, 'entry_timestamp': datetime}
 
-            # Parámetros de control para realismo
-            # Perfiles de coste (pueden venir de config.validation.cost_profiles)
-            cfg_fee = None
-            cfg_slip = None
-            try:
-                vcfg = getattr(self, 'validation_profile', None)
-                if isinstance(vcfg, dict):
-                    cfg_fee = float(vcfg.get('fee_rate', 0.001))
-                    cfg_slip = float(vcfg.get('slippage_pct', 0.0))
-            except Exception:
-                pass
+            # Estado del sistema HRM usando la misma estructura que main.py
+            symbols = self.config.get('symbols', ['BTCUSDT', 'ETHUSDT'])
+            initial_capital = float(self.config.get('initial_capital', 1000.0))  # Reduced to 1000 euros for more activity
+            state = initialize_state(symbols, initial_capital)
+            state = validate_state_structure(state)
 
-            FEE_RATE = cfg_fee if cfg_fee is not None else 0.001
-            TP_PCT = 0.015                 # 1.5% take-profit
-            SL_PCT = 0.012                 # 1.2% stop-loss
-            CONF_THRESHOLD = 0.72          # confianza mínima
-            COOLDOWN_BARS = 20             # barras de enfriamiento tras cerrar
-            ATR_K = 1.8                    # trailing stop por ATR
-            ATR_MIN_RATIO = 0.002          # volatilidad mínima (0.2%)
-            ATR_MAX_RATIO = 0.05           # volatilidad máxima (5%)
+            # Procesar datos históricos como si fueran tiempo real
+            # Convertir datos históricos a formato compatible con el sistema
+            processed_data = self._prepare_historical_data_for_backtest(data)
 
-            # Procesar cada símbolo e intervalo
-            for symbol in data:
-                for interval in data[symbol]:
-                    if isinstance(data[symbol][interval], pd.DataFrame) and not data[symbol][interval].empty:
-                        df = data[symbol][interval].copy()
-                        self.logger.info(f"    📊 Procesando {symbol} {interval}: {len(df)} filas")
-                        
-                        # Calcular RSI si no existe
-                        if 'rsi' not in df.columns:
-                            self.logger.info(f"    🔧 Calculando RSI para {symbol} {interval}")
-                            delta = df['close'].diff()
-                            up = delta.clip(lower=0).rolling(14, min_periods=5).mean()
-                            down = -delta.clip(upper=0).rolling(14, min_periods=5).mean()
-                            rs = up / (down.replace(0, np.nan))
-                            df['rsi'] = 100 - (100 / (1 + rs.replace({np.inf: np.nan})))
+            # Ejecutar backtest ciclo por ciclo con límite para evitar loop infinito
+            cycle_count = 0
+            max_cycles = min(1000, len(processed_data))  # Máximo 1000 ciclos o longitud de datos
 
-                        # Calcular ATR(14) si no existe
-                        if 'atr14' not in df.columns:
-                            high = df['high']
-                            low = df['low']
-                            close = df['close']
-                            prev_close = close.shift(1)
-                            tr = pd.concat([
-                                (high - low),
-                                (high - prev_close).abs(),
-                                (low - prev_close).abs()
-                            ], axis=1).max(axis=1)
-                            df['atr14'] = tr.rolling(14, min_periods=5).mean()
-                        
-                        # Simular el flujo real paso a paso
-                        trades_temp = []
-                        open_position = None  # {'entry_ts','entry_price','qty','tp','sl','confidence','trail_sl'}
-                        cooldown_counter = 0
-                        
-                        for idx, row in df.iterrows():
-                            try:
-                                current_price = row['close']
-                                # Actualizar mercado para el símbolo actual (por compatibilidad de cálculo)
-                                state['mercado'][symbol] = {'close': float(current_price)}
-                                
-                                # Simular L1: Predicción AI (basada en RSI + volatilidad)
-                                rsi = row.get('rsi', 50)
-                                volatility = df['close'].rolling(20).std().iloc[-1] if len(df) > 20 else 0.02
-                                
-                                # L2: Generar señal táctica (simulando lógica real)
-                                signal_strength = 0
-                                signal_side = None
-                                
-                                # Estrategia basada en RSI + momentum
-                                if rsi < 30 and current_price > df['close'].rolling(5).mean().iloc[-1]:
-                                    signal_strength = 0.8  # Fuerte señal de compra
-                                    signal_side = 'buy'
-                                elif rsi > 70 and current_price < df['close'].rolling(5).mean().iloc[-1]:
-                                    signal_strength = 0.8  # Fuerte señal de venta
-                                    signal_side = 'sell'
-                                elif 30 <= rsi <= 40 and current_price > df['close'].rolling(10).mean().iloc[-1]:
-                                    signal_strength = 0.6  # Señal moderada de compra
-                                    signal_side = 'buy'
-                                elif 60 <= rsi <= 70 and current_price < df['close'].rolling(10).mean().iloc[-1]:
-                                    signal_strength = 0.6  # Señal moderada de venta
-                                    signal_side = 'sell'
-                                
-                                # Primero, gestionar salida por SL/TP/Trailing si hay posición abierta
-                                if open_position is not None:
-                                    ep = open_position['entry_price']
-                                    qty = open_position['qty']
-                                    tp = open_position['tp']
-                                    sl = open_position['sl']
-                                    trail_sl = open_position.get('trail_sl', sl)
+            for timestamp, market_snapshot in processed_data.items():
+                cycle_count += 1
 
-                                    # Actualizar trailing stop con ATR
-                                    atr = float(row.get('atr14', np.nan))
-                                    if not np.isnan(atr) and atr > 0:
-                                        candidate_trail = current_price - ATR_K * atr
-                                        if candidate_trail > trail_sl:
-                                            trail_sl = candidate_trail
-                                    # Usar el mayor entre SL fijo y trailing
-                                    eff_sl = max(sl, trail_sl)
+                # Limitar ciclos para evitar loop infinito
+                if cycle_count > max_cycles:
+                    self.logger.info(f"🛑 Límite de ciclos alcanzado ({max_cycles}), deteniendo backtest")
+                    break
 
-                                    exit_reason = None
-                                    if current_price >= tp:
-                                        exit_reason = 'TP'
-                                    elif current_price <= eff_sl:
-                                        exit_reason = 'SL'
+                try:
+                    # ✅ FIXED: Proper market data formatting for all components
+                    # Create different data formats for different components
 
-                                    # También permitir cierre por señal contraria fuerte
-                                    if exit_reason is None and signal_side == 'sell' and signal_strength >= CONF_THRESHOLD:
-                                        exit_reason = 'Signal'
+                    # 1. For L2 processor - needs historical data with at least 200 points
+                    l2_market_data = {}
+                    for symbol, data in market_snapshot.items():
+                        if isinstance(data, dict) and 'historical_data' in data:
+                            df = data['historical_data']
+                            if isinstance(df, pd.DataFrame) and len(df) >= 200:
+                                l2_market_data[symbol] = df.copy()
+                                self.logger.debug(f"L2 data for {symbol}: {len(df)} points")
+                            else:
+                                self.logger.warning(f"Insufficient L2 data for {symbol}: {len(df) if isinstance(df, pd.DataFrame) else 'N/A'} < 200")
 
-                                    if exit_reason is not None:
-                                        # Ejecutar orden de salida con la misma lógica que runtime
-                                        sell_order = {
+                    # 2. For OrderManager - needs current price data as DataFrames
+                    order_manager_market_data = {}
+                    for symbol, data in market_snapshot.items():
+                        if isinstance(data, dict) and 'historical_data' in data:
+                            df = data['historical_data']
+                            if isinstance(df, pd.DataFrame) and not df.empty:
+                                order_manager_market_data[symbol] = df.copy()
+                        elif isinstance(data, dict):
+                            # Convert current snapshot to DataFrame
+                            df_data = {k: [v] for k, v in data.items() if k != 'historical_data' and pd.api.types.is_numeric_dtype(type(v))}
+                            if df_data:
+                                order_manager_market_data[symbol] = pd.DataFrame(df_data)
+
+                    # 3. For L3 processor - needs full market data
+                    state["market_data"] = market_snapshot.copy()
+                    state["market_data_simple"] = l2_market_data  # L2 expects this key
+                    state["mercado"] = order_manager_market_data  # Some components expect this key
+
+                    # Generar L3 output (cada 10 minutos en producción, aquí por ciclo para testing)
+                    try:
+                        l3_output = generate_l3_output(state, preloaded_models=self.models_cache)
+                        state["l3_output"] = l3_output  # Store L3 output in state for L2 access
+                    except Exception as e:
+                        self.logger.warning(f"L3 error en ciclo {cycle_count}: {e}")
+                        state["l3_output"] = {}  # Ensure L3 output key exists even on error
+
+                    # Procesar señales L2
+                    try:
+                        signals = await self.l2_processor.process_signals(state)
+                        valid_signals = [s for s in signals if hasattr(s, 'symbol') and hasattr(s, 'side')]
+                    except Exception as e:
+                        self.logger.error(f"L2 error en ciclo {cycle_count}: {e}")
+                        valid_signals = []
+
+                    # Generar y ejecutar órdenes L1
+                    try:
+                        orders = await self.order_manager.generate_orders(state, valid_signals)
+                        processed_orders = await self.order_manager.execute_orders(orders)
+
+                        # Actualizar portfolio
+                        await update_portfolio_from_orders(state, processed_orders)
+
+                        # Process trades and track positions for proper entry/exit recording
+                        for order in processed_orders:
+                            if order.get('status') == 'filled':
+                                symbol = order.get('symbol')
+                                side = order.get('side')
+                                quantity = abs(float(order.get('quantity', 0)))
+                                price = float(order.get('filled_price', 0))
+                                commission = float(order.get('commission', 0))
+
+                                if side == 'buy':
+                                    # Check if we have an existing short position to close
+                                    if symbol in open_positions and open_positions[symbol]['quantity'] < 0:
+                                        # Close short position
+                                        open_qty = abs(open_positions[symbol]['quantity'])
+                                        close_qty = min(quantity, open_qty)
+                                        entry_price = open_positions[symbol]['entry_price']
+                                        exit_price = price
+
+                                        # Calculate P&L for closed portion
+                                        pnl = (entry_price - exit_price) * close_qty - commission
+
+                                        trade = {
                                             'symbol': symbol,
-                                            'side': 'sell',
-                                            'quantity': float(qty),
-                                            'filled_price': float(current_price),
-                                            'status': 'filled'
+                                            'side': 'close_short',
+                                            'entry_timestamp': open_positions[symbol]['entry_timestamp'],
+                                            'exit_timestamp': timestamp,
+                                            'entry_price': entry_price,
+                                            'exit_price': exit_price,
+                                            'quantity': close_qty,
+                                            'pnl': pnl,
+                                            'commission': commission
                                         }
-                                        await update_portfolio_from_orders(state, [sell_order])
+                                        results['trades'].append(trade)
 
-                                        trades_temp.append({
-                                            'entry_timestamp': open_position['entry_ts'],
-                                            'exit_timestamp': idx,
+                                        # Update remaining position
+                                        remaining_qty = open_qty - close_qty
+                                        if remaining_qty > 0:
+                                            open_positions[symbol]['quantity'] = -remaining_qty
+                                        else:
+                                            # Position fully closed
+                                            if quantity > close_qty:
+                                                # Open new long position with remaining quantity
+                                                open_positions[symbol] = {
+                                                    'entry_price': price,
+                                                    'quantity': quantity - close_qty,
+                                                    'entry_timestamp': timestamp
+                                                }
+                                            else:
+                                                del open_positions[symbol]
+                                    else:
+                                        # Open new long position or add to existing
+                                        if symbol in open_positions:
+                                            # Average the entry price for additional position
+                                            existing_qty = open_positions[symbol]['quantity']
+                                            existing_value = open_positions[symbol]['entry_price'] * existing_qty
+                                            new_value = price * quantity
+                                            total_qty = existing_qty + quantity
+                                            avg_price = (existing_value + new_value) / total_qty
+                                            open_positions[symbol] = {
+                                                'entry_price': avg_price,
+                                                'quantity': total_qty,
+                                                'entry_timestamp': open_positions[symbol]['entry_timestamp']
+                                            }
+                                        else:
+                                            open_positions[symbol] = {
+                                                'entry_price': price,
+                                                'quantity': quantity,
+                                                'entry_timestamp': timestamp
+                                            }
+
+                                elif side == 'sell':
+                                    # Check if we have an existing long position to close
+                                    if symbol in open_positions and open_positions[symbol]['quantity'] > 0:
+                                        # Close long position
+                                        open_qty = open_positions[symbol]['quantity']
+                                        close_qty = min(quantity, open_qty)
+                                        entry_price = open_positions[symbol]['entry_price']
+                                        exit_price = price
+
+                                        # Calculate P&L for closed portion
+                                        pnl = (exit_price - entry_price) * close_qty - commission
+
+                                        trade = {
                                             'symbol': symbol,
-                                            'side': 'long',
-                                            'quantity': qty,
-                                            'entry_price': ep,
-                                            'exit_price': float(current_price),
-                                            'fees_entry': None,
-                                            'fees_exit': None,
-                                            'pnl': None,
-                                            'confidence': open_position['confidence'],
-                                            'exit_reason': exit_reason
-                                        })
-                                        self.logger.info(f"    ✅ Cierre {exit_reason}: {symbol} {qty:.4f} @ {current_price}")
-                                        open_position = None
-                                        cooldown_counter = COOLDOWN_BARS
-                                        continue  # pasar a la siguiente barra tras cerrar
-
-                                # Reducir cooldown si aplica
-                                if cooldown_counter > 0:
-                                    cooldown_counter -= 1
-                                    continue
-
-                                # Confirmación multi-timeframe: para 5m exigir alineación con 1h (MA20>MA50)
-                                mtf_ok = True
-                                if interval == '5m':
-                                    df_1h = data.get(symbol, {}).get('1h')
-                                    if isinstance(df_1h, pd.DataFrame) and not df_1h.empty:
-                                        ma_fast = df_1h['close'].ewm(span=20, adjust=False).mean()
-                                        ma_slow = df_1h['close'].ewm(span=50, adjust=False).mean()
-                                        mtf_ok = bool(ma_fast.iloc[-1] > ma_slow.iloc[-1]) if signal_side == 'buy' else bool(ma_fast.iloc[-1] < ma_slow.iloc[-1])
-
-                                # Filtro de volatilidad por ATR
-                                atr = float(row.get('atr14', np.nan))
-                                atr_ok = True
-                                if not np.isnan(atr) and current_price > 0:
-                                    atr_ratio = atr / current_price
-                                    atr_ok = (ATR_MIN_RATIO <= atr_ratio <= ATR_MAX_RATIO)
-
-                                # Apertura de posición sólo si no hay posición, confianza mínima, MTF y ATR válidos
-                                if open_position is None and signal_side == 'buy' and signal_strength >= CONF_THRESHOLD and mtf_ok and atr_ok:
-                                    # USDT disponible del estado
-                                    available_capital = float(state.get('portfolio', {}).get('USDT', 0.0))
-                                    # Tamaño por riesgo/convicción limitado al 5% del capital
-                                    position_value = min(available_capital * 0.05, available_capital * 0.1 * signal_strength)
-                                    qty = max(0.0, position_value / current_price)
-                                    if qty > 0 and (available_capital >= position_value * (1 + FEE_RATE)):
-                                        # Ejecutar orden de entrada con la misma lógica que runtime
-                                        # aplicar slippage al precio de entrada
-                                        price_in = float(current_price) * (1.0 + (cfg_slip or 0.0))
-                                        buy_order = {
-                                            'symbol': symbol,
-                                            'side': 'buy',
-                                            'quantity': float(qty),
-                                            'filled_price': price_in,
-                                            'status': 'filled'
+                                            'side': 'close_long',
+                                            'entry_timestamp': open_positions[symbol]['entry_timestamp'],
+                                            'exit_timestamp': timestamp,
+                                            'entry_price': entry_price,
+                                            'exit_price': exit_price,
+                                            'quantity': close_qty,
+                                            'pnl': pnl,
+                                            'commission': commission
                                         }
-                                        await update_portfolio_from_orders(state, [buy_order])
+                                        results['trades'].append(trade)
 
-                                        # Definir SL/TP relativos al precio de entrada
-                                        tp = price_in * (1 + TP_PCT)
-                                        sl = price_in * (1 - SL_PCT)
-                                        open_position = {
-                                            'entry_ts': idx,
-                                            'entry_price': float(price_in),
-                                            'qty': float(qty),
-                                            'tp': float(tp),
-                                            'sl': float(sl),
-                                            'trail_sl': float(sl),
-                                            'confidence': float(signal_strength)
-                                        }
-                                        self.logger.info(f"    ✅ Apertura long: {symbol} {qty:.4f} @ {price_in} TP={tp:.2f} SL={sl:.2f} (conf: {signal_strength:.2f})")
-                                
-                            except Exception as e:
-                                self.logger.error(f"    ❌ Error procesando {symbol} {idx}: {e}")
-                                continue
+                                        # Update remaining position
+                                        remaining_qty = open_qty - close_qty
+                                        if remaining_qty > 0:
+                                            open_positions[symbol]['quantity'] = remaining_qty
+                                        else:
+                                            # Position fully closed
+                                            if quantity > close_qty:
+                                                # Open new short position with remaining quantity
+                                                open_positions[symbol] = {
+                                                    'entry_price': price,
+                                                    'quantity': -(quantity - close_qty),
+                                                    'entry_timestamp': timestamp
+                                                }
+                                            else:
+                                                del open_positions[symbol]
+                                    else:
+                                        # Open new short position or add to existing
+                                        if symbol in open_positions:
+                                            # Average the entry price for additional position
+                                            existing_qty = abs(open_positions[symbol]['quantity'])
+                                            existing_value = open_positions[symbol]['entry_price'] * existing_qty
+                                            new_value = price * quantity
+                                            total_qty = existing_qty + quantity
+                                            avg_price = (existing_value + new_value) / total_qty
+                                            open_positions[symbol] = {
+                                                'entry_price': avg_price,
+                                                'quantity': -total_qty,
+                                                'entry_timestamp': open_positions[symbol]['entry_timestamp']
+                                            }
+                                        else:
+                                            open_positions[symbol] = {
+                                                'entry_price': price,
+                                                'quantity': -quantity,
+                                                'entry_timestamp': timestamp
+                                            }
 
-                        # Agregar trades de este símbolo/intervalo
-                        if trades_temp:
-                            results['trades'].extend(trades_temp)
-                            self.logger.info(f"    📈 {symbol} {interval}: {len(trades_temp)} trades generados")
+                    except Exception as e:
+                        self.logger.error(f"L1 error en ciclo {cycle_count}: {e}")
 
-            # Calcular métricas finales usando el mismo P&L del runtime
+                    # Logging de progreso cada 100 ciclos
+                    if cycle_count % 100 == 0:
+                        self.logger.info(f"📊 Ciclo {cycle_count}/{max_cycles} completado - Señales: {len(valid_signals)}")
+
+                except Exception as e:
+                    self.logger.error(f"Error en ciclo {cycle_count}: {e}")
+                    continue
+
+            # Calcular métricas finales
             results = await self._calculate_final_metrics(results, state)
-            
-            self.logger.info(f"🎯 Estrategia HRM completada: {len(results['trades'])} trades ejecutados")
+
+            self.logger.info(f"🎯 Backtest HRM completado: {len(results['trades'])} trades, {cycle_count} ciclos")
+
+            # Limpiar recursos al final del backtesting completo
+            try:
+                # Limpiar modelos ML
+                from l3_strategy.l3_processor import cleanup_models
+                cleanup_models()
+                self.logger.info("🧹 Modelos limpiados al finalizar backtesting")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error limpiando modelos: {e}")
+
+            try:
+                # Cerrar conexión Binance client
+                if self.binance_client:
+                    await self.binance_client.close()
+                    self.logger.info("🔌 Conexión Binance cerrada correctamente")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error cerrando conexión Binance: {e}")
+
             return results
 
         except Exception as e:
-            self.logger.error(f"❌ Error ejecutando estrategia HRM: {e}")
+            self.logger.error(f"❌ Error crítico en backtest HRM: {e}")
             raise
+
+    def _prepare_historical_data_for_backtest(self, data: Dict) -> Dict:
+        """Convierte datos históricos al formato esperado por el sistema HRM con diversidad mejorada"""
+        processed_data = {}
+
+        # Encontrar todos los timestamps únicos
+        all_timestamps = set()
+        for symbol in data:
+            for interval in data[symbol]:
+                if isinstance(data[symbol][interval], pd.DataFrame):
+                    all_timestamps.update(data[symbol][interval].index)
+
+        # Ordenar timestamps
+        sorted_timestamps = sorted(all_timestamps)
+
+        # Solo procesar timestamps donde tengamos suficientes datos históricos previos
+        min_history_required = 200  # L2 requiere al menos 200 puntos
+
+        # Add synthetic data generation for diversity
+        synthetic_scenarios = self._generate_synthetic_scenarios(sorted_timestamps, data)
+
+        for i, timestamp in enumerate(sorted_timestamps):
+            # Solo procesar si tenemos suficiente historial
+            if i < min_history_required:
+                continue
+
+            market_snapshot = {}
+
+            for symbol in data:
+                # Usar el intervalo más granular disponible (5m preferido)
+                for interval in ['5m', '15m', '1h', '1d']:
+                    if interval in data[symbol] and isinstance(data[symbol][interval], pd.DataFrame):
+                        df = data[symbol][interval]
+
+                        # Crear una ventana histórica de los últimos min_history_required puntos
+                        historical_window = sorted_timestamps[max(0, i - min_history_required):i+1]
+
+                        # Filtrar datos disponibles en esta ventana
+                        available_data = df[df.index.isin(historical_window)]
+
+                        if len(available_data) >= min_history_required:
+                            # Apply synthetic scenario modifications for diversity
+                            scenario_modifier = synthetic_scenarios.get(timestamp, {})
+                            symbol_modifier = scenario_modifier.get(symbol, {})
+
+                            # Use the most recent point for the snapshot
+                            current_row = available_data.iloc[-1].copy()
+
+                            # Apply scenario modifications
+                            if symbol_modifier:
+                                if 'volatility_multiplier' in symbol_modifier:
+                                    # Increase/decrease volatility
+                                    vol_mult = symbol_modifier['volatility_multiplier']
+                                    current_row['high'] = current_row['open'] * (1 + vol_mult * np.random.uniform(0.01, 0.05))
+                                    current_row['low'] = current_row['open'] * (1 - vol_mult * np.random.uniform(0.01, 0.05))
+                                    current_row['close'] = current_row['open'] * (1 + vol_mult * np.random.normal(0, 0.02))
+
+                                if 'trend_modifier' in symbol_modifier:
+                                    # Apply trend bias
+                                    trend_mod = symbol_modifier['trend_modifier']
+                                    current_row['close'] *= (1 + trend_mod)
+
+                                if 'volume_multiplier' in symbol_modifier:
+                                    # Modify volume
+                                    vol_mult = symbol_modifier['volume_multiplier']
+                                    current_row['volume'] *= vol_mult
+
+                            # Convertir a formato esperado por el sistema
+                            symbol_data = {
+                                'open': float(current_row['open']),
+                                'high': float(current_row['high']),
+                                'low': float(current_row['low']),
+                                'close': float(current_row['close']),
+                                'volume': float(current_row['volume']),
+                                'timestamp': timestamp
+                            }
+
+                            # Agregar indicadores técnicos si existen
+                            for col in ['rsi', 'macd', 'macd_signal', 'bollinger_upper', 'bollinger_lower']:
+                                if col in current_row.index and not pd.isna(current_row[col]):
+                                    symbol_data[col] = float(current_row[col])
+
+                            # Agregar el DataFrame histórico completo para que L2 pueda calcular indicadores
+                            symbol_data['historical_data'] = available_data.copy()
+
+                            market_snapshot[symbol] = symbol_data
+                            break
+
+            if market_snapshot:
+                processed_data[timestamp] = market_snapshot
+
+        self.logger.info(f"✅ Datos históricos preparados con diversidad: {len(processed_data)} snapshots de mercado")
+        self.logger.info(f"   Escenarios sintéticos aplicados: {len(synthetic_scenarios)} timestamps modificados")
+        return processed_data
+
+    def _generate_synthetic_scenarios(self, timestamps: List, original_data: Dict) -> Dict:
+        """
+        Generate synthetic market scenarios to increase backtesting diversity
+        """
+        synthetic_scenarios = {}
+        np.random.seed(42)  # For reproducible results
+
+        # Define different market scenarios
+        scenarios = {
+            'high_volatility': {'volatility_multiplier': 2.0, 'volume_multiplier': 1.5},
+            'low_volatility': {'volatility_multiplier': 0.3, 'volume_multiplier': 0.7},
+            'bull_trend': {'trend_modifier': 0.02, 'volume_multiplier': 1.2},
+            'bear_trend': {'trend_modifier': -0.02, 'volume_multiplier': 1.3},
+            'sideways': {'volatility_multiplier': 0.5, 'trend_modifier': 0.0},
+            'flash_crash': {'volatility_multiplier': 5.0, 'trend_modifier': -0.1, 'volume_multiplier': 3.0},
+            'breakout': {'volatility_multiplier': 3.0, 'trend_modifier': 0.05, 'volume_multiplier': 2.5}
+        }
+
+        # Apply scenarios to random timestamps (about 20% of data)
+        scenario_timestamps = np.random.choice(timestamps, size=int(len(timestamps) * 0.2), replace=False)
+
+        for timestamp in scenario_timestamps:
+            scenario_name = np.random.choice(list(scenarios.keys()))
+            scenario_params = scenarios[scenario_name]
+
+            # Apply scenario to all symbols
+            symbol_scenarios = {}
+            for symbol in original_data.keys():
+                # Add some randomness to scenario parameters
+                modified_params = {}
+                for param, value in scenario_params.items():
+                    if isinstance(value, (int, float)):
+                        # Add 20% randomness
+                        noise = np.random.normal(1.0, 0.2)
+                        modified_params[param] = value * noise
+                    else:
+                        modified_params[param] = value
+
+                symbol_scenarios[symbol] = modified_params
+
+            synthetic_scenarios[timestamp] = symbol_scenarios
+
+        self.logger.info(f"🎭 Generated {len(synthetic_scenarios)} synthetic scenarios: {list(scenarios.keys())}")
+        return synthetic_scenarios
 
 
     async def _calculate_final_metrics(self, results, state):

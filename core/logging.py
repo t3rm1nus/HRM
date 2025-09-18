@@ -97,47 +97,62 @@ def log_event(
     """
     Registra un evento en consola, JSON, CSV y SQLite.
     """
-    # --- loguru console ---
-    logger.log(level.upper(), msg)
+    try:
+        # --- loguru console ---
+        logger.log(level.upper(), msg)
 
-    # --- JSON append ---
-    json_entry = {
-        "ts": datetime.utcnow().isoformat(),
-        "level": level.upper(),
-        "module": module,
-        "message": msg,
-        "cycle_id": cycle_id,
-        "symbol": symbol,
-        "extra": extra
-    }
-    with open(JSON_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(json_entry) + "\n")
+        # --- JSON append ---
+        json_entry = {
+            "ts": datetime.utcnow().isoformat(),
+            "level": level.upper(),
+            "module": module,
+            "message": msg,
+            "cycle_id": cycle_id,
+            "symbol": symbol,
+            "extra": extra
+        }
+        with open(JSON_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(json_entry) + "\n")
 
-    # --- CSV append ---
-    write_csv = not CSV_LOG_FILE.exists()
-    with open(CSV_LOG_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=json_entry.keys())
-        if write_csv:
-            writer.writeheader()
-        writer.writerow(json_entry)
+        # --- CSV append ---
+        write_csv = not CSV_LOG_FILE.exists()
+        with open(CSV_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            # Ensure json_entry is a dict before calling keys()
+            if isinstance(json_entry, dict):
+                try:
+                    fieldnames = list(json_entry.keys())
+                except AttributeError:
+                    fieldnames = []
+            else:
+                fieldnames = []
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_csv:
+                writer.writeheader()
+            # Ensure json_entry is still a dict before writing
+            if isinstance(json_entry, dict):
+                writer.writerow(json_entry)
 
-    # --- SQLite insert ---
-    conn = sqlite3.connect(SQLITE_DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO logs (ts, level, module, message, cycle_id, symbol, extra)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        json_entry["ts"],
-        json_entry["level"],
-        json_entry["module"],
-        json_entry["message"],
-        json_entry["cycle_id"],
-        json_entry["symbol"],
-        json.dumps(json_entry["extra"]) if json_entry["extra"] else None
-    ))
-    conn.commit()
-    conn.close()
+        # --- SQLite insert ---
+        conn = sqlite3.connect(SQLITE_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO logs (ts, level, module, message, cycle_id, symbol, extra)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            json_entry["ts"],
+            json_entry["level"],
+            json_entry["module"],
+            json_entry["message"],
+            json_entry["cycle_id"],
+            json_entry["symbol"],
+            json.dumps(json_entry["extra"]) if json_entry["extra"] else None
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as log_error:
+        # Fallback logging to avoid recursive errors
+        print(f"[LOGGING ERROR] {log_error} - Original message: {msg}")
+        # Don't use logger here to avoid recursion
 
 # -------------------------
 # Shortcuts para niveles
@@ -199,7 +214,11 @@ async def log_cycle_data(state: Dict[str, Any], cycle_id: int, cycle_start: date
             cycle_time = 0.0
     
     # Strategy info
-    strategy_keys = state.get("estrategia", {}).keys()
+    estrategia = state.get("estrategia", {})
+    if isinstance(estrategia, dict):
+        strategy_keys = estrategia.keys()
+    else:
+        strategy_keys = []
     
     # Log cycle summary
     log_event(

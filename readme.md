@@ -61,11 +61,23 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 - ✅ **Stop-Loss y Take-Profit dinámicos** basados en volatilidad y confianza
 - ✅ **Cálculo automático de SL/TP** por señal generada
 
-### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO  
+### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO
 **Rol:** Ejecución determinista y segura de órdenes
 **Funciones operativas:**
+- ✅ **Validación de señales** con modelos IA (LogReg, RF, LightGBM)
+- ✅ **Gestión de portfolio automática** (BTC, ETH, USDT)
+- ✅ **Conexión a Binance Spot** (real y testnet)
+- ✅ **Logging persistente** con métricas detalladas
+- ✅ **Controles de riesgo** por símbolo y portfolio
 
-### 🚧 **NIVEL L3** - NO IMPLEMENTADO
+### 🚀 **NIVEL L3** - ESTRATÉGICO (IMPLEMENTADO)
+**Rol:** Análisis macro y asignación estratégica de capital
+**Funciones implementadas:**
+- ✅ **Regime Detection** con ensemble ML (Optuna)
+- ✅ **Portfolio Optimization** usando Black-Litterman
+- ✅ **Sentiment Analysis** con BERT pre-entrenado
+- ✅ **Volatility Forecasting** con GARCH y LSTM
+- ✅ **Strategic Decision Making** con pipeline completo
 
 ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
 复制

@@ -10,8 +10,14 @@ import os
 import json
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    plt = None
+    sns = None
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import asyncio
@@ -21,7 +27,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configurar matplotlib para no requerir GUI
-plt.switch_backend('Agg')
+if MATPLOTLIB_AVAILABLE:
+    plt.switch_backend('Agg')
 
 class ReportGenerator:
     """Generador principal de reportes del sistema HRM"""
@@ -41,7 +48,7 @@ class ReportGenerator:
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
         # Configurar estilo de gráficos
-        if self.generate_charts:
+        if self.generate_charts and MATPLOTLIB_AVAILABLE:
             plt.style.use('default')
             sns.set_palette("husl")
     

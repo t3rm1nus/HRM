@@ -88,7 +88,7 @@ class PerformanceAnalyzer:
 
     def analyze_results(self, testing_results: Dict, metrics: List[str]) -> Dict:
         """Calcula métricas básicas a partir de 'testing_results'.
-        Espera una clave 'trades' con elementos que incluyan 'entry_price' y 'exit_price'.
+        Espera una clave 'trades' con elementos que incluyan 'entry_price', 'exit_price', y 'pnl'.
         Devuelve un diccionario con sección 'overall' enriquecida.
         """
         try:
@@ -120,7 +120,7 @@ class PerformanceAnalyzer:
                 testing_results['overall'] = defaults
                 return testing_results
 
-            # Construir serie de retornos por trade
+            # Construir serie de retornos por trade usando pnl directo
             trade_returns = []
             equity_curve = []
             equity = 1.0
@@ -129,15 +129,31 @@ class PerformanceAnalyzer:
             timestamps = []
 
             for t in trades:
-                entry = float(t.get('entry_price', 0) or 0)
-                exitp = float(t.get('exit_price', 0) or 0)
-                if entry <= 0 or exitp <= 0:
-                    continue
-                r = (exitp - entry) / entry
-                trade_returns.append(r)
-                equity *= (1.0 + r)
-                equity_curve.append(equity)
-                pnl_list.append(float(t.get('pnl', (exitp - entry)) or (exitp - entry)))
+                # Use pnl directly if available (more accurate than calculating from prices)
+                pnl = t.get('pnl')
+                if pnl is not None:
+                    pnl_list.append(float(pnl))
+                    # Calculate return based on position size and entry price
+                    entry_price = float(t.get('entry_price', 0) or 0)
+                    quantity = float(t.get('quantity', 0) or 0)
+                    if entry_price > 0 and quantity > 0:
+                        position_value = entry_price * quantity
+                        r = pnl / position_value if position_value > 0 else 0.0
+                        trade_returns.append(r)
+                        equity *= (1.0 + r)
+                        equity_curve.append(equity)
+                else:
+                    # Fallback to price calculation if pnl not available
+                    entry = float(t.get('entry_price', 0) or 0)
+                    exitp = float(t.get('exit_price', 0) or 0)
+                    if entry <= 0 or exitp <= 0:
+                        continue
+                    r = (exitp - entry) / entry
+                    trade_returns.append(r)
+                    equity *= (1.0 + r)
+                    equity_curve.append(equity)
+                    pnl_list.append(float(t.get('pnl', (exitp - entry) * float(t.get('quantity', 1))) or (exitp - entry)))
+
                 # Duración
                 et = t.get('entry_timestamp')
                 xt = t.get('exit_timestamp')

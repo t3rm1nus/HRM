@@ -8,6 +8,7 @@ from datetime import datetime
 from core.logging import logger
 logger.info("l2_tactic.signal_composer")
 import pandas as pd
+import numpy as np
 
 class SignalComposer:
     """
@@ -16,8 +17,100 @@ class SignalComposer:
     - Resolución de conflictos BUY vs SELL en el mismo símbolo
     - Ajuste dinámico de pesos por performance histórica (inyectada vía metrics)
     """
+    def compose_signal(self, symbol: str, base_signal: TacticalSignal, indicators: Dict, state: Dict) -> Optional[TacticalSignal]:
+        """
+        Compone una señal táctica final combinando la señal base con indicadores técnicos
+        
+        Args:
+            symbol: El símbolo para el que se genera la señal
+            base_signal: La señal base (típicamente de FinRL)
+            indicators: Indicadores técnicos calculados
+            state: Estado del sistema
+            
+        Returns:
+            TacticalSignal opcional (None si la señal es rechazada)
+        """
+        try:
+            # Validar entrada básica
+            if not symbol:
+                logger.error("❌ Símbolo vacío en compose_signal")
+                return None
+                
+            # Validar señal base
+            if not base_signal:
+                logger.error(f"❌ Señal base vacía para {symbol}")
+                return None
+                
+            if not isinstance(base_signal, TacticalSignal):
+                logger.error(f"❌ Señal base no es TacticalSignal para {symbol}: {type(base_signal)}")
+                return None
+                
+            # Validar que la señal base tenga los campos requeridos
+            required_attrs = ['side', 'confidence', 'strength']
+            missing_attrs = [attr for attr in required_attrs if not hasattr(base_signal, attr)]
+            if missing_attrs:
+                logger.error(f"❌ Señal base incompleta para {symbol}, faltan: {missing_attrs}")
+                return None
+                
+            # Validar valores de confianza y fuerza
+            try:
+                confidence = float(base_signal.confidence)
+                strength = float(base_signal.strength)
+            except (ValueError, TypeError):
+                logger.error(f"❌ Valores inválidos en señal base para {symbol}: conf={base_signal.confidence}, strength={base_signal.strength}")
+                return None
+                
+            # Validar fuerza y confianza de la señal base
+            if confidence < self.min_conf or strength < self.min_strength:
+                logger.debug(f"Señal {symbol} rechazada por baja confianza/fuerza: {confidence:.2f}/{strength:.2f}")
+                return None
+                
+            # Validar side
+            if not hasattr(base_signal, 'side') or base_signal.side not in ['buy', 'sell', 'hold']:
+                logger.error(f"❌ Side inválido para {symbol}: {getattr(base_signal, 'side', 'None')}")
+                return None
+                
+            # Enriquecer con indicadores técnicos si están disponibles
+            enhanced_features = base_signal.features.copy() if hasattr(base_signal, 'features') and base_signal.features else {}
+            
+            if indicators:
+                # Agregar indicadores técnicos a las features
+                for key, value in indicators.items():
+                    if isinstance(value, (int, float)) and not np.isnan(value):
+                        enhanced_features[key] = float(value)
+                    elif hasattr(value, 'iloc') and len(value) > 0:  # Series
+                        try:
+                            last_val = float(value.iloc[-1])
+                            if not np.isnan(last_val):
+                                enhanced_features[key] = last_val
+                        except (IndexError, ValueError, TypeError):
+                            pass
+                            
+            # Crear señal compuesta con features enriquecidas
+            composed_signal = TacticalSignal(
+                symbol=symbol,
+                side=base_signal.side,
+                strength=strength,
+                confidence=confidence,
+                signal_type=getattr(base_signal, 'signal_type', base_signal.side),
+                source='composed',
+                features=enhanced_features,
+                timestamp=pd.Timestamp.now(),
+                metadata={
+                    'original_source': getattr(base_signal, 'source', 'unknown'),
+                    'composed_from': 'base_signal + indicators',
+                    'indicators_count': len(indicators) if indicators else 0
+                }
+            )
+            
+            logger.debug(f"✅ Señal compuesta para {symbol}: {composed_signal.side} (conf={confidence:.2f}, strength={strength:.2f})")
+            return composed_signal
+            
+        except Exception as e:
+            logger.error(f"❌ Error componiendo señal para {symbol}: {e}", exc_info=True)
+            return None
 
-    def __init__(self, config: dict, metrics: Optional[object] = None):
+    def __init__(self, config: SignalConfig, metrics: Optional[object] = None):
         self.cfg = config
         self.metrics = metrics
 
@@ -31,23 +124,17 @@ class SignalComposer:
             "keep_both_when_far": True     # Mantener señales opuestas si son fuertes
         }
 
-        # Configuración de señales por defecto
-        signals_defaults = {
-            "min_confidence": 0.25         # Más permisivo con señales iniciales
-        }
+        # Usar valores de la configuración o defaults
+        self.w_ai = getattr(config, "ai_model_weight", config_defaults["ai_model_weight"])
+        self.w_tech = getattr(config, "technical_weight", config_defaults["technical_weight"])
+        self.w_pattern = getattr(config, "pattern_weight", config_defaults["pattern_weight"])
 
-        # Pesos base por fuente
-        self.w_ai = config.get("ai_model_weight", config_defaults["ai_model_weight"])
-        self.w_tech = config.get("technical_weight", config_defaults["technical_weight"])
-        self.w_pattern = config.get("pattern_weight", config_defaults["pattern_weight"])
+        # ✅ FIXED: Use correct attribute names from L2Config
+        self.min_conf = getattr(config, "min_signal_confidence", 0.25)
+        self.min_strength = getattr(config, "min_signal_strength", 0.05)
 
-        # Filtros de calidad / mínimos para aceptar la señal compuesta
-        signals_config = config.get("signals", {})
-        self.min_conf = signals_config.get("min_confidence", signals_defaults["min_confidence"])
-        self.min_strength = config.get("min_signal_strength", config_defaults["min_signal_strength"])
-
-        # Ajuste de umbrales de conflicto - más permisivo con señales fuertes
-        self.conflict_tie_threshold = config.get("conflict_tie_threshold", config_defaults["conflict_tie_threshold"])
+        # ✅ FIXED: Use proper attribute access for SignalConfig dataclass
+        self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", config_defaults["conflict_tie_threshold"])
         
         # Inicializar histórico de señales
         self._last_signals = {}
@@ -213,13 +300,8 @@ class SignalComposer:
         # Resolver conflictos y filtrar por thresholds
         filtered_signals = self._resolve_conflicts_and_filter(composed_signals)
         
-        # Convert to order format
-        final_signals = []
-        for signal in filtered_signals:
-            final_signals.append(signal.to_order_signal())
-            
-        logger.info(f"✅ Señales compuestas generadas: {len(final_signals)}")
-        return final_signals
+        logger.info(f"✅ Señales compuestas generadas: {len(filtered_signals)}")
+        return filtered_signals
 
     # --- Métodos auxiliares ---
     def normalize_features(self, features: dict, symbol: str) -> dict:

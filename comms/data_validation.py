@@ -254,15 +254,51 @@ def calculate_macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: in
         return {}
 
 # Función de utilidad para integrar en tu código existente
-def fix_market_data(market_data: Dict[str, Any]) -> Dict[str, Any]:
+def fix_market_data(market_data: Any) -> Dict[str, Any]:
     """
     Función principal para limpiar datos de mercado antes de calcular indicadores.
     Úsala en main.py antes de llamar a los cálculos de indicadores técnicos.
-    
+
     Args:
-        market_data: Datos crudos del mercado
-        
+        market_data: Datos crudos del mercado (puede ser dict, str, o cualquier tipo)
+
     Returns:
         Datos limpios listos para cálculos
     """
-    return clean_price_data(market_data)
+    # Handle string input (from JSON etc)
+    if isinstance(market_data, str):
+        try:
+            import json
+            parsed_data = json.loads(market_data)
+            if isinstance(parsed_data, dict):
+                market_data = parsed_data
+            else:
+                logger.error(f"Parsed data is not a dict: {type(parsed_data)}")
+                return {}
+        except Exception as e:
+            logger.error(f"Failed to parse market data string: {e}")
+            return {}
+
+    # Ensure dictionary type
+    if not isinstance(market_data, dict):
+        logger.error(f"Invalid market data type after parsing: {type(market_data)}")
+        return {}
+
+    cleaned_data = {}
+    for symbol, data in market_data.items():
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception as e:
+                logger.error(f"Failed to parse data for {symbol}: {e}")
+                continue
+
+        if isinstance(data, dict):
+            cleaned_data[symbol] = clean_price_data(data)
+        elif isinstance(data, pd.DataFrame):
+            cleaned_data[symbol] = data
+        else:
+            logger.error(f"Invalid data type for {symbol}: {type(data)}")
+            continue
+
+    return cleaned_data

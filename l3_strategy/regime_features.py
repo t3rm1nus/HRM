@@ -52,12 +52,15 @@ def calculate_regime_features(df: pd.DataFrame) -> pd.DataFrame:
         rs = gain / loss.replace(0, np.inf)  # Evitar división por cero
         features['rsi'] = (100 - (100 / (1 + rs))).fillna(50)  # 50 es neutral
         
-        # Bollinger Bands (standard 20-period)
+        # Bollinger Bands (standard 20-period) with robust NaN handling
         ma20 = features['close'].rolling(window=20, min_periods=1).mean()
         std20 = features['close'].rolling(window=20, min_periods=1).std()
-        features['boll_middle'] = ma20.fillna(method='ffill')
-        features['boll_upper'] = (ma20 + (std20 * 2)).fillna(method='ffill')
-        features['boll_lower'] = (ma20 - (std20 * 2)).fillna(method='ffill')
+
+        # For early data points where rolling window can't be calculated,
+        # use current close price as a reasonable fallback
+        features['boll_middle'] = ma20.fillna(method='ffill').fillna(features['close'])
+        features['boll_upper'] = (ma20 + (std20 * 2)).fillna(method='ffill').fillna(features['close'] * 1.02)  # +2% from close
+        features['boll_lower'] = (ma20 - (std20 * 2)).fillna(method='ffill').fillna(features['close'] * 0.98)  # -2% from close
         
         # MACD (standard 12,26,9)
         ema12 = features['close'].ewm(span=12, adjust=False, min_periods=1).mean()
@@ -103,7 +106,7 @@ def validate_regime_features(features: pd.DataFrame, required_features: List[str
             extra_features.append(col)
             
     # Eliminar features extra para evitar confusión
-    if extra_features:
+    if len(extra_features) > 0:
         log.info(f"Eliminando {len(extra_features)} features no requeridas por el modelo")
         features = features.drop(columns=extra_features)
     
@@ -137,11 +140,11 @@ def validate_regime_features(features: pd.DataFrame, required_features: List[str
         return {k: v for k, v in groups.items() if v}
     
     # Log detallado del estado de las features
-    if missing_features:
+    if len(missing_features) > 0:
         grouped = _group_features(missing_features)
         log.warning("Features faltantes por tipo:")
         for group, feats in grouped.items():
-            if feats:
+            if len(feats) > 0:
                 log.warning(f"- {group}: {', '.join(feats)}")
                 
     # Log de estadísticas
@@ -162,27 +165,44 @@ def validate_regime_features(features: pd.DataFrame, required_features: List[str
     if feature_stats['nans'] > 0:
         log.warning(f"- Features con NaN: {feature_stats['nans']}")
                 
-    if zero_features:
+    if len(zero_features) > 0:
         grouped = _group_features(zero_features)
         log.warning("Features en cero por tipo:")
         for group, feats in grouped.items():
-            if feats:
+            if len(feats) > 0:
                 log.warning(f"- {group}: {', '.join(feats)}")
                 
-    if nan_features:
+    if len(nan_features) > 0:
         grouped = _group_features(nan_features)
         log.warning("Features con NaN por tipo:")
         for group, feats in grouped.items():
-            if feats:
+            if len(feats) > 0:
                 log.warning(f"- {group}: {', '.join(feats)}")
     
     # Asegurar que tenemos todas las features requeridas
     features = features[required_features].copy()
     
-    # Verificación final de calidad
+    # Verificación final de calidad y limpieza exhaustiva de NaN
     na_count = features.isna().sum()
     if na_count.any():
-        log.warning(f"⚠️ Hay {na_count.sum()} valores NaN después de la validación")
-        features = features.fillna(0.0)
+        total_na = na_count.sum()
+        log.warning(f"⚠️ Hay {total_na} valores NaN después de la validación")
+
+        # Log detallado de qué columnas tienen NaN
+        na_columns = na_count[na_count > 0]
+        for col, count in na_columns.items():
+            log.warning(f"  - Columna '{col}': {count} valores NaN")
+
+        # Limpieza exhaustiva de NaN con múltiples estrategias
+        features = features.fillna(method='ffill').fillna(method='bfill').fillna(0.0)
+
+        # Verificación final después de limpieza
+        final_na = features.isna().sum().sum()
+        if final_na > 0:
+            log.error(f"❌ Aún quedan {final_na} valores NaN después de limpieza exhaustiva")
+            # Forzar llenado con 0 para evitar problemas downstream
+            features = features.fillna(0.0)
+        else:
+            log.info(f"✅ NaN limpiados exitosamente ({total_na} valores)")
     
     return features

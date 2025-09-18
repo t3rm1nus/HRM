@@ -135,13 +135,52 @@ def get_module_info() -> Dict[str, Any]:
 
 def check_dependencies() -> Dict[str, bool]:
     deps = {"config": _CONFIG_LOADED, "models": _MODELS_LOADED}
-    for lib in ["numpy", "pandas", "sklearn", "tensorflow", "transformers", "yfinance", "requests"]:
+    for lib in ["numpy", "pandas", "sklearn", "transformers", "yfinance", "requests"]:
         try:
             __import__(lib)
             deps[lib if lib != "sklearn" else "scikit_learn"] = True
         except ImportError:
             deps[lib if lib != "sklearn" else "scikit_learn"] = False
+    
+    # Check TensorFlow separately with timeout protection
+    deps["tensorflow"] = _check_tensorflow_availability()
     return deps
+
+def _check_tensorflow_availability() -> bool:
+    """Check TensorFlow availability with timeout protection"""
+    try:
+        import signal
+        import sys
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("TensorFlow import timeout")
+        
+        # Set timeout for TensorFlow import (only on Unix systems)
+        if hasattr(signal, 'SIGALRM'):
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(10)  # 10 second timeout
+        
+        try:
+            import tensorflow as tf
+            # Quick test to ensure TensorFlow is working
+            tf.constant([1.0])
+            return True
+        except (ImportError, TimeoutError, Exception):
+            return False
+        finally:
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)  # Cancel timeout
+                
+    except Exception:
+        # Fallback for Windows or other systems without signal support
+        try:
+            import tensorflow as tf
+            return True
+        except ImportError:
+            return False
+        except Exception:
+            # If TensorFlow import causes any other issues, mark as unavailable
+            return False
 
 def initialize_l3(config_updates: Optional[Dict[str, Dict[str, Any]]] = None, create_directories: bool = True) -> bool:
     _logger.info('l3_strategic')
@@ -198,8 +237,8 @@ if __name__ != "__main__":
     _logger.info(f"L3 Strategic v{__version__} cargado")
     if not _CONFIG_LOADED or not _MODELS_LOADED:
         _logger.warning("Algunas funcionalidades de L3 no están disponibles")
-    capabilities = get_strategic_capabilities()
-    _logger.info(f"Capacidades disponibles: {len(capabilities)} - {', '.join(capabilities[:3])}{'...' if len(capabilities) > 3 else ''}")
+    # Defer capability checking to avoid TensorFlow import during module loading
+    _logger.info("Capacidades se verificarán cuando sean necesarias")
 
 # Funciones auxiliares
 from .universe_filter import filtrar_universo

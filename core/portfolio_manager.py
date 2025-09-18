@@ -10,11 +10,25 @@ async def update_portfolio_from_orders(state, orders):
     """Actualiza el portfolio basado en las órdenes ejecutadas"""
     try:
         # Obtener portfolio actual
-        portfolio = state.get("portfolio", {"positions": {}, "drawdown": 0.0, "peak_value": 0.0})
-        positions = portfolio.get("positions", {})
-        btc_balance = float(positions.get("BTCUSDT", {}).get("size", 0.0))
-        eth_balance = float(positions.get("ETHUSDT", {}).get("size", 0.0))
-        usdt_balance = float(portfolio.get("USDT", 3000.0))
+        portfolio = state.get("portfolio", {
+            'BTCUSDT': {'position': 0.0, 'free': 0.0},
+            'ETHUSDT': {'position': 0.0, 'free': 0.0},
+            'USDT': {'free': 3000.0}
+        })
+
+        # Handle both old and new portfolio structures
+        if isinstance(portfolio.get("USDT"), dict):
+            # New structure
+            btc_balance = float(portfolio.get("BTCUSDT", {}).get("position", 0.0))
+            eth_balance = float(portfolio.get("ETHUSDT", {}).get("position", 0.0))
+            usdt_balance = float(portfolio.get("USDT", {}).get("free", 3000.0))
+        else:
+            # Old structure (fallback)
+            positions = portfolio.get("positions", {})
+            btc_balance = float(positions.get("BTCUSDT", {}).get("size", 0.0))
+            eth_balance = float(positions.get("ETHUSDT", {}).get("size", 0.0))
+            usdt_balance = float(portfolio.get("USDT", 3000.0))
+
         total_fees = float(portfolio.get("total_fees", 0.0))  # Tracking de fees acumulados
 
         # Obtener precios actuales del mercado
@@ -39,7 +53,7 @@ async def update_portfolio_from_orders(state, orders):
         else:
             eth_price = 4327.46
 
-        # Procesar órdenes ejecutadas
+        # Procesar órdenes ejecutadas con validación de fondos
         for order in orders:
             if order.get("status") != "filled":
                 logger.warning(f"⚠️ Orden no procesada: {order.get('symbol', 'unknown')} - Status: {order.get('status')}")
@@ -50,32 +64,46 @@ async def update_portfolio_from_orders(state, orders):
             # Usar filled_price de la orden si está disponible
             price = float(order.get("filled_price", btc_price if symbol == "BTCUSDT" else eth_price))
 
-            if not price:
-                logger.warning(f"⚠️ Precio no disponible para {symbol}, omitiendo orden")
+            if not price or price <= 0:
+                logger.warning(f"⚠️ Precio inválido para {symbol}: {price}, omitiendo orden")
                 continue
 
             # Calcular costos de trading
             order_value = quantity * price
             trading_fee_rate = 0.001  # 0.1% comisión de Binance
             trading_fee = order_value * trading_fee_rate
-            
+            total_cost = order_value + trading_fee
+
+            # Validar fondos suficientes antes de procesar la orden
             if symbol == "BTCUSDT":
                 if side.lower() == "buy":
+                    if usdt_balance < total_cost:
+                        logger.warning(f"⚠️ Fondos insuficientes para comprar BTC: {usdt_balance:.2f} USDT < {total_cost:.2f} USDT, omitiendo orden")
+                        continue
                     btc_balance += quantity
-                    usdt_balance -= order_value + trading_fee  # Precio + comisión
+                    usdt_balance -= total_cost
                 elif side.lower() == "sell":
+                    if btc_balance < quantity:
+                        logger.warning(f"⚠️ BTC insuficiente para vender: {btc_balance:.6f} < {quantity:.6f}, omitiendo orden")
+                        continue
                     btc_balance -= quantity
-                    usdt_balance += order_value - trading_fee  # Precio - comisión
+                    usdt_balance += order_value - trading_fee
             elif symbol == "ETHUSDT":
                 if side.lower() == "buy":
+                    if usdt_balance < total_cost:
+                        logger.warning(f"⚠️ Fondos insuficientes para comprar ETH: {usdt_balance:.2f} USDT < {total_cost:.2f} USDT, omitiendo orden")
+                        continue
                     eth_balance += quantity
-                    usdt_balance -= order_value + trading_fee  # Precio + comisión
+                    usdt_balance -= total_cost
                 elif side.lower() == "sell":
+                    if eth_balance < quantity:
+                        logger.warning(f"⚠️ ETH insuficiente para vender: {eth_balance:.6f} < {quantity:.6f}, omitiendo orden")
+                        continue
                     eth_balance -= quantity
-                    usdt_balance += order_value - trading_fee  # Precio - comisión
-            
+                    usdt_balance += order_value - trading_fee
+
             logger.info(f"📈 Orden procesada: {symbol} {side} {quantity} @ {price} (fee: {trading_fee:.4f} USDT)")
-            
+
             # Acumular fees totales
             total_fees += trading_fee
 
@@ -90,28 +118,43 @@ async def update_portfolio_from_orders(state, orders):
             logger.warning(f"⚠️ Balance ETH negativo: {eth_balance}, ajustando a 0")
             eth_balance = 0.0
 
-        # Calcular valores
-        btc_value = btc_balance * btc_price if btc_price else 0.0
-        eth_value = eth_balance * eth_price if eth_price else 0.0
+        # Calcular valores con validación
+        btc_value = btc_balance * btc_price if btc_price and btc_price > 0 else 0.0
+        eth_value = eth_balance * eth_price if eth_price and eth_price > 0 else 0.0
         total_value = btc_value + eth_value + usdt_balance
 
-        # Calcular P&L desde capital inicial
+        # Validar que los valores sean realistas
+        if total_value < 0:
+            logger.warning(f"⚠️ Total value negativo detectado: {total_value}, ajustando a 0")
+            total_value = 0.0
+
+        # Calcular P&L desde capital inicial con validación
         initial_capital = state.get("initial_capital", 1000.0)
+        if initial_capital <= 0:
+            logger.warning(f"⚠️ Capital inicial inválido: {initial_capital}, usando 1000.0")
+            initial_capital = 1000.0
+
         pnl_absolute = total_value - initial_capital
-        pnl_percentage = (pnl_absolute / initial_capital) * 100 if initial_capital > 0 else 0.0
+        pnl_percentage = (pnl_absolute / initial_capital) * 100
 
-        # Calcular drawdown
+        # Calcular drawdown con validación
         peak_value = portfolio.get("peak_value", initial_capital)
-        peak_value = max(peak_value, total_value)
-        drawdown = (peak_value - total_value) / peak_value if peak_value > 0 else 0.0
+        if peak_value <= 0:
+            peak_value = initial_capital
 
-        # Actualizar state
+        peak_value = max(peak_value, total_value)
+        drawdown = ((peak_value - total_value) / peak_value) * 100 if peak_value > 0 else 0.0
+
+        # Validar drawdown
+        if drawdown < -100:
+            logger.warning(f"⚠️ Drawdown irrealisticamente bajo: {drawdown}%, ajustando")
+            drawdown = -100.0
+
+        # Actualizar state con nueva estructura
         state["portfolio"] = {
-            "positions": {
-                "BTCUSDT": {"size": btc_balance, "entry_price": btc_price or 0.0},
-                "ETHUSDT": {"size": eth_balance, "entry_price": eth_price or 0.0}
-            },
-            "USDT": usdt_balance,
+            'BTCUSDT': {'position': btc_balance, 'free': btc_balance},
+            'ETHUSDT': {'position': eth_balance, 'free': eth_balance},
+            'USDT': {'free': usdt_balance},
             "drawdown": drawdown,
             "peak_value": peak_value,
             "total_fees": total_fees

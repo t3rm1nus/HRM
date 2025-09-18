@@ -9,13 +9,34 @@ class RealTimeDataLoader:
     def __init__(self, config_dict: dict):
         self.config = config_dict
         self.symbols = self.config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
-        self.binance_client = BinanceClient(self.config)
+        self.binance_client = None
+        self._closed = False
         logger.info("✅ RealTimeDataLoader inicializado")
+        
+    async def _init_binance(self):
+        """Inicializa el cliente de Binance de forma segura"""
+        if not self.binance_client:
+            self.binance_client = BinanceClient(self.config)
+            
+    async def close(self):
+        """Cierra apropiadamente las conexiones"""
+        if not self._closed:
+            try:
+                if hasattr(self.binance_client, 'close') and self.binance_client:
+                    await self.binance_client.close()
+                self._closed = True
+                logger.info("✅ RealTimeDataLoader cerrado correctamente")
+            except Exception as e:
+                logger.error(f"❌ Error cerrando RealTimeDataLoader: {e}")
 
     async def fetch_realtime_data(self, symbol: str, timeframe: str = '1m', limit: int = 200) -> pd.DataFrame:
         """
         Obtiene datos OHLCV en tiempo real para un símbolo.
         """
+        # Asegurar que tenemos un cliente inicializado
+        if not self.binance_client:
+            await self._init_binance()
+            
         try:
             data = await self.binance_client.get_klines(symbol, timeframe, limit)
             if not data:
