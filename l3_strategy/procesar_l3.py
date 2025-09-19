@@ -1,15 +1,20 @@
+#l3_strategy/procesar_l3.py 
+
 import time
 import os
 import json
-import random
-from sklearn.ensemble import RandomForestClassifier
 from typing import Dict, Any, Optional
 from core.logging import logger
-from l3_strategy.l3_processor import generate_l3_output
+from .decision_maker import make_decision, save_decision, load_inputs, ensure_dir
+from .regime_classifier import clasificar_regimen
+from .exposure_manager import gestionar_exposicion
+from .bus_integration import publish_event, subscribe_event, L3MessageType
+from datetime import datetime, timezone
 
 L3_OUTPUT = "data/datos_inferencia/l3_output.json"
+STRATEGIC_DECISION_FILE = "data/datos_inferencia/strategic_decision.json"
 
-logger.info("l3_strategy")
+logger.info("l3_strategy - Actualizado con gestión de exposición basada en capital real")
 
 
 def make_json_serializable(obj):
@@ -23,118 +28,129 @@ def make_json_serializable(obj):
     elif isinstance(obj, set):
         return list(obj)
     elif isinstance(obj, pd.DataFrame):
-        return obj.to_dict(orient="records")  # <- convierte DataFrame a lista de dicts
+        return obj.to_dict(orient="records")
     else:
         return obj
 
 
-def determine_regime(state: Dict[str, Any]) -> str:
-    """Simula la detección del régimen de mercado basado en volatilidad y señales"""
-    signals = state.get("senales", [])
-    bullish_signals = sum(1 for s in signals if s.get("direction") == "buy")
-    bearish_signals = sum(1 for s in signals if s.get("direction") == "sell")
-    if bullish_signals > bearish_signals:
-        return "bullish"
-    elif bearish_signals > bullish_signals:
-        return "bearish"
-    return "neutral"
-
-
-def generate_asset_allocation(regime: str) -> Dict[str, float]:
-    """Genera distribución de activos según régimen"""
-    if regime == "bullish":
-        return {"BTC": 0.6, "ETH": 0.3, "CASH": 0.1}
-    elif regime == "bearish":
-        return {"BTC": 0.3, "ETH": 0.2, "CASH": 0.5}
-    return {"BTC": 0.5, "ETH": 0.5, "CASH": 0.0}
-
-
 def procesar_l3(state: Dict[str, Any]) -> Dict[str, Any]:
-    logger.info("🚀 Procesando capa L3 - Estratégica")
+    """
+    Procesa la capa L3 usando el decision maker actualizado.
+    No depende de fallbacks tácticos obsoletos.
+    """
+    logger.info("🚀 Procesando capa L3 - Estratégica (Actualizada)")
+
+    # Obtener datos necesarios del state
+    portfolio_state = state.get("portfolio", {})
+    market_data = state.get("market_data", {})
+    inputs = load_inputs()  # Cargar inputs de otros módulos L3
+
+    # Generar decisión estratégica usando el nuevo decision maker
+    strategic_decision = make_decision(inputs, portfolio_state, market_data)
+    # Extraer decisiones de exposición
+    exposure_decisions = strategic_decision.get("exposure_decisions", {})
+
+    # Generar órdenes basadas en decisiones de exposición
     ordenes = []
+    for symbol, decision in exposure_decisions.items():
+        if symbol == "USDT":
+            continue  # USDT es para liquidez, no genera órdenes
 
-    # Procesar señales tácticas
-    signals = state.get("senales", [])
-    for idx, signal in enumerate(signals):
-        try:
-            if signal.get("confidence", 0) < 0.6:
-                continue
-            symbol = signal.get("symbol")
-            if not symbol or symbol not in state.get("mercado", {}):
-                continue
-            price = float(state["mercado"][symbol]["close"].iloc[-1])
-            amount = 0.1  # cantidad fija de prueba
+        adjustment = decision.get("adjustment", 0.0)
+        action = decision.get("action", "hold")
 
-            orden = {
-                "id": f"order_{symbol}_{idx}",
-                "symbol": symbol,
-                "side": signal.get("direction", "buy"),
-                "amount": amount,
-                "price": price,
-                "type": "market",
-                "strategy_id": "l3_strategy",
-                "timestamp": time.time(),
-                "metadata": {"confidence": signal.get("confidence"), "source": signal.get("source")},
-                "risk": {
-                    "stop_loss": price * 0.95 if signal.get("direction") == "buy" else price * 1.05,
-                    "take_profit": price * 1.05 if signal.get("direction") == "buy" else price * 0.95
+        if action in ["buy", "sell"] and abs(adjustment) > 0.0001:  # Threshold mínimo
+            try:
+                price = market_data.get(symbol, {}).get("close", 50000.0)
+                if isinstance(price, (list, tuple)):
+                    price = price[-1] if price else 50000.0
+
+                orden = {
+                    "id": f"l3_exposure_{symbol}_{int(time.time())}",
+                    "symbol": symbol,
+                    "side": action,
+                    "quantity": abs(adjustment),
+                    "price": float(price),
+                    "type": "market",
+                    "strategy_id": "l3_exposure_management",
+                    "timestamp": time.time(),
+                    "metadata": {
+                        "source": "l3_exposure_manager",
+                        "regime": strategic_decision.get("market_regime"),
+                        "target_position": decision.get("target_position", 0.0)
+                    },
+                    "risk": {
+                        "stop_loss": price * 0.98 if action == "buy" else price * 1.02,
+                        "take_profit": price * 1.02 if action == "buy" else price * 0.98
+                    }
                 }
-            }
-            ordenes.append(orden)
-        except Exception as e:
-            logger.error(f"[L3] Error procesando señal {symbol}: {e}", exc_info=True)
+                ordenes.append(orden)
+                logger.info(f"📋 Orden L3 generada: {action} {abs(adjustment):.6f} {symbol} @ {price:.2f}")
 
-    # Determinar contexto estratégico dinámico
-    regime = determine_regime(state)
-    asset_allocation = generate_asset_allocation(regime)
-    risk_appetite = "moderate" if regime == "neutral" else "high" if regime == "bullish" else "low"
+            except Exception as e:
+                logger.error(f"❌ Error generando orden para {symbol}: {e}")
 
-    # Guardar resultados en el state
+   
+
+    # Actualizar state con nueva información estratégica
     state.update({
         "ordenes": ordenes,
-        "regime": regime,
-        "asset_allocation": asset_allocation,
-        "risk_appetite": risk_appetite,
-        "strategic_guidelines": {
-            "regime": regime,
-            "allocation": asset_allocation,
-            "risk_appetite": risk_appetite
+        "strategic_decision": {
+            **strategic_decision,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         },
-        "strategic_context": state.get("strategic_context", {})  # Asegura que la clave exista
+        "regime": strategic_decision.get("market_regime"),
+        "risk_appetite": strategic_decision.get("risk_appetite"),
+        "exposure_decisions": exposure_decisions,
+        "strategic_guidelines": strategic_decision.get("strategic_guidelines", {}),
+        "strategic_context": {
+            "regime": strategic_decision.get("market_regime"),
+            "risk_appetite": strategic_decision.get("risk_appetite"),
+            "liquidity_maintained": True,
+            "capital_based_sizing": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        }
     })
 
+    # Guardar decisión estratégica
+    ensure_dir(os.path.dirname(STRATEGIC_DECISION_FILE))
+    save_decision(strategic_decision, STRATEGIC_DECISION_FILE)
+
+    logger.info(f"✅ L3 procesado exitosamente - Régimen: {strategic_decision.get('market_regime')}, Órdenes: {len(ordenes)}")
     return state
 
 
-def main(state: Optional[Dict[str, Any]] = None, fallback: bool = True) -> Dict[str, Any]:
-    logger.info("⚡ Ejecutando L3 main()")
+def main(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Ejecuta el pipeline L3 actualizado sin depender de fallbacks obsoletos.
+    """
+    logger.info("⚡ Ejecutando L3 main() - Versión actualizada")
 
     if state is None:
-        market_data = {}
-        texts = []
-        initial_output = generate_l3_output(market_data, texts)
+        # Estado mínimo para testing
         state = {
-            "senales": initial_output.get("signals", []),
-            "mercado": {},
-            "regime": initial_output.get("regime"),
-            "asset_allocation": initial_output.get("asset_allocation"),
-            "risk_appetite": initial_output.get("risk_appetite"),
-            "strategic_guidelines": initial_output.get("strategic_guidelines")
+            "portfolio": {
+                "total_value": 3000.0,
+                "usdt_balance": 1500.0,
+                "btc_balance": 0.05,
+                "eth_balance": 1.0
+            },
+            "market_data": {
+                "BTCUSDT": {"close": 50000.0},
+                "ETHUSDT": {"close": 3000.0}
+            }
         }
 
     state = procesar_l3(state)
-    # Asegura que la clave 'strategic_context' exista en el output
-    if "strategic_context" not in state:
-        state["strategic_context"] = {}
 
-    # Guardar output
+    # Guardar output principal
     os.makedirs(os.path.dirname(L3_OUTPUT), exist_ok=True)
     with open(L3_OUTPUT, "w") as f:
         json.dump(make_json_serializable(state), f, indent=2)
 
-    logger.info(f"✅ L3 output guardado en {L3_OUTPUT}")
+    logger.info(f"✅ L3 output actualizado en {L3_OUTPUT}")
     return state
 
 
 if __name__ == "__main__":
-    main(fallback=True)
+    main()

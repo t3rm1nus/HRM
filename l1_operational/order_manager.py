@@ -175,7 +175,9 @@ class OrderManager:
                     order["status"] = "filled"
                     order["filled_price"] = order["price"]
                     order["filled_quantity"] = order["quantity"]
-                    order["commission"] = order["price"] * order["quantity"] * 0.001
+                    # Calculate commission consistently with portfolio manager
+                    order_value = order["price"] * order["quantity"]
+                    order["commission"] = order_value * 0.001  # 0.1% fee
 
                 else:
                     raise NotImplementedError("Only paper trading for now")

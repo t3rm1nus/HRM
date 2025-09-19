@@ -32,7 +32,7 @@ async def update_portfolio_from_orders(state, orders):
         total_fees = float(portfolio.get("total_fees", 0.0))  # Tracking de fees acumulados
 
         # Obtener precios actuales del mercado
-        market_data = state.get("mercado", {})
+        market_data = state.get("market_data", {})
         btc_price = None
         eth_price = None
         
@@ -80,27 +80,37 @@ async def update_portfolio_from_orders(state, orders):
                     if usdt_balance < total_cost:
                         logger.warning(f"⚠️ Fondos insuficientes para comprar BTC: {usdt_balance:.2f} USDT < {total_cost:.2f} USDT, omitiendo orden")
                         continue
+                    # Validate calculation doesn't result in negative balance
+                    new_balance = usdt_balance - total_cost
+                    if new_balance < -0.01:  # Allow small floating point errors
+                        logger.error(f"⚠️ Cálculo inválido detectado - Balance resultante: {new_balance:.6f}, omitiendo orden")
+                        continue
                     btc_balance += quantity
-                    usdt_balance -= total_cost
+                    usdt_balance = new_balance
                 elif side.lower() == "sell":
                     if btc_balance < quantity:
                         logger.warning(f"⚠️ BTC insuficiente para vender: {btc_balance:.6f} < {quantity:.6f}, omitiendo orden")
                         continue
-                    btc_balance -= quantity
-                    usdt_balance += order_value - trading_fee
+                    proceeds = order_value - trading_fee
+                    usdt_balance += proceeds
             elif symbol == "ETHUSDT":
                 if side.lower() == "buy":
                     if usdt_balance < total_cost:
                         logger.warning(f"⚠️ Fondos insuficientes para comprar ETH: {usdt_balance:.2f} USDT < {total_cost:.2f} USDT, omitiendo orden")
                         continue
+                    # Validate calculation doesn't result in negative balance
+                    new_balance = usdt_balance - total_cost
+                    if new_balance < -0.01:  # Allow small floating point errors
+                        logger.error(f"⚠️ Cálculo inválido detectado - Balance resultante: {new_balance:.6f}, omitiendo orden")
+                        continue
                     eth_balance += quantity
-                    usdt_balance -= total_cost
+                    usdt_balance = new_balance
                 elif side.lower() == "sell":
                     if eth_balance < quantity:
                         logger.warning(f"⚠️ ETH insuficiente para vender: {eth_balance:.6f} < {quantity:.6f}, omitiendo orden")
                         continue
-                    eth_balance -= quantity
-                    usdt_balance += order_value - trading_fee
+                    proceeds = order_value - trading_fee
+                    usdt_balance += proceeds
 
             logger.info(f"📈 Orden procesada: {symbol} {side} {quantity} @ {price} (fee: {trading_fee:.4f} USDT)")
 

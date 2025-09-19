@@ -1,8 +1,9 @@
 #!/backtesting/main.py   & .\.venv\Scripts\python.exe -m backtesting.main
-"""
-HRM Backtesting System - Ejecutor Principal
-Prueba el sistema completo con datos históricos de Binance.
-Actualizado para usar imports relativos y el logger centralizado.
+"""# Test Gemini model
+$env:L2_MODEL = "gemini"; python -m backtesting.main
+$env:L2_MODEL = "grok"; python -m backtesting.main
+$env:L2_MODEL = "claude"; python -m backtesting.main
+
 """
 
 import os

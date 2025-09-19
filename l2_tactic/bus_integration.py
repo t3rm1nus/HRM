@@ -1,3 +1,5 @@
+#l2_tactic/bus_integration.py 
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +23,7 @@ from .models import (
 from .signal_generator import L2TacticProcessor as SignalGenerator  # Changed to match main.py
 from .position_sizer import PositionSizerManager
 from .risk_controls import RiskControlManager, RiskAlert
-from .config import L2C.onfig
+from .config import L2Config
 from l2_tactic.metrics import L2Metrics
 from core.logging import logger
 

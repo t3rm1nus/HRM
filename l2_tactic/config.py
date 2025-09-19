@@ -1,4 +1,4 @@
-# config.py - Configuración para el módulo L2_tactic (adaptado para multiasset: BTC y ETH)
+# l2_tactic/config.py - Configuración para el módulo L2_tactic (adaptado para multiasset: BTC y ETH)
 
 """
 Configuración para el módulo L2_tactic
@@ -23,7 +23,7 @@ class AIModelConfig:
     model_name: str = "modeloL2_multiasset"
     model_params: Dict[str, Any] = field(default_factory=dict)
     signal_horizon_minutes: int = 5
-    model_path: str = "C:/proyectos/HRM/models/L2/deepseek.zip"  # Path absoluto para PPO SB3
+    model_path: str = "C:/proyectos/HRM/models/L2/gemini.zip"  # Path absoluto para PPO SB3
     model_type: str = "stable_baselines3"  # tipo de modelo
     prediction_threshold: float = 0.3
     max_batch_size: int = 100
@@ -31,6 +31,36 @@ class AIModelConfig:
     cache_ttl_seconds: int = 300
     fallback_enabled: bool = True
     preprocessing_config: Dict = field(default_factory=dict)
+
+    # Modelos disponibles
+    available_models: Dict[str, str] = field(default_factory=lambda: {
+        "gemini": "C:/proyectos/HRM/models/L2/gemini.zip",
+        "grok": "C:/proyectos/HRM/models/L2/grok.zip",
+        "gpt": "C:/proyectos/HRM/models/L2/gpt.zip",
+        "claude": "C:/proyectos/HRM/models/L2/claude.zip",
+        "deepseek": "C:/proyectos/HRM/models/L2/deepseek.zip",
+        "kimi": "C:/proyectos/HRM/models/L2/kimi.zip"
+    })
+
+    def switch_model(self, model_key: str) -> bool:
+        """Cambia el modelo activo por uno de los disponibles"""
+        if model_key in self.available_models:
+            self.model_path = self.available_models[model_key]
+            print(f"✅ Modelo cambiado a: {model_key} -> {self.model_path}")
+            return True
+        else:
+            available_keys = list(self.available_models.keys())
+            print(f"❌ Modelo '{model_key}' no encontrado. Disponibles: {available_keys}")
+            return False
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Retorna información sobre el modelo actual y disponibles"""
+        return {
+            "current_model": self.model_path,
+            "model_type": self.model_type,
+            "available_models": self.available_models,
+            "prediction_threshold": self.prediction_threshold
+        }
 
 
 @dataclass
@@ -167,6 +197,9 @@ class L2Config:
     # --- Riesgo global ---
     max_drawdown: float = 0.15
     max_position_risk: float = 0.02
+    
+    l3_stale_threshold_seconds: int = 600  # 10 minutos
+
 
     # --- Parámetros específicos de control de riesgo ---
     default_stop_pct: float = 0.02           # stop fijo por defecto (2%)

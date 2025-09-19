@@ -1,7 +1,4 @@
-"""
-L3 Strategic Configuration
-Configuración de parámetros estratégicos para el nivel superior de toma de decisiones
-"""
+# l3_strategy/config.py - Configuración para el módulo L2_tactic (adaptado para multiasset: BTC y ETH)
 
 import os
 from typing import Dict, List, Any
@@ -168,7 +165,7 @@ class ExecutionConfig:
     valid_until_buffer: int = 24  # hours validity buffer
     
     # Communication with L2
-    l2_update_frequency: str = "hourly"
+    l2_update_frequency: str = "10min"
     l2_override_capability: bool = True  # L3 can override L2 decisions
 
 

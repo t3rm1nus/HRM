@@ -50,7 +50,7 @@ Nivel 2: Táctica de Ejecución — minutos
 Nivel 1: Ejecución + Gestión de Riesgo — segundos
 ## 🏗️ ARQUITECTURA REAL DEL SISTEMA
 
-### 🎯 **NIVEL 2 - TÁCTICO (L2)** ✅ IMPLEMENTADO
+### 🎯 **NIVEL 2 - TÁCTICO (L2)** ✅ IMPLEMENTADO Y MODULARIZADO
 **Rol:** Generación inteligente de señales de trading
 **Funciones operativas:**
 - ✅ **Análisis técnico multi-timeframe** (RSI, MACD, Bollinger Bands)
@@ -60,6 +60,80 @@ Nivel 1: Ejecución + Gestión de Riesgo — segundos
 - ✅ **Controles de riesgo pre-ejecución** (stops, correlación, drawdown)
 - ✅ **Stop-Loss y Take-Profit dinámicos** basados en volatilidad y confianza
 - ✅ **Cálculo automático de SL/TP** por señal generada
+
+#### 🏗️ **NUEVA ARQUITECTURA MODULAR L2 (2025)**
+**Refactorización completa:** El monolítico `finrl_integration.py` ha sido dividido en módulos especializados:
+
+```
+l2_tactic/
+├── 📄 __init__.py                    # Punto de entrada unificado
+├── 📄 models.py                      # Estructuras de datos (TacticalSignal)
+├── 📄 config.py                      # Configuración L2
+├── 📄 signal_generator.py            # Orquestador principal
+├── 📄 signal_composer.py             # Composición de señales
+├── 📄 position_sizer.py              # Cálculo de tamaños de posición
+├── 📄 finrl_integration.py           # 🔄 COMPATIBILIDAD (solo imports)
+├── 📁 generators/                    # Generadores de señales
+│   ├── 📄 __init__.py
+│   ├── 📄 technical_analyzer.py      # Análisis técnico
+│   ├── 📄 mean_reversion.py          # Estrategia reversión a la media
+│   └── 📄 finrl.py                   # Procesador FinRL
+├── 📁 ensemble/                      # Combinación de señales
+│   ├── 📄 __init__.py
+│   ├── 📄 voting.py                  # Ensemble por votación
+│   └── 📄 blender.py                 # Ensemble por blending
+├── 📁 risk_controls/                 # Gestión de riesgo modular
+│   ├── 📄 __init__.py
+│   ├── 📄 alerts.py                  # Sistema de alertas
+│   ├── 📄 manager.py                 # Orquestador de riesgo
+│   ├── 📄 portfolio.py               # Riesgo de portfolio
+│   ├── 📄 positions.py               # Riesgo por posición
+│   └── 📄 stop_losses.py             # Stop-loss dinámicos
+└── 📁 technical/                     # Indicadores técnicos
+    ├── 📄 __init__.py
+    ├── 📄 multi_timeframe.py         # Análisis multi-timeframe
+    └── 📄 indicators.py              # Indicadores técnicos
+```
+
+#### 🤖 **Sistema FinRL Modularizado**
+**Antes:** Un solo archivo de 1000+ líneas con todo mezclado
+**Ahora:** Arquitectura limpia con responsabilidades separadas:
+
+| Módulo | Responsabilidad | Estado |
+|--------|----------------|--------|
+| `finrl_processor.py` | Clase principal FinRLProcessor | ✅ Operativo |
+| `finrl_wrapper.py` | Wrapper inteligente multi-modelo | ✅ Operativo |
+| `feature_extractors.py` | Extractores de features personalizados | ✅ Operativo |
+| `observation_builders.py` | Construcción de observaciones | ✅ Operativo |
+| `model_loaders.py` | Carga unificada de modelos | ✅ Operativo |
+| `signal_generators.py` | Generación de señales | ✅ Operativo |
+
+#### 🎯 **Modelos FinRL Soportados**
+| Modelo | Dimensiones | Método | Estado |
+|--------|-------------|--------|--------|
+| **DeepSeek** | 257 | `predict()` | ✅ Operativo |
+| **Gemini** | 13 | `get_action()` → `predict()` | ✅ **FIXED** |
+| **Claude** | 971 | `predict()` | ✅ Operativo |
+| **Kimi** | Variable | `predict()` | ✅ Operativo |
+
+#### 🔧 **Detección Automática de Métodos**
+```python
+# Sistema inteligente que detecta el método correcto
+def get_finrl_signal(finrl_processor, market_data):
+    if hasattr(finrl_processor, 'predict'):
+        return finrl_processor.predict(market_data)
+    elif hasattr(finrl_processor, 'get_action'):
+        return finrl_processor.get_action(market_data)
+    else:
+        raise AttributeError("Método no encontrado")
+```
+
+#### 📈 **Beneficios de la Modularización**
+- **🔧 Mantenibilidad:** Cada módulo tiene una responsabilidad clara
+- **🔄 Escalabilidad:** Fácil añadir nuevos modelos o estrategias
+- **🛡️ Robustez:** Mejor manejo de errores y compatibilidad
+- **📊 Rendimiento:** Optimizaciones específicas por componente
+- **🔌 Compatibilidad:** Código existente sigue funcionando sin cambios
 
 ### ⚙️ **NIVEL 1 - OPERACIONAL (L1)** ✅ IMPLEMENTADO
 **Rol:** Ejecución determinista y segura de órdenes

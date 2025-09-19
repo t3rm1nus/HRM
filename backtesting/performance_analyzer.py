@@ -211,12 +211,18 @@ class PerformanceAnalyzer:
             # Volatilidad y Sharpe por-trade; anualización basada en duración media
             vol = float(np.std(returns, ddof=1)) if total_trades > 1 else 0.0
             mean_ret = float(np.mean(returns)) if total_trades > 0 else 0.0
-            # Estimar trades por año
+
+            # Para crypto trading (24/7), usar 365 días en lugar de 252 (bursátil)
+            # Estimar periods_per_year basado en duración real de trades
             if durations_days:
                 avg_days = float(np.mean(durations_days))
-                periods_per_year = 365.0 / max(1e-9, avg_days)
+                periods_per_year = 365.0 / max(1e-9, avg_days)  # 365 días para crypto
             else:
-                periods_per_year = 252.0  # suposición razonable
+                periods_per_year = 365.0  # Asumir 1 trade por día para crypto 24/7
+
+            # Asegurar que periods_per_year sea razonable (no demasiado alto)
+            periods_per_year = min(periods_per_year, 365.0)  # Máximo 1 trade por día
+
             sharpe = (mean_ret / vol * np.sqrt(periods_per_year)) if vol > 0 else 0.0
 
             # Retorno total compuesto y anualizado

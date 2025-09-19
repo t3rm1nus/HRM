@@ -121,7 +121,20 @@ class HRMStrategyTester:
             if self.l2_processor is None:
                 try:
                     l2_config = L2Config()
+                    # Switch to the model specified in config or use default
+                    model_to_use = os.getenv('L2_MODEL', 'gpt')  # Allow environment variable to specify model
+                    if l2_config.ai_model.switch_model(model_to_use):
+                        self.logger.info(f"🔄 Modelo L2 cambiado a: {model_to_use}")
+                    else:
+                        self.logger.warning(f"⚠️ No se pudo cambiar al modelo {model_to_use}, usando default")
                     self.l2_processor = L2TacticProcessor(l2_config)
+
+                    # Now switch the model in the processor itself
+                    if self.l2_processor.switch_model(model_to_use):
+                        self.logger.info(f"✅ L2 Processor switched to model: {model_to_use}")
+                    else:
+                        self.logger.warning(f"⚠️ L2 Processor could not switch to model: {model_to_use}")
+
                     self.logger.info("✅ L2 Processor inicializado para backtesting")
                 except Exception as e:
                     self.logger.error(f"❌ Error inicializando L2: {e}")
@@ -223,6 +236,23 @@ class HRMStrategyTester:
                     try:
                         signals = await self.l2_processor.process_signals(state)
                         valid_signals = [s for s in signals if hasattr(s, 'symbol') and hasattr(s, 'side')]
+
+                        # Log action probability distributions for model differentiation
+                        if valid_signals and cycle_count % 50 == 0:  # Log every 50 cycles
+                            model_name = os.getenv('L2_MODEL', 'unknown')
+                            action_counts = {'buy': 0, 'sell': 0, 'hold': 0}
+                            total_signals = len(valid_signals)
+
+                            for signal in valid_signals:
+                                if hasattr(signal, 'side'):
+                                    action_counts[signal.side] = action_counts.get(signal.side, 0) + 1
+
+                            buy_pct = action_counts['buy'] / total_signals * 100 if total_signals > 0 else 0
+                            sell_pct = action_counts['sell'] / total_signals * 100 if total_signals > 0 else 0
+                            hold_pct = action_counts['hold'] / total_signals * 100 if total_signals > 0 else 0
+
+                            self.logger.info(f"🎯 {model_name.upper()} Action Distribution - Buy: {buy_pct:.1f}%, Sell: {sell_pct:.1f}%, Hold: {hold_pct:.1f}%")
+
                     except Exception as e:
                         self.logger.error(f"L2 error en ciclo {cycle_count}: {e}")
                         valid_signals = []
@@ -502,9 +532,29 @@ class HRMStrategyTester:
     def _generate_synthetic_scenarios(self, timestamps: List, original_data: Dict) -> Dict:
         """
         Generate synthetic market scenarios to increase backtesting diversity
+        Uses model-dependent seed to ensure different models see different scenarios
         """
         synthetic_scenarios = {}
-        np.random.seed(42)  # For reproducible results
+
+        # Use model-dependent seed to ensure different models see different scenarios
+        model_name = os.getenv('L2_MODEL', 'default')
+        if model_name == 'gemini':
+            seed = 42
+        elif model_name == 'claude':
+            seed = 123
+        elif model_name == 'gpt':
+            seed = 456
+        elif model_name == 'kimi':
+            seed = 789
+        elif model_name == 'grok':
+            seed = 101112
+        elif model_name == 'deepseek':
+            seed = 131415
+        else:
+            seed = 42  # fallback
+
+        np.random.seed(seed)
+        self.logger.info(f"🎲 Using seed {seed} for model {model_name} synthetic scenarios")
 
         # Define different market scenarios
         scenarios = {
