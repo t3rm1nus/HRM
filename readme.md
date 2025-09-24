@@ -1,5 +1,5 @@
 # 🔱 HRM — Hierarchical Reasoning Model para Trading Algorítmico
-**Estado: PRODUCCIÓN** · **Lenguaje:** Python 3.10+ · **Dominio:** Cripto Trading · **Arquitectura:** L2 Táctico + L1 Operacional
+**Estado: PRODUCCIÓN** · **Lenguaje:** Python 3.10+ · **Dominio:** Cripto Trading · **Arquitectura:** L3 Estratégico + L2 Táctico + L1 Operacional
 
 ## 🧭 TL;DR
 HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC y ETH en Binance Spot. Combina **análisis técnico avanzado**, **modelos FinRL pre-entrenados**, **gestión dinámica de riesgo**, **stop-loss/take-profit automáticos** y **ejecución determinista**. El sistema genera señales inteligentes cada 10 segundos, calcula posiciones óptimas y ejecuta órdenes con controles de seguridad multi-nivel.
@@ -152,39 +152,43 @@ export HRM_MAX_DESYNC_TOLERANCE=0.001  # 0.1% máximo desincronización
 - **🚨 Alertas proactivas:** Detección inmediata de problemas
 
 **El sistema HRM ahora es un entorno de producción ultra-seguro donde fallos de conectividad o energía NO resultan en pérdidas catastróficas.**
-Modos de operación
-表格
-复制
-Modo	Descripción
-PAPER	Simulación completa sin conexión real.
-LIVE	Ejecución real en Binance Spot (requiere claves API).
-REPLAY	Reproducción con datasets históricos.
-Activar modo LIVE
-bash
-复制
+
+## 🎛️ **MODOS DE OPERACIÓN**
+
+| Modo | Descripción | Activación |
+|------|-------------|------------|
+| **PAPER** | Simulación completa sin conexión real | `USE_TESTNET=true` |
+| **LIVE** | Ejecución real en Binance Spot (requiere claves API) | `USE_TESTNET=false` |
+| **REPLAY** | Reproducción con datasets históricos | Configuración adicional |
+
+### ⚡ **ACTIVAR MODO LIVE**
+```bash
 export BINANCE_MODE=LIVE
 export USE_TESTNET=false
 export BINANCE_API_KEY=your_real_key
 export BINANCE_API_SECRET=your_real_secret
 python main.py
-1️⃣ Objetivo del proyecto
-Tomar decisiones de trading razonadas y trazables para múltiples activos (BTC, ETH) mediante una jerarquía de agentes.
-Aprender qué señales funcionan bajo distintos regímenes y cómo combinar niveles (L2/L3) para optimizar ejecución en L1 con modelos IA.
-Minimizar riesgos con análisis multinivel, capa dura de seguridad en L1 y gestión de correlación BTC–ETH.
-Crear un framework reutilizable para distintos universos de activos líquidos.
-Qué queremos aprender a nivel de sistema
-Si el razonamiento multietapa mejora la estabilidad frente a un agente monolítico.
-Qué señales funcionan en cada régimen y cómo combinarlas en L2/L3.
-Cómo distribuir capital/ponderaciones entre modelos/estrategias.
-2️⃣ Beneficios esperados
-Mayor precisión mediante composición multiasset y modelos IA (LogReg, RF, LightGBM).
-Reducción de riesgo vía diversificación temporal, límite rígido en L1 y gestión de correlación BTC–ETH.
-Adaptabilidad automática a distintos regímenes de mercado.
-Razonamiento multi-variable con métricas granulares por activo (latencia, slippage, tasa de éxito).
-⚙️ 3️⃣ Flujo general (visión de tiempos)
-Nivel 3: Análisis Estratégico — horas
-Nivel 2: Táctica de Ejecución — minutos
-Nivel 1: Ejecución + Gestión de Riesgo — segundos
+```
+
+## 🎯 **OBJETIVO DEL PROYECTO**
+
+Tomar decisiones de trading razonadas y trazables para múltiples activos (BTC, ETH) mediante una jerarquía de agentes. Aprender qué señales funcionan bajo distintos regímenes y cómo combinar niveles (L2/L3) para optimizar ejecución en L1 con modelos IA. Minimizar riesgos con análisis multinivel, capa dura de seguridad en L1 y gestión de correlación BTC–ETH. Crear un framework reutilizable para distintos universos de activos líquidos.
+
+### 📚 **¿Qué queremos aprender a nivel de sistema?**
+- Si el razonamiento multietapa mejora la estabilidad frente a un agente monolítico
+- Qué señales funcionan en cada régimen y cómo combinarlas en L2/L3
+- Cómo distribuir capital/ponderaciones entre modelos/estrategias
+
+### 🎯 **Beneficios esperados**
+- Mayor precisión mediante composición multiasset y modelos IA (LogReg, RF, LightGBM)
+- Reducción de riesgo vía diversificación temporal, límite rígido en L1 y gestión de correlación BTC–ETH
+- Adaptabilidad automática a distintos regímenes de mercado
+- Razonamiento multi-variable con métricas granulares por activo (latencia, slippage, tasa de éxito)
+
+### ⚙️ **Flujo general (visión de tiempos)**
+- **Nivel 3:** Análisis Estratégico — horas
+- **Nivel 2:** Táctica de Ejecución — minutos
+- **Nivel 1:** Ejecución + Gestión de Riesgo — segundos
 ## 🏗️ ARQUITECTURA REAL DEL SISTEMA
 
 ### 🎯 **NIVEL 2 - TÁCTICO (L2)** ✅ IMPLEMENTADO Y MODULARIZADO
@@ -252,6 +256,8 @@ l2_tactic/
 | **Gemini** | 13 | `get_action()` → `predict()` | ✅ **FIXED** |
 | **Claude** | 971 | `predict()` | ✅ Operativo |
 | **Kimi** | Variable | `predict()` | ✅ Operativo |
+| **Gpt** | Variable | `predict()` | ✅ Operativo |
+| **Grok** | Variable | `predict()` | ✅ Operativo |
 
 #### 🔧 **Detección Automática de Métodos**
 ```python
@@ -291,14 +297,15 @@ def get_finrl_signal(finrl_processor, market_data):
 - ✅ **Strategic Decision Making** con pipeline completo
 
 ✅ **Modelos IA L1:** **FUNCIONALES** (LogReg, RF, LightGBM en models/L1/)
-复制
-Tipo	Descripción
-Precio	delta_close, EMA/SMA
-Volumen	volumen relativo
-Momentum	RSI, MACD
-Multi-timeframe	1m + 5m
-Cross-asset	ETH/BTC ratio, correlación rolling, divergencias
-Real-time data	Desde Binance Spot (modo LIVE) o testnet
+
+| Tipo | Descripción |
+|------|-------------|
+| **Precio** | delta_close, EMA/SMA |
+| **Volumen** | volumen relativo |
+| **Momentum** | RSI, MACD |
+| **Multi-timeframe** | 1m + 5m |
+| **Cross-asset** | ETH/BTC ratio, correlación rolling, divergencias |
+| **Real-time data** | Desde Binance Spot (modo LIVE) o testnet |
 ## 🚀 EJECUCIÓN DEL SISTEMA
 
 ### ⚡ **INICIO RÁPIDO**
@@ -342,20 +349,20 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 | **LIVE** | Binance Spot real | `USE_TESTNET=false` |
 | **PAPER** | Simulación local | Configuración interna |
 
-✅ Buenas prácticas de riesgo (resumen actualizado)
-表格
-复制
-Concepto	Valor real
-Stop-loss	Obligatorio + automático
-Take-profit	Dinámico basado en volatilidad
-Límites por trade	BTC: 0.05, ETH: 1.0
-Exposición máxima	BTC: 20%, ETH: 15%
-Correlación BTC-ETH	Monitoreada en tiempo real
-Costos reales	Comisiones 0.1% Binance aplicadas
-Monitoreo posiciones	Activación automática SL/TP
-Modo LIVE	Implementado y validado
-Determinismo	Una orden por señal → si falla → rechazo y reporte
-Separación L2/L3 ≠ L1	Responsabilidades claramente separadas
+## ✅ **BUENAS PRÁCTICAS DE RIESGO** (resumen actualizado)
+
+| Concepto | Valor real |
+|----------|------------|
+| **Stop-loss** | Obligatorio + automático |
+| **Take-profit** | Dinámico basado en volatilidad |
+| **Límites por trade** | BTC: 0.05, ETH: 1.0 |
+| **Exposición máxima** | BTC: 20%, ETH: 15% |
+| **Correlación BTC-ETH** | Monitoreada en tiempo real |
+| **Costos reales** | Comisiones 0.1% Binance aplicadas |
+| **Monitoreo posiciones** | Activación automática SL/TP |
+| **Modo LIVE** | Implementado y validado |
+| **Determinismo** | Una orden por señal → si falla → rechazo y reporte |
+| **Separación L2/L3 ≠ L1** | Responsabilidades claramente separadas |
 
 🏗️ 5️⃣ Arquitectura (ASCII actualizada)
 ┌─────────────▼───────────────────────────┐
