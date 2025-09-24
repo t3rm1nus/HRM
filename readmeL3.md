@@ -253,13 +253,14 @@ project_root/
 ✅ SENTIMENT: Completado batch 6/6 (100.0%)
 🎯 SENTIMENT: Inferencia completada - 95 resultados generados
 ✅ Sentimiento calculado: 0.2345 (device: cpu, textos: 95)
+🟠 ANÁLISIS DE SENTIMIENTO: 🟠 POSITIVO - Mercado favorable, tendencia alcista moderada (score: 0.2345)
 ```
 
 **Resultado final L3:**
 ```
 🎉 L3_PROCESSOR: Output estratégico generado correctamente
-   📈 Resultado final: regime=range, risk_appetite=moderate, sentiment=0.2345
-   💰 Asset allocation: {'BTC': 0.4, 'ETH': 0.3, 'CASH': 0.3}
+   � Resultado final: regime=range, risk_appetite=moderate, sentiment=0.2345
+   �💰 Asset allocation: {'BTC': 0.4, 'ETH': 0.3, 'CASH': 0.3}
    📊 Volatility: BTC=0.024, ETH=0.031
 ```
 

@@ -591,6 +591,21 @@ def predict_sentiment(texts: list, tokenizer, model):
 
             # Log detailed results
             log.info(f"✅ Sentimiento calculado: {sentiment_score:.4f} (device: {device}, textos: {len(valid_texts)})")
+
+            # Log interpretativo con color naranja oscuro sobre el estado del mercado
+            if sentiment_score > 0.6:
+                market_sentiment = "🟠 MUY POSITIVO - Mercado alcista fuerte, alta confianza compradora"
+            elif sentiment_score > 0.3:
+                market_sentiment = "🟠 POSITIVO - Mercado favorable, tendencia alcista moderada"
+            elif sentiment_score > -0.3:
+                market_sentiment = "🟠 NEUTRAL - Mercado lateral, sin dirección clara"
+            elif sentiment_score > -0.6:
+                market_sentiment = "🟠 NEGATIVO - Mercado bajista moderado, cautela recomendada"
+            else:
+                market_sentiment = "🟠 MUY NEGATIVO - Mercado fuertemente bajista, alto riesgo"
+
+            log.info(f"🟠 ANÁLISIS DE SENTIMIENTO: {market_sentiment} (score: {sentiment_score:.4f})")
+
             log.debug(f"Probabilidades promedio por clase: {torch.mean(probs, dim=0).cpu().numpy()}")
 
         return sentiment_score

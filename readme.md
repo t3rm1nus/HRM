@@ -370,6 +370,7 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 ✅ SENTIMENT: Completado batch 6/6 (100.0%)
 🎯 SENTIMENT: Inferencia completada - 95 resultados generados
 ✅ Sentimiento calculado: 0.2345 (device: cpu, textos: 95)
+🟠 ANÁLISIS DE SENTIMIENTO: 🟠 POSITIVO - Mercado favorable, tendencia alcista moderada (score: 0.2345)
 ```
 
 ### ⏰ **FRECUENCIAS DE EJECUCIÓN**
