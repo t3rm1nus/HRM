@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import ccxt.async_support as ccxt
+from typing import Dict, List, Optional, Any
 from core.logging import logger
 try:
     from comms.config import config

@@ -292,7 +292,7 @@ def get_finrl_signal(finrl_processor, market_data):
 **Funciones implementadas:**
 - ✅ **Regime Detection** con ensemble ML (Optuna)
 - ✅ **Portfolio Optimization** usando Black-Litterman
-- ✅ **Sentiment Analysis** con BERT pre-entrenado
+- ✅ **Sentiment Analysis** con BERT pre-entrenado (Reddit + News API)
 - ✅ **Volatility Forecasting** con GARCH y LSTM
 - ✅ **Strategic Decision Making** con pipeline completo
 
@@ -364,38 +364,29 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 | **Determinismo** | Una orden por señal → si falla → rechazo y reporte |
 | **Separación L2/L3 ≠ L1** | Responsabilidades claramente separadas |
 
-🏗️ 5️⃣ Arquitectura (ASCII actualizada)
-┌─────────────▼───────────────────────────┐
-│           NIVEL ESTRATÉGICO (L3)       │
-│  ┌─────────────┐  ┌─────────────────┐   │
-│  │ Macro       │  │ Portfolio       │   │
-│  │ Analysis    │  │ Management      │   │
-│  └─────────────┘  └─────────────────┘   │
-│  ┌─────────────┐  ┌─────────────────┐   │
-│  │ Sentiment   │  │ Risk Appetite   │   │
-│  │ Analysis    │  │ Calculator      │   │
-│  └─────────────┘  └─────────────────┘   │
-│  ⚡ Ejecuta periódicamente (10 min)      │
-│  ⚡ Fallback automático si L3 falla      │
-└─────────────┬───────────────────────────┘
-              │ Decisiones Estratégicas → L2
-┌─────────────▼───────────────────────────┐
-│            NIVEL TÁCTICO (L2)           │
-│  ┌──────────┐ ┌──────────┐ ┌─────────┐  │
-│  │Technical │ │Pattern   │ │Risk     │  │
-│  │Analysis  │ │Recognition│ │Control  │  │
-│  └──────────┘ └──────────┘ └─────────┘  │
-│  ⚡ Loop principal cada 10 segundos      │
-│  ⚡ Genera señales tácticas basadas en L3│
-└─────────────┬───────────────────────────┘
-              │ Señales de Trading → L1
-┌─────────────▼────────────── Nivel Operacional (L1) ───────────────┐
-│ Hard-coded Safety Layer + Order Manager (determinista)             │
-│ AI Models (LogReg, RF, LightGBM) + Multiasset Execution           │
-│ Executor determinista → Exchange (Binance real o testnet)         │
-│ ⚡ Recibe señales L2 y valida límites de riesgo                    │
-│ ⚡ Ejecuta órdenes pre-validadas, mantiene trazabilidad completa   │
-└───────────────────────────────────────────────────────────────────┘
+## 🏗️ Arquitectura del Sistema HRM
+
+### 📊 Flujo Jerárquico de Decisiones
+
+```
+🌐 NIVEL 3 (ESTRATÉGICO) - Análisis Macro (cada 10 min)
+├── 📊 Análisis de Mercado (Regime Detection)
+├── 💬 Análisis de Sentimiento (BERT + Redes Sociales)
+├── 📈 Pronóstico de Volatilidad (GARCH + LSTM)
+└── 🎯 Optimización de Portfolio (Black-Litterman)
+    ↓
+🎯 NIVEL 2 (TÁCTICO) - Generación de Señales (cada 10 seg)
+├── 🤖 Modelos FinRL (DeepSeek, Gemini, Claude, Kimi)
+├── 📊 Análisis Técnico Multi-Timeframe
+├── 🎲 Ensemble de Señales con Ponderación Dinámica
+└── 🛡️ Controles de Riesgo Pre-Ejecución
+    ↓
+⚡ NIVEL 1 (OPERACIONAL) - Ejecución Determinista
+├── 🔍 Validación de Señales con Modelos IA
+├── 💰 Gestión Automática de Portfolio
+├── 🔗 Conexión Binance (Live/Testnet)
+└── 📝 Logging Persistente y Métricas
+```
 
 
 

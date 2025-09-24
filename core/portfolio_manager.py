@@ -506,7 +506,8 @@ class PortfolioManager:
         elif self.mode == "testnet":
             # Testnet: intentar sincronizar pero con precaución
             try:
-                self.portfolio = self._sync_with_exchange()
+                import asyncio
+                self.portfolio = asyncio.run(self._sync_with_exchange_async())
                 logger.info("🧪 Portfolio testnet sincronizado")
             except Exception as e:
                 logger.warning(f"⚠️ Error sincronizando testnet: {e}, usando balance inicial")
@@ -522,7 +523,8 @@ class PortfolioManager:
         elif self.mode == "live":
             # Live: sincronizar con exchange real
             try:
-                self.portfolio = self._sync_with_exchange()
+                import asyncio
+                self.portfolio = asyncio.run(self._sync_with_exchange_async())
                 logger.info("🔴 Portfolio live sincronizado con exchange real")
             except Exception as e:
                 logger.error(f"❌ Error sincronizando live: {e}")
@@ -536,8 +538,8 @@ class PortfolioManager:
                     'total_fees': 0.0
                 }
 
-    def _sync_with_exchange(self):
-        """Sincroniza el portfolio con el exchange real"""
+    async def _sync_with_exchange_async(self):
+        """Sincroniza el portfolio con el exchange real (versión async)"""
         try:
             if not hasattr(self.client, 'get_account_balances'):
                 logger.warning("⚠️ Cliente no tiene método get_account_balances, usando balance inicial")
@@ -552,7 +554,7 @@ class PortfolioManager:
                 }
 
             # Obtener balances reales del exchange
-            balances = self.client.get_account_balances()
+            balances = await self.client.get_account_balances()
 
             # Convertir a estructura interna
             portfolio = {

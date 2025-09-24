@@ -33,6 +33,7 @@ from l1_operational.order_manager import OrderManager
 from l1_operational.binance_client import BinanceClient
 from l1_operational.realtime_loader import RealTimeDataLoader
 from l3_strategy.l3_processor import generate_l3_output, cleanup_models
+from l3_strategy.sentiment_inference import download_reddit, download_news, infer_sentiment
 from l1_operational.bus_adapter import BusAdapterAsync
 
 from comms.config import config
@@ -153,9 +154,49 @@ async def main():
         if missing_symbols:
             logger.warning(f"⚠️ Missing data for symbols: {missing_symbols}")
 
+        # Sentiment analysis state and function
+        sentiment_texts_cache = []
+        last_sentiment_update = 0
+        SENTIMENT_UPDATE_INTERVAL = 50  # Update sentiment every 50 cycles (~8-9 minutes)
+
+        async def update_sentiment_texts():
+            """Update sentiment texts from Reddit and News API"""
+            try:
+                logger.info("🔄 Updating sentiment data from social media...")
+
+                # Download Reddit data
+                reddit_df = await download_reddit(limit=500)  # Reduced limit for performance
+                reddit_texts = []
+                if not reddit_df.empty:
+                    reddit_texts = reddit_df['text'].dropna().tolist()[:100]  # Limit to 100 texts
+                    logger.info(f"📱 Downloaded {len(reddit_texts)} Reddit posts")
+
+                # Download News data
+                news_df = download_news()
+                news_texts = []
+                if not news_df.empty:
+                    news_texts = news_df['text'].dropna().tolist()[:50]  # Limit to 50 texts
+                    logger.info(f"📰 Downloaded {len(news_texts)} news articles")
+
+                # Combine and limit total texts
+                all_texts = reddit_texts + news_texts
+                if len(all_texts) > 100:  # Limit total to 100 texts for performance
+                    all_texts = all_texts[:100]
+
+                logger.info(f"💬 Sentiment analysis ready with {len(all_texts)} texts")
+                return all_texts
+
+            except Exception as e:
+                logger.error(f"❌ Error updating sentiment texts: {e}")
+                return []
+
         # Initialize L3 now that we have market data
         try:
-            l3_output = generate_l3_output(state)  # Generate initial L3 output with market data
+            # Get initial sentiment data for L3
+            initial_sentiment_texts = await update_sentiment_texts()
+            sentiment_texts_cache = initial_sentiment_texts
+
+            l3_output = generate_l3_output(state, texts_for_sentiment=initial_sentiment_texts)  # Generate initial L3 output with market data and sentiment
             state["l3_output"] = l3_output  # Store L3 output in state for L2 access
 
             # CRITICAL FIX: Initial sync of L3 output with L3 context cache
@@ -167,7 +208,7 @@ async def main():
                 state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
                 logger.debug("✅ Initial L3 context cache synced")
 
-            logger.info("✅ L3 initialized successfully with market data")
+            logger.info("✅ L3 initialized successfully with market data and sentiment analysis")
         except Exception as e:
             logger.error(f"❌ Error initializing L3: {e}", exc_info=True)
 
@@ -177,7 +218,7 @@ async def main():
         logger.info(f"   ETH Position: {portfolio_manager.get_balance('ETHUSDT'):.3f}")
         logger.info(f"   USDT Balance: {portfolio_manager.get_balance('USDT'):.2f}")
         logger.info(f"   Total Value: {portfolio_manager.get_total_value():.2f}")
-        
+
         # Main loop
         cycle_id = 0
         while True:
@@ -279,7 +320,17 @@ async def main():
                 
                 # 2. Update L3 state and process signals
                 try:
-                    l3_output = generate_l3_output(state)  # Update L3 output
+                    # Update sentiment data periodically (every 50 cycles ~8-9 minutes)
+                    if cycle_id - last_sentiment_update >= SENTIMENT_UPDATE_INTERVAL:
+                        logger.info(f"🔄 Updating sentiment data (cycle {cycle_id})")
+                        sentiment_texts_cache = await update_sentiment_texts()
+                        last_sentiment_update = cycle_id
+                        logger.info(f"💬 Sentiment cache updated with {len(sentiment_texts_cache)} texts")
+
+                    # Use cached sentiment texts for L3 processing
+                    current_sentiment_texts = sentiment_texts_cache if sentiment_texts_cache else []
+
+                    l3_output = generate_l3_output(state, texts_for_sentiment=current_sentiment_texts)  # Update L3 output with sentiment
                     state["l3_output"] = l3_output  # Store updated L3 output in state
 
                     # CRITICAL FIX: Sync L3 output with L3 context cache for L2 processor
