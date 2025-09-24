@@ -7,6 +7,7 @@ HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC
 ## ✅ SISTEMA OPERATIVO - FUNCIONALIDAD REAL
 **🚀 El sistema HRM está completamente operativo y ejecutándose en producción:**
 - ✅ **Conexión real a Binance Spot** (modo LIVE y TESTNET)
+- ✅ **Modo simulado con 3000 USDT** para testing seguro
 - ✅ **Generación de señales cada 10 segundos** con indicadores técnicos
 - ✅ **Modelos IA integrados** (FinRL + análisis técnico)
 - ✅ **Gestión de portfolio automática** con tracking en CSV
@@ -16,6 +17,7 @@ HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC
 - ✅ **Costos reales de trading** (comisiones 0.1% Binance)
 - ✅ **Monitoreo de posiciones** en tiempo real
 - ✅ **9 modelos AI operativos** (3 L1 + 1 L2 + 5 L3)
+- ✅ **Análisis de sentimiento en tiempo real** (Reddit + News API)
 
 ## 🛡️ SISTEMA DE PROTECCIÓN "HARDCORE" - PRODUCCIÓN ULTRA-SEGURO
 
@@ -310,16 +312,28 @@ def get_finrl_signal(finrl_processor, market_data):
 
 ### ⚡ **INICIO RÁPIDO**
 ```bash
-# 1) Configurar variables de entorno
+# 1) Configurar variables de entorno (opcional para modo simulado)
 export BINANCE_API_KEY=your_api_key
 export BINANCE_API_SECRET=your_secret_key
 export USE_TESTNET=true  # false para modo LIVE
 
-# 2) Ejecutar sistema principal
+# 2) Ejecutar sistema principal (modo simulado por defecto)
 python main.py
 
 # 3) Para ejecución nocturna continua
 python run_overnight.py
+```
+
+### 🎯 **MODO SIMULADO CON 3000 USDT (RECOMENDADO PARA TESTING)**
+```bash
+# Sin configuración adicional - funciona inmediatamente
+python main.py
+
+# El sistema inicia con:
+# - Balance inicial: 3000.0 USDT
+# - Portfolio completamente limpio
+# - Sin conexión a exchanges reales
+# - Todas las funcionalidades activas
 ```
 
 ### 📊 **FUNCIONAMIENTO EN TIEMPO REAL**
@@ -327,27 +341,56 @@ El sistema ejecuta un **ciclo principal cada 10 segundos**:
 
 1. **📈 Recolección de datos:** Obtiene OHLCV de Binance para BTC/ETH
 2. **🧮 Cálculo de indicadores:** RSI, MACD, Bollinger Bands, volatilidad
-3. **🤖 Procesamiento L2:** Genera señales con modelos FinRL + análisis técnico  
+3. **🤖 Procesamiento L2:** Genera señales con modelos FinRL + análisis técnico
 4. **🛡️ Cálculo SL/TP:** Stop-loss y take-profit dinámicos por señal
 5. **⚙️ Procesamiento L1:** Valida señales y ejecuta órdenes seguras
 6. **💰 Actualización portfolio:** Tracking automático con costos reales
 7. **🔍 Monitoreo posiciones:** Activación automática de SL/TP
 8. **📝 Logging persistente:** Guarda métricas en data/logs/ y data/portfolio/
-- L2/L1 se ejecuta **cada 10 segundos** de forma independiente.
-- L3 se ejecuta **cada 10 minutos** en segundo plano.
-- Si L3 falla o se retrasa >30s, L2 sigue usando la última estrategia conocida (fallback).
+
+### 🔄 **ANÁLISIS DE SENTIMIENTO EN TIEMPO REAL**
+**Cada 50 ciclos (~8-9 minutos):**
+```
+🔄 SENTIMENT: Actualización periódica iniciada (ciclo 50, cada 50 ciclos)
+🔄 SENTIMENT: Iniciando actualización de datos de sentimiento...
+📱 SENTIMENT: Descargando datos de Reddit...
+📱 SENTIMENT: r/CryptoCurrency - Descargados 500 posts
+📱 SENTIMENT: r/Bitcoin - Descargados 500 posts
+📱 SENTIMENT: r/Ethereum - Descargados 500 posts
+📊 SENTIMENT: Reddit total descargado: 1500 posts de 3 subreddits
+📰 SENTIMENT: News - 50 artículos descargados y procesados
+💬 SENTIMENT: Análisis de sentimiento listo con 95 textos válidos
+💬 SENTIMENT: Cache actualizado con 95 textos para análisis L3
+```
+
+**Cada ciclo L3:**
+```
+🧠 SENTIMENT: Iniciando inferencia de sentimiento - 95 textos, batch_size=16
+📊 SENTIMENT: Procesando 6 batches de inferencia...
+✅ SENTIMENT: Completado batch 6/6 (100.0%)
+🎯 SENTIMENT: Inferencia completada - 95 resultados generados
+✅ Sentimiento calculado: 0.2345 (device: cpu, textos: 95)
+```
+
+### ⏰ **FRECUENCIAS DE EJECUCIÓN**
+- **L2/L1:** Cada 10 segundos (independiente)
+- **L3:** Cada 50 ciclos (~8-9 minutos) en segundo plano
+- **Sentiment Analysis:** Cada 50 ciclos (descarga fresca de datos)
+- **Si L3 falla:** L2 usa última estrategia conocida (fallback automático)
 
 ### **VENTAJAS DEL FALLBACK**
-- L2/L1 nunca se bloquea si L3 falla.
-- Última estrategia válida de L3 se mantiene.
-- Logs centralizados registran errores y warnings.
+- L2/L1 nunca se bloquea si L3 falla
+- Última estrategia válida de L3 se mantiene
+- Logs centralizados registran errores y warnings
+- Sentiment analysis continúa con datos en cache
 
 ### 🎛️ **MODOS DE OPERACIÓN**
-| Modo | Descripción | Activación |
-|------|-------------|------------|
-| **TESTNET** | Binance testnet (recomendado) | `USE_TESTNET=true` |
-| **LIVE** | Binance Spot real | `USE_TESTNET=false` |
-| **PAPER** | Simulación local | Configuración interna |
+| Modo | Descripción | Activación | Balance Inicial |
+|------|-------------|------------|----------------|
+| **SIMULATED** | Simulación completa sin exchange | Automático | 3000 USDT |
+| **TESTNET** | Binance testnet | `USE_TESTNET=true` | Desde exchange |
+| **LIVE** | Binance Spot real | `USE_TESTNET=false` | Desde exchange |
+| **PAPER** | Simulación local | Configuración interna | Configurable |
 
 ## ✅ **BUENAS PRÁCTICAS DE RIESGO** (resumen actualizado)
 

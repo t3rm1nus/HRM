@@ -1223,7 +1223,10 @@ def cleanup_models():
         log.warning(f"Error durante limpieza de memoria: {e}")
 
 def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_models: dict = None):
-    log.info("Generando L3 output estratégico")
+    log.info("🎯 L3_PROCESSOR: Iniciando generación de output estratégico L3")
+    log.info(f"   📊 Estado recibido: market_data_keys={list(state.get('market_data', {}).keys()) if state.get('market_data') else 'None'}")
+    log.info(f"   💬 Textos para sentimiento: {len(texts_for_sentiment) if texts_for_sentiment else 0} textos")
+    log.info(f"   📦 Modelos pre-cargados: {bool(preloaded_models)}")
 
     # Define current_time early for use throughout the function
     current_time = datetime.utcnow()
@@ -1585,7 +1588,10 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
     log.info(f"   Cache Updated: {current_timestamp.isoformat()}")
 
     save_json(strategic_guidelines, OUTPUT_FILE)
-    log.info("L3 output generado correctamente")
+    log.info("🎉 L3_PROCESSOR: Output estratégico generado correctamente")
+    log.info(f"   📈 Resultado final: regime={regime}, risk_appetite={risk_appetite}, sentiment={sentiment_score:.4f}")
+    log.info(f"   💰 Asset allocation: {asset_allocation}")
+    log.info(f"   📊 Volatility: BTC={vol_btc:.4f}, ETH={vol_eth:.4f}")
 
     # Solo limpiar si no usamos modelos pre-cargados
     if not preloaded_models:

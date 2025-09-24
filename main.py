@@ -162,32 +162,48 @@ async def main():
         async def update_sentiment_texts():
             """Update sentiment texts from Reddit and News API"""
             try:
-                logger.info("🔄 Updating sentiment data from social media...")
+                logger.info("🔄 SENTIMENT: Iniciando actualización de datos de sentimiento...")
 
                 # Download Reddit data
+                logger.info("📱 SENTIMENT: Descargando datos de Reddit...")
                 reddit_df = await download_reddit(limit=500)  # Reduced limit for performance
                 reddit_texts = []
                 if not reddit_df.empty:
                     reddit_texts = reddit_df['text'].dropna().tolist()[:100]  # Limit to 100 texts
-                    logger.info(f"📱 Downloaded {len(reddit_texts)} Reddit posts")
+                    logger.info(f"📱 SENTIMENT: Reddit - {len(reddit_texts)} posts descargados y procesados")
+                else:
+                    logger.warning("⚠️ SENTIMENT: No se obtuvieron datos de Reddit")
 
                 # Download News data
+                logger.info("📰 SENTIMENT: Descargando datos de noticias...")
                 news_df = download_news()
                 news_texts = []
                 if not news_df.empty:
                     news_texts = news_df['text'].dropna().tolist()[:50]  # Limit to 50 texts
-                    logger.info(f"📰 Downloaded {len(news_texts)} news articles")
+                    logger.info(f"📰 SENTIMENT: News - {len(news_texts)} artículos descargados y procesados")
+                else:
+                    logger.warning("⚠️ SENTIMENT: No se obtuvieron datos de noticias")
 
                 # Combine and limit total texts
                 all_texts = reddit_texts + news_texts
+                original_count = len(all_texts)
+
                 if len(all_texts) > 100:  # Limit total to 100 texts for performance
                     all_texts = all_texts[:100]
+                    logger.info(f"✂️ SENTIMENT: Limitado de {original_count} a {len(all_texts)} textos para rendimiento")
 
-                logger.info(f"💬 Sentiment analysis ready with {len(all_texts)} texts")
-                return all_texts
+                # Filtrar textos vacíos
+                valid_texts = [t for t in all_texts if t and str(t).strip()]
+                if len(valid_texts) != len(all_texts):
+                    logger.info(f"🧹 SENTIMENT: Filtrados {len(all_texts) - len(valid_texts)} textos vacíos")
+
+                logger.info(f"💬 SENTIMENT: Análisis de sentimiento listo con {len(valid_texts)} textos válidos")
+                logger.info(f"   📊 Distribución: Reddit={len([t for t in valid_texts if t in reddit_texts[:100]])} | News={len([t for t in valid_texts if t in news_texts[:50]])}")
+
+                return valid_texts
 
             except Exception as e:
-                logger.error(f"❌ Error updating sentiment texts: {e}")
+                logger.error(f"❌ SENTIMENT: Error actualizando datos de sentimiento: {e}")
                 return []
 
         # Initialize L3 now that we have market data
@@ -322,10 +338,10 @@ async def main():
                 try:
                     # Update sentiment data periodically (every 50 cycles ~8-9 minutes)
                     if cycle_id - last_sentiment_update >= SENTIMENT_UPDATE_INTERVAL:
-                        logger.info(f"🔄 Updating sentiment data (cycle {cycle_id})")
+                        logger.info(f"🔄 SENTIMENT: Actualización periódica iniciada (ciclo {cycle_id}, cada {SENTIMENT_UPDATE_INTERVAL} ciclos)")
                         sentiment_texts_cache = await update_sentiment_texts()
                         last_sentiment_update = cycle_id
-                        logger.info(f"💬 Sentiment cache updated with {len(sentiment_texts_cache)} texts")
+                        logger.info(f"💬 SENTIMENT: Cache actualizado con {len(sentiment_texts_cache)} textos para análisis L3")
 
                     # Use cached sentiment texts for L3 processing
                     current_sentiment_texts = sentiment_texts_cache if sentiment_texts_cache else []

@@ -215,6 +215,7 @@ project_root/
 - ✅ **Sentiment Analysis** con BERT pre-entrenado para redes sociales
 - ✅ **Volatility Forecasting** con GARCH y LSTM para BTC/ETH
 - ✅ **Strategic Decision Making** con pipeline completo L3→L2→L1
+- ✅ **Logs detallados de sentiment analysis** en tiempo real
 
 **Modelos entrenados disponibles:**
 - `regime_detection_model_ensemble_optuna.pkl` - Ensemble Optuna para clasificación de régimen
@@ -223,11 +224,44 @@ project_root/
 - `portfolio/` - Matrices Black-Litterman (covarianzas y pesos óptimos)
 
 **Integración completa:**
-- ✅ L3 ejecuta cada 10 minutos con fallback automático
+- ✅ L3 ejecuta cada 50 ciclos (~8-9 minutos) con fallback automático
 - ✅ Proporciona directrices estratégicas a L2 en tiempo real
 - ✅ L2 genera señales usando contexto estratégico de L3
 - ✅ L1 ejecuta órdenes con validación de límites estratégicos
 - ✅ Sistema mantiene independencia entre niveles con recuperación automática
+
+### 📊 **LOGS DE SENTIMENT ANALYSIS EN TIEMPO REAL**
+
+**Cada 50 ciclos - Descarga de datos frescos:**
+```
+🔄 SENTIMENT: Actualización periódica iniciada (ciclo 50, cada 50 ciclos)
+🔄 SENTIMENT: Iniciando actualización de datos de sentimiento...
+📱 SENTIMENT: Descargando datos de Reddit...
+📱 SENTIMENT: r/CryptoCurrency - Descargados 500 posts
+📱 SENTIMENT: r/Bitcoin - Descargados 500 posts
+📱 SENTIMENT: r/Ethereum - Descargados 500 posts
+📊 SENTIMENT: Reddit total descargado: 1500 posts de 3 subreddits
+📰 SENTIMENT: News - 50 artículos descargados y procesados
+💬 SENTIMENT: Análisis de sentimiento listo con 95 textos válidos
+💬 SENTIMENT: Cache actualizado con 95 textos para análisis L3
+```
+
+**Cada ciclo L3 - Procesamiento con BERT:**
+```
+🧠 SENTIMENT: Iniciando inferencia de sentimiento - 95 textos, batch_size=16
+📊 SENTIMENT: Procesando 6 batches de inferencia...
+✅ SENTIMENT: Completado batch 6/6 (100.0%)
+🎯 SENTIMENT: Inferencia completada - 95 resultados generados
+✅ Sentimiento calculado: 0.2345 (device: cpu, textos: 95)
+```
+
+**Resultado final L3:**
+```
+🎉 L3_PROCESSOR: Output estratégico generado correctamente
+   📈 Resultado final: regime=range, risk_appetite=moderate, sentiment=0.2345
+   💰 Asset allocation: {'BTC': 0.4, 'ETH': 0.3, 'CASH': 0.3}
+   📊 Volatility: BTC=0.024, ETH=0.031
+```
 
 ## 🎉 Conclusión
 
