@@ -21,6 +21,9 @@ from core.portfolio_manager import update_portfolio_from_orders, save_portfolio_
 from core.technical_indicators import calculate_technical_indicators
 from core.feature_engineering import integrate_features_with_l2, debug_l2_features
 from core.logging import logger
+from core.config import get_config
+from core.incremental_signal_verifier import get_signal_verifier, start_signal_verification, stop_signal_verification
+from core.trading_metrics import get_trading_metrics
 
 from l1_operational.data_feed import DataFeed
 from l2_tactic.signal_generator import L2TacticProcessor
@@ -49,35 +52,68 @@ async def main():
         bus_adapter = BusAdapterAsync(config, state)
         binance_client = BinanceClient()
         
+        # Get environment configuration
+        env_config = get_config("live")  # Use "live" mode for now
+
+        # FOR TESTING: Override initial balance to 3000.0 for validation
+        test_initial_balance = 3000.0
+        logger.info(f"🧪 TESTING MODE: Using initial balance of {test_initial_balance} USDT (overriding config)")
+
+        # Initialize Portfolio Manager for persistence with new config system
+        portfolio_manager = PortfolioManager(
+            mode="live",
+            initial_balance=test_initial_balance,  # Use test balance instead of config
+            client=binance_client,
+            symbols=env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"]),
+            enable_commissions=env_config.get("ENABLE_COMMISSIONS", True),
+            enable_slippage=env_config.get("ENABLE_SLIPPAGE", True)
+        )
+
         # Initialize L1 Models
         from l1_operational.trend_ai import models as l1_models
         logger.info(f"✅ Loaded L1 AI Models: {list(l1_models.keys())}")
-        
+
         # Initialize L2
         try:
             l2_config = L2Config()
-            l2_processor = L2TacticProcessor(l2_config)
+            l2_processor = L2TacticProcessor(l2_config, portfolio_manager=portfolio_manager)
             risk_manager = RiskControlManager(l2_config)
             logger.info("✅ L2 components initialized successfully")
         except Exception as e:
             logger.error(f"❌ Error initializing L2 components: {e}", exc_info=True)
             raise
-        
-        # Initialize Portfolio Manager for persistence
-        portfolio_manager = PortfolioManager(
-            mode="live",  # Use live mode for production with persistence
-            initial_balance=3000.0,
-            client=binance_client,
-            symbols=config["SYMBOLS"]
-        )
 
-        # FORCE FRESH START - Always reset to initial balance for testing/development
-        logger.info("🔄 FORCED FRESH START - Resetting portfolio to initial state")
-        portfolio_manager.force_clean_reset()
+        # Initialize incremental signal verifier (don't start loop yet)
+        signal_verifier = get_signal_verifier()
+
+        # Initialize trading metrics for performance monitoring
+        trading_metrics = get_trading_metrics()
+
+        # CRÍTICO: SINCRONIZACIÓN CON EXCHANGE PARA MODO PRODUCCIÓN
+        logger.info("🔄 Sincronizando con estado real de Binance...")
+        sync_success = await portfolio_manager.sync_with_exchange()
+
+        if sync_success:
+            logger.info("✅ Portfolio sincronizado con exchange real")
+            logger.info(f"   Estado actual: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
+        else:
+            # Fallback: cargar desde JSON local
+            logger.warning("⚠️ Falló sincronización con exchange, cargando estado local...")
+            loaded = portfolio_manager.load_from_json()
+
+            if not loaded:
+                logger.info("📄 No saved portfolio found, starting with clean state")
+            else:
+                logger.info(f"📂 Portfolio local cargado: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
+
+                # FOR TESTING: Force clean reset to start with initial balance
+                logger.info("🧪 TESTING MODE: Forcing clean portfolio reset for validation")
+                portfolio_manager.force_clean_reset()
+                logger.info("✅ Portfolio reset to clean state for testing")
+
         state["portfolio"] = portfolio_manager.get_portfolio_state()
         state["peak_value"] = portfolio_manager.peak_value
         state["total_fees"] = portfolio_manager.total_fees
-        logger.info(f"📂 Fresh portfolio initialized: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
 
         # Initialize L3 (will be called after market data is loaded)
 
@@ -184,20 +220,26 @@ async def main():
                         return False, f"No valid data. Errors: {errors}"
                 
                 # Get and validate realtime data with type checking
+                logger.info("🔄 Attempting to get realtime market data...")
                 market_data = await loader.get_realtime_data()
+                logger.info(f"📊 Realtime data result: type={type(market_data)}, keys={list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
+
                 if not isinstance(market_data, dict):
                     logger.error(f"❌ Invalid market_data type from realtime_data: {type(market_data)}")
                     market_data = {}
-                    
+
                 is_valid, validation_msg = validate_market_data_structure(market_data)
-                
+
                 if not is_valid:
                     logger.warning(f"⚠️ Failed to get realtime data: {validation_msg}, falling back to data feed")
+                    logger.info("🔄 Falling back to data_feed.get_market_data()...")
                     market_data = await data_feed.get_market_data()
+                    logger.info(f"📊 Data feed result: type={type(market_data)}, keys={list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
+
                     if not isinstance(market_data, dict):
                         logger.error(f"❌ Invalid market_data type from data_feed: {type(market_data)}")
                         market_data = {}
-                        
+
                     is_valid, validation_msg = validate_market_data_structure(market_data)
                 
                 if is_valid:
@@ -260,11 +302,21 @@ async def main():
                 try:
                     signals = await l2_processor.process_signals(state)
                     valid_signals = [s for s in signals if isinstance(s, TacticalSignal)]
+
+                    # Submit signals for incremental verification
+                    for signal in valid_signals:
+                        try:
+                            await signal_verifier.submit_signal_for_verification(
+                                signal, state.get("market_data", {})
+                            )
+                        except Exception as verify_error:
+                            logger.warning(f"⚠️ Failed to submit signal for verification: {verify_error}")
+
                 except Exception as e:
                     logger.error(f"❌ L2 Error: {e}", exc_info=True)
                     valid_signals = []
-                
-                # 3. Generate and execute orders  
+
+                # 3. Generate and execute orders
                 orders = await order_manager.generate_orders(state, valid_signals)
                 processed_orders = await order_manager.execute_orders(orders)
                 
@@ -308,17 +360,46 @@ async def main():
                 else:
                     state["eth_value"] = 0.0
 
+                # Update trading metrics with executed orders and portfolio value
+                trading_metrics.update_from_orders(processed_orders, total_value)
+
                 # Save portfolio state periodically (every 5 cycles or when significant changes)
                 if cycle_id % 5 == 0:
                     portfolio_manager.save_to_json()
 
-                # CRITICAL DEBUG: Log portfolio state after update
+                # CRITICAL DEBUG: Log portfolio state after update with enhanced formatting
                 portfolio_after = state.get("portfolio", {})
-                logger.info("🔄 PORTFOLIO AFTER UPDATE:")
-                logger.info(f"   BTC Position: {portfolio_after.get('BTCUSDT', {}).get('position', 0.0):.6f}")
-                logger.info(f"   ETH Position: {portfolio_after.get('ETHUSDT', {}).get('position', 0.0):.6f}")
-                logger.info(f"   USDT Balance: {portfolio_after.get('USDT', {}).get('free', 0.0):.2f}")
-                logger.info(f"   Total Value: {state.get('total_value', 0.0):.2f}")
+                btc_balance = portfolio_after.get('BTCUSDT', {}).get('position', 0.0)
+                eth_balance = portfolio_after.get('ETHUSDT', {}).get('position', 0.0)
+                usdt_balance = portfolio_after.get('USDT', {}).get('free', 0.0)
+                total_value = state.get('total_value', 0.0)
+
+                # Enhanced visual logging with color coding and borders
+                if total_value > 3000.0:
+                    # Green for profit
+                    logger.info(f"")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"\x1b[32m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"")
+                elif total_value < 3000.0:
+                    # Red for loss
+                    logger.info(f"")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"\x1b[31m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"")
+                else:
+                    # Blue for equal
+                    logger.info(f"")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"\x1b[34m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
+                    logger.info(f"********************************************************************************************")
+                    logger.info(f"")
+
+                # Log periodic trading metrics report
+                if cycle_id % 10 == 0:  # Every 10 cycles
+                    trading_metrics.log_periodic_report()
 
                 # Log cycle stats
                 valid_orders = [o for o in processed_orders if o.get("status") != "rejected"]
@@ -651,6 +732,12 @@ async def main():
             logger.error(f"❌ Error saving final portfolio state: {save_error}")
     finally:
         # Cleanup
+        try:
+            await stop_signal_verification()
+            logger.info("🛑 Signal verification stopped")
+        except Exception as verify_cleanup_error:
+            logger.warning(f"⚠️ Error stopping signal verification: {verify_cleanup_error}")
+
         for component in [loader, data_feed, bus_adapter, binance_client]:
             if hasattr(component, "close"):
                 await component.close()

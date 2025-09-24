@@ -144,7 +144,7 @@ class FinRLProcessorWrapper:
 
     def _action_to_signal(self, action, symbol: str):
         """
-        Convierte acción del modelo a señal táctica con thresholds EXTREMOS para asegurar detección
+        Convierte acción del modelo a señal táctica con lógica simplificada
         """
         try:
             # Handle tensor inputs
@@ -156,48 +156,42 @@ class FinRLProcessorWrapper:
             else:
                 action_val = safe_float(action)
 
-            # FORCE EXTREME ACTIONS - Make signals much more pronounced
-            if action_val > 0.01:
-                action_val = 0.95  # Force to near-maximum positive
-            elif action_val < -0.01:
-                action_val = 0.05  # Force to near-maximum negative (inverted for sell)
-            else:
-                # For neutral actions, alternate between extreme buy/sell
-                action_val = 0.95 if hash(symbol + str(pd.Timestamp.now().second)) % 2 == 0 else 0.05
+            # Normalize action to 0-1 range if needed
+            if action_val < 0:
+                action_val = 0.0
+            elif action_val > 1:
+                action_val = 1.0
 
-            # Clamp to valid range
-            action_val = max(0.0, min(1.0, action_val))
-
-            # EXTREME THRESHOLDS - Very aggressive to ensure signal detection
-            sell_threshold = 0.3  # Lower threshold for sell
-            buy_threshold = 0.7   # Higher threshold for buy
-            min_confidence = 0.8  # Much higher minimum confidence
-
-            if action_val <= sell_threshold:
+            # Simple thresholds for signal generation
+            if action_val < 0.4:
                 side = "sell"
-                confidence = 0.95  # Very high confidence for clear signals
-                strength = 0.95
-            elif action_val >= buy_threshold:
+                confidence = 0.6 + (0.4 - action_val) * 0.5  # Higher confidence for stronger signals
+                strength = 0.5 + (0.4 - action_val) * 0.5
+            elif action_val > 0.6:
                 side = "buy"
-                confidence = 0.95  # Very high confidence for clear signals
-                strength = 0.95
+                confidence = 0.6 + (action_val - 0.6) * 0.5  # Higher confidence for stronger signals
+                strength = 0.5 + (action_val - 0.6) * 0.5
             else:
-                # This should rarely happen with forced extreme actions
+                # Neutral zone - hold
                 side = "hold"
                 confidence = 0.5
-                strength = 0.5
+                strength = 0.3
 
-            logger.debug(f"🔥 EXTREME SIGNAL: {symbol} {side} (action={action_val:.3f}, conf={confidence:.3f}, strength={strength:.3f})")
+            # Ensure reasonable bounds
+            confidence = max(0.3, min(0.9, confidence))
+            strength = max(0.2, min(0.9, strength))
+
+            logger.debug(f"📊 FinRL Signal: {symbol} {side} (action={action_val:.3f}, conf={confidence:.3f}, strength={strength:.3f})")
 
             return TacticalSignal(
                 symbol=symbol,
                 side=side,
                 strength=strength,
                 confidence=confidence,
-                signal_type='finrl_extreme',
+                signal_type='finrl_standard',
                 source='finrl',
                 timestamp=pd.Timestamp.utcnow(),
-                features={'model': self.model_name, 'action_value': action_val, 'forced_extreme': True}
+                features={'model': self.model_name, 'action_value': action_val}
             )
 
         except Exception as e:
@@ -205,8 +199,8 @@ class FinRLProcessorWrapper:
             return TacticalSignal(
                 symbol=symbol,
                 side="hold",
-                strength=0.1,
-                confidence=0.1,
+                strength=0.3,
+                confidence=0.4,
                 signal_type="finrl_fallback",
                 source="finrl",
                 timestamp=pd.Timestamp.utcnow(),

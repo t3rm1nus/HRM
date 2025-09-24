@@ -140,9 +140,9 @@ class SignalComposer:
         self.w_pattern = getattr(config, "pattern_weight", config_defaults["pattern_weight"])
 
         # ✅ FIXED: Use correct attribute names from L2Config
-        # LOWER THRESHOLDS TO ALLOW WRAPPER SIGNALS THROUGH
-        self.min_conf = getattr(config, "min_signal_confidence", 0.1)  # Lower from 0.25 to 0.1
-        self.min_strength = getattr(config, "min_signal_strength", 0.01)  # Lower from 0.05 to 0.01
+        # FURTHER LOWER THRESHOLDS TO ALLOW MORE SIGNALS THROUGH
+        self.min_conf = getattr(config, "min_signal_confidence", 0.05)  # Lower from 0.1 to 0.05
+        self.min_strength = getattr(config, "min_signal_strength", 0.005)  # Lower from 0.01 to 0.005
 
         # ✅ FIXED: Use proper attribute access for SignalConfig dataclass
         self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", config_defaults["conflict_tie_threshold"])

@@ -186,6 +186,118 @@ class BinanceClient:
             logger.error(f"❌ Error obteniendo klines para {symbol}: {str(e)}", exc_info=True)
             return []
 
+    async def get_account_balances(self) -> Dict[str, float]:
+        """
+        Obtiene los balances reales de la cuenta de Binance.
+        CRÍTICO para sincronización en modo producción.
+        """
+        try:
+            if not hasattr(self, 'exchange') or self.exchange is None:
+                logger.error("❌ Exchange no inicializado")
+                return {}
+
+            # Obtener balances de la cuenta
+            account = await self.exchange.fetch_balance()
+
+            # Extraer balances no cero
+            balances = {}
+            if 'free' in account:
+                for asset, amount in account['free'].items():
+                    if amount > 0.00000001:  # Ignorar cantidades insignificantes
+                        balances[asset] = amount
+
+            if 'used' in account:
+                for asset, amount in account['used'].items():
+                    if amount > 0.00000001:
+                        # Agregar a balances existentes o crear nuevos
+                        if asset in balances:
+                            balances[asset] += amount
+                        else:
+                            balances[asset] = amount
+
+            logger.info(f"✅ Balances obtenidos de Binance: {len(balances)} activos")
+            for asset, amount in balances.items():
+                logger.debug(f"   {asset}: {amount}")
+
+            return balances
+
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo balances de Binance: {e}")
+            return {}
+
+    async def place_stop_loss_order(self, symbol: str, side: str, quantity: float,
+                                   stop_price: float, limit_price: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Coloca una orden STOP_LOSS en Binance.
+        CRÍTICO para protección de posiciones en modo producción.
+        """
+        try:
+            if self.config.get('USE_TESTNET', True):
+                logger.warning("🧪 MODO TESTNET: Stop-loss orders simulados (no se envían a exchange)")
+                return {
+                    'id': f'simulated_sl_{symbol}_{side}',
+                    'status': 'simulated',
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity,
+                    'stop_price': stop_price,
+                    'limit_price': limit_price
+                }
+
+            # Validar parámetros
+            if quantity <= 0:
+                raise ValueError(f"Cantidad inválida: {quantity}")
+            if stop_price <= 0:
+                raise ValueError(f"Precio stop inválido: {stop_price}")
+
+            # Preparar orden
+            order_params = {
+                'symbol': symbol,
+                'type': 'STOP_LOSS_LIMIT' if limit_price else 'STOP_LOSS',
+                'side': side.upper(),
+                'amount': quantity,
+                'params': {
+                    'stopPrice': stop_price
+                }
+            }
+
+            if limit_price:
+                order_params['price'] = limit_price
+
+            # Colocar orden
+            order = await self.exchange.create_order(**order_params)
+
+            logger.info(f"🛡️ STOP-LOSS colocado: {symbol} {side} {quantity} @ stop={stop_price}")
+            return order
+
+        except Exception as e:
+            logger.error(f"❌ Error colocando stop-loss {symbol}: {e}")
+            raise
+
+    async def cancel_order(self, symbol: str, order_id: str) -> bool:
+        """
+        Cancela una orden específica.
+        """
+        try:
+            await self.exchange.cancel_order(order_id, symbol)
+            logger.info(f"❌ Orden cancelada: {symbol} {order_id}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error cancelando orden {order_id}: {e}")
+            return False
+
+    async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
+        """
+        Obtiene órdenes abiertas.
+        """
+        try:
+            orders = await self.exchange.fetch_open_orders(symbol)
+            logger.debug(f"📋 Órdenes abiertas: {len(orders)}")
+            return orders
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo órdenes abiertas: {e}")
+            return []
+
     async def close(self):
         """
         Cierra la conexión.

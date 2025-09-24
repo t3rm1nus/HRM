@@ -411,37 +411,59 @@ async def save_portfolio_to_csv(state):
 
 class PortfolioManager:
     """
-    Clase principal para gestión del portfolio con modos duales:
-    - simulated: Para backtesting (arranca con portfolio limpio)
-    - live: Para runtime (sincroniza con exchange real)
+    Clase principal para gestión del portfolio con modos múltiples:
+    - live: Para runtime real (sincroniza con exchange real)
+    - testnet: Para testing con datos reales pero sin riesgo
+    - backtest: Para backtesting histórico (portfolio completamente limpio)
+    - simulated: Para simulación con comisiones y slippage
     """
 
     def __init__(self, mode: str = "live", initial_balance: float = 3000.0,
-                 client: Optional[Any] = None, symbols: list = None):
+                 client: Optional[Any] = None, symbols: list = None,
+                 enable_commissions: bool = True, enable_slippage: bool = True):
         """
         Inicializa el PortfolioManager
 
         Args:
-            mode: "live" -> sincroniza con exchange, "simulated" -> arranca limpio
-            initial_balance: Balance inicial para modo simulated
-            client: Cliente del exchange (BinanceClient) para modo live
+            mode: "live", "testnet", "backtest", "simulated"
+            initial_balance: Balance inicial
+            client: Cliente del exchange
             symbols: Lista de símbolos a manejar
+            enable_commissions: Habilitar comisiones de trading
+            enable_slippage: Habilitar slippage en órdenes
         """
         self.mode = mode
         self.initial_balance = initial_balance
         self.client = client
         self.symbols = symbols or ['BTCUSDT', 'ETHUSDT']
-        
-        # PROTECCIONES PARA MODO SIMULADO
-        if self.mode == "simulated":
+        self.enable_commissions = enable_commissions
+        self.enable_slippage = enable_slippage
+
+        # Configuración de comisiones y slippage por modo
+        self._configure_trading_costs()
+
+        # PROTECCIONES POR MODO
+        if self.mode in ["backtest", "simulated"]:
             # Deshabilitar completamente cualquier sincronización externa
             self.client = None  # Forzar None para evitar lecturas accidentales
             self.save_disabled = True  # Nunca guardar estado en modo simulado
             self.sync_disabled = True  # Nunca sincronizar con exchange
             self.persist_enabled = False  # No leer/escribir archivos de estado
-            self.state_file = "portfolio_state_backtest.json"  # Archivo separado para backtest
-            logger.info("🛡️ MODO SIMULADO: Protecciones activadas - Sin sincronización externa")
-            logger.info("📁 MODO SIMULADO: Usando archivo de estado separado - portfolio_state_backtest.json")
+            self.state_file = f"portfolio_state_{mode}.json"  # Archivo separado por modo
+            logger.info(f"🛡️ MODO {mode.upper()}: Protecciones activadas - Sin sincronización externa")
+            logger.info(f"📁 MODO {mode.upper()}: Usando archivo de estado separado - {self.state_file}")
+
+        elif self.mode == "testnet":
+            # Testnet: sincronización limitada, archivos separados
+            self.state_file = "portfolio_state_testnet.json"
+            self.persist_enabled = True
+            logger.info("🧪 MODO TESTNET: Archivos separados, sincronización limitada")
+
+        elif self.mode == "live":
+            # Live: sincronización completa, archivos de producción
+            self.state_file = "portfolio_state_live.json"
+            self.persist_enabled = True
+            logger.info("🔴 MODO LIVE: Sincronización completa con exchange real")
 
         # Estado del portfolio
         self.portfolio = {}
@@ -452,12 +474,13 @@ class PortfolioManager:
         self._init_portfolio()
 
         logger.info(f"✅ PortfolioManager inicializado en modo '{mode}' con balance inicial: {initial_balance}")
+        logger.info(f"   Comisiones: {'Habilitadas' if self.enable_commissions else 'Deshabilitadas'}")
+        logger.info(f"   Slippage: {'Habilitado' if self.enable_slippage else 'Deshabilitado'}")
 
     def _init_portfolio(self):
         """Inicializa el portfolio según el modo configurado"""
         if self.mode == "simulated":
-            # Portfolio COMPLETAMENTE limpio para backtesting/simulación
-            # Forzar limpieza total sin importar estado previo
+            # Portfolio COMPLETAMENTE limpio para simulación
             self.portfolio = {
                 'BTCUSDT': {'position': 0.0, 'free': 0.0},
                 'ETHUSDT': {'position': 0.0, 'free': 0.0},
@@ -466,18 +489,27 @@ class PortfolioManager:
                 'peak_value': self.initial_balance,
                 'total_fees': 0.0
             }
-            # Resetear también las variables de instancia
-            self.peak_value = self.initial_balance
-            self.total_fees = 0.0
-
             logger.info(f"🎯 Portfolio simulado LIMPIO inicializado: {self.initial_balance} USDT")
-            logger.info(f"   BTC: 0.000000, ETH: 0.000000, USDT: {self.initial_balance}")
 
-        elif self.mode == "live":
-            # Portfolio sincronizado con exchange real
-            if self.client is None:
-                logger.warning("⚠️ Cliente no proporcionado para modo live, inicializando con balance inicial")
-                # Initialize with initial balance for testing/development
+        elif self.mode == "backtest":
+            # Portfolio limpio para backtesting
+            self.portfolio = {
+                'BTCUSDT': {'position': 0.0, 'free': 0.0},
+                'ETHUSDT': {'position': 0.0, 'free': 0.0},
+                'USDT': {'free': self.initial_balance},
+                'total': self.initial_balance,
+                'peak_value': self.initial_balance,
+                'total_fees': 0.0
+            }
+            logger.info(f"📊 Portfolio backtest LIMPIO inicializado: {self.initial_balance} USDT")
+
+        elif self.mode == "testnet":
+            # Testnet: intentar sincronizar pero con precaución
+            try:
+                self.portfolio = self._sync_with_exchange()
+                logger.info("🧪 Portfolio testnet sincronizado")
+            except Exception as e:
+                logger.warning(f"⚠️ Error sincronizando testnet: {e}, usando balance inicial")
                 self.portfolio = {
                     'BTCUSDT': {'position': 0.0, 'free': 0.0},
                     'ETHUSDT': {'position': 0.0, 'free': 0.0},
@@ -486,32 +518,26 @@ class PortfolioManager:
                     'peak_value': self.initial_balance,
                     'total_fees': 0.0
                 }
-                self.peak_value = self.initial_balance
-                self.total_fees = 0.0
-                logger.info(f"🎯 Portfolio live inicializado con balance inicial: {self.initial_balance} USDT")
-            else:
+
+        elif self.mode == "live":
+            # Live: sincronizar con exchange real
+            try:
                 self.portfolio = self._sync_with_exchange()
-                logger.info("🔄 Portfolio sincronizado con exchange real")
+                logger.info("🔴 Portfolio live sincronizado con exchange real")
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando live: {e}")
+                logger.warning("⚠️ Usando balance inicial como fallback - REVISA CONEXIÓN!")
+                self.portfolio = {
+                    'BTCUSDT': {'position': 0.0, 'free': 0.0},
+                    'ETHUSDT': {'position': 0.0, 'free': 0.0},
+                    'USDT': {'free': self.initial_balance},
+                    'total': self.initial_balance,
+                    'peak_value': self.initial_balance,
+                    'total_fees': 0.0
+                }
 
-        else:
-            raise ValueError(f"Modo desconocido: {self.mode}. Use 'simulated' o 'live'")
-
-    def _get_empty_portfolio(self) -> Dict[str, Any]:
-        """Retorna un portfolio vacío"""
-        portfolio = {
-            'USDT': {'free': 0.0},
-            'total': 0.0,
-            'peak_value': 0.0,
-            'total_fees': 0.0
-        }
-        for symbol in self.symbols:
-            portfolio[symbol] = {'position': 0.0, 'free': 0.0}
-        return portfolio
-
-    def _sync_with_exchange(self) -> Dict[str, Any]:
-        """
-        Sincroniza el portfolio con el exchange real
-        """
+    def _sync_with_exchange(self):
+        """Sincroniza el portfolio con el exchange real"""
         try:
             if not hasattr(self.client, 'get_account_balances'):
                 logger.warning("⚠️ Cliente no tiene método get_account_balances, usando balance inicial")
@@ -568,6 +594,41 @@ class PortfolioManager:
                 'peak_value': self.initial_balance,
                 'total_fees': 0.0
             }
+
+    def _configure_trading_costs(self):
+        """Configura comisiones y slippage según el modo"""
+        if self.mode == "live":
+            # Comisiones reales de Binance
+            self.maker_fee = 0.001  # 0.1%
+            self.taker_fee = 0.001  # 0.1%
+            self.slippage_bps = 2  # 2 basis points (0.02%)
+        elif self.mode == "testnet":
+            # Comisiones de testnet (más altas para testing)
+            self.maker_fee = 0.0015  # 0.15%
+            self.taker_fee = 0.0015  # 0.15%
+            self.slippage_bps = 5  # 5 basis points (0.05%)
+        elif self.mode == "backtest":
+            # Backtest: comisiones históricas promedio
+            self.maker_fee = 0.0012  # 0.12%
+            self.taker_fee = 0.0012  # 0.12%
+            self.slippage_bps = 3  # 3 basis points (0.03%)
+        elif self.mode == "simulated":
+            # Simulación: comisiones más altas para testing conservador
+            self.maker_fee = 0.002  # 0.2%
+            self.taker_fee = 0.002  # 0.2%
+            self.slippage_bps = 10  # 10 basis points (0.1%)
+        else:
+            # Default
+            self.maker_fee = 0.001
+            self.taker_fee = 0.001
+            self.slippage_bps = 5
+
+        # Deshabilitar si se solicita
+        if not self.enable_commissions:
+            self.maker_fee = 0.0
+            self.taker_fee = 0.0
+        if not self.enable_slippage:
+            self.slippage_bps = 0
 
     def reset(self):
         """Resetea el portfolio según el modo actual"""
@@ -679,48 +740,52 @@ class PortfolioManager:
                     logger.warning(f"⚠️ Precio inválido para {symbol}: {price}, omitiendo orden")
                     continue
 
-                # Calcular costos de trading
-                order_value = quantity * price
+                # CRÍTICO: Usar valor absoluto de quantity para cálculos (el signo indica dirección)
+                abs_quantity = abs(quantity)
+
+                # Calcular costos de trading usando cantidad absoluta
+                order_value = abs_quantity * price
                 trading_fee_rate = 0.001  # 0.1% comisión
                 trading_fee = order_value * trading_fee_rate
-                total_cost = order_value + trading_fee
 
-                # Procesar órdenes
+                # Procesar órdenes según dirección (signo de quantity)
                 if symbol == "BTCUSDT":
                     if side.lower() == "buy":
+                        total_cost = order_value + trading_fee
                         if usdt_balance < total_cost:
                             logger.warning(f"⚠️ FONDOS INSUFICIENTES para comprar BTC: {usdt_balance:.6f} < {total_cost:.6f}")
                             continue
-                        btc_balance += quantity
+                        btc_balance += abs_quantity  # Siempre positivo para posiciones
                         usdt_balance -= total_cost
-                        logger.info(f"✅ BUY BTC: {quantity:.6f} @ {price:.2f}")
+                        logger.info(f"✅ BUY BTC: {abs_quantity:.6f} @ {price:.2f} (costo total: {total_cost:.4f})")
                     elif side.lower() == "sell":
-                        if btc_balance < quantity:
-                            logger.warning(f"⚠️ BTC INSUFICIENTE para vender: {btc_balance:.6f} < {quantity:.6f}")
+                        if btc_balance < abs_quantity:
+                            logger.warning(f"⚠️ BTC INSUFICIENTE para vender: {btc_balance:.6f} < {abs_quantity:.6f}")
                             continue
                         proceeds = order_value - trading_fee
-                        btc_balance -= quantity
-                        usdt_balance += proceeds
-                        logger.info(f"✅ SELL BTC: {quantity:.6f} @ {price:.2f}")
+                        btc_balance -= abs_quantity  # Reducir posición
+                        usdt_balance += proceeds  # Agregar proceeds
+                        logger.info(f"✅ SELL BTC: {abs_quantity:.6f} @ {price:.2f} (proceeds: {proceeds:.4f})")
 
                 elif symbol == "ETHUSDT":
                     if side.lower() == "buy":
+                        total_cost = order_value + trading_fee
                         if usdt_balance < total_cost:
                             logger.warning(f"⚠️ FONDOS INSUFICIENTES para comprar ETH: {usdt_balance:.6f} < {total_cost:.6f}")
                             continue
-                        eth_balance += quantity
+                        eth_balance += abs_quantity  # Siempre positivo para posiciones
                         usdt_balance -= total_cost
-                        logger.info(f"✅ BUY ETH: {quantity:.6f} @ {price:.2f}")
+                        logger.info(f"✅ BUY ETH: {abs_quantity:.6f} @ {price:.2f} (costo total: {total_cost:.4f})")
                     elif side.lower() == "sell":
-                        if eth_balance < quantity:
-                            logger.warning(f"⚠️ ETH INSUFICIENTE para vender: {eth_balance:.6f} < {quantity:.6f}")
+                        if eth_balance < abs_quantity:
+                            logger.warning(f"⚠️ ETH INSUFICIENTE para vender: {eth_balance:.6f} < {abs_quantity:.6f}")
                             continue
                         proceeds = order_value - trading_fee
-                        eth_balance -= quantity
-                        usdt_balance += proceeds
-                        logger.info(f"✅ SELL ETH: {quantity:.6f} @ {price:.2f}")
+                        eth_balance -= abs_quantity  # Reducir posición
+                        usdt_balance += proceeds  # Agregar proceeds
+                        logger.info(f"✅ SELL ETH: {abs_quantity:.6f} @ {price:.2f} (proceeds: {proceeds:.4f})")
 
-                # Acumular fees
+                # Acumular fees (siempre positivo)
                 self.total_fees += trading_fee
 
             # Validar balances finales
@@ -883,6 +948,91 @@ class PortfolioManager:
 
         except Exception as e:
             logger.error(f"❌ Error guardando portfolio en JSON: {e}")
+
+    async def sync_with_exchange(self):
+        """
+        CRÍTICO: Sincroniza el portfolio con el estado REAL de Binance.
+        Esto previene pérdidas catastróficas por desincronización.
+        """
+        try:
+            if not self.client:
+                logger.warning("⚠️ No hay cliente de exchange disponible para sincronización")
+                return False
+
+            if self.mode == "simulated":
+                logger.debug("🛡️ MODO SIMULADO: Saltando sincronización con exchange")
+                return False
+
+            logger.info("🔄 Sincronizando portfolio con estado real de Binance...")
+
+            # Obtener balances reales de Binance
+            exchange_balances = await self.client.get_account_balances()
+
+            if not exchange_balances:
+                logger.error("❌ No se pudieron obtener balances de Binance")
+                return False
+
+            # Convertir a estructura interna del portfolio
+            synced_portfolio = {
+                'USDT': {'free': exchange_balances.get('USDT', 0.0), 'position': exchange_balances.get('USDT', 0.0)},
+                'total': 0.0,
+                'peak_value': self.peak_value,  # Mantener peak value local
+                'total_fees': self.total_fees   # Mantener fees locales
+            }
+
+            total_value = exchange_balances.get('USDT', 0.0)
+
+            # Procesar otros activos
+            for symbol in self.symbols:
+                if symbol in exchange_balances:
+                    balance = exchange_balances[symbol]
+                    synced_portfolio[symbol] = {
+                        'position': balance,
+                        'free': balance
+                    }
+                    # Calcular valor aproximado (usando precios hardcoded por simplicidad)
+                    if symbol == "BTCUSDT":
+                        total_value += balance * 50000  # Precio aproximado
+                    elif symbol == "ETHUSDT":
+                        total_value += balance * 3000   # Precio aproximado
+
+            synced_portfolio['total'] = total_value
+
+            # CRÍTICO: Comparar con estado local para detectar discrepancias
+            local_btc = self.get_balance("BTCUSDT")
+            local_eth = self.get_balance("ETHUSDT")
+            local_usdt = self.get_balance("USDT")
+
+            exchange_btc = exchange_balances.get("BTCUSDT", 0.0)
+            exchange_eth = exchange_balances.get("ETHUSDT", 0.0)
+            exchange_usdt = exchange_balances.get("USDT", 0.0)
+
+            # Detectar discrepancias significativas
+            btc_diff = abs(local_btc - exchange_btc)
+            eth_diff = abs(local_eth - exchange_eth)
+            usdt_diff = abs(local_usdt - exchange_usdt)
+
+            if btc_diff > 0.0001 or eth_diff > 0.001 or usdt_diff > 1.0:
+                logger.warning("🚨 DESINCRONIZACIÓN DETECTADA entre estado local y exchange:")
+                logger.warning(f"   BTC: Local={local_btc:.6f}, Exchange={exchange_btc:.6f} (diff={btc_diff:.6f})")
+                logger.warning(f"   ETH: Local={local_eth:.3f}, Exchange={exchange_eth:.3f} (diff={eth_diff:.3f})")
+                logger.warning(f"   USDT: Local={local_usdt:.2f}, Exchange={exchange_usdt:.2f} (diff={usdt_diff:.2f})")
+                logger.warning("   ✅ SINCRONIZANDO con estado real de exchange")
+
+            # Aplicar estado sincronizado
+            self.portfolio = synced_portfolio
+            self.peak_value = max(self.peak_value, total_value)  # Actualizar peak value
+
+            logger.info("✅ Portfolio sincronizado con Binance:")
+            logger.info(f"   BTC: {exchange_btc:.6f}, ETH: {exchange_eth:.3f}, USDT: {exchange_usdt:.2f}")
+            logger.info(f"   Valor total: ${total_value:.2f}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error sincronizando con exchange: {e}")
+            logger.warning("⚠️ Continuando con estado local - RIESGO DE DESINCRONIZACIÓN")
+            return False
 
     def load_from_json(self):
         """Carga el estado del portfolio desde JSON para restaurar entre sesiones"""

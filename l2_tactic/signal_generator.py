@@ -25,6 +25,7 @@ class L2TacticProcessor:
     - Risk overlay (ajustes por contexto L3)
     - Fallback táctico cuando L3 está stale
     - Construcción de features cross-L3
+    - Position-aware signal generation (CRITICAL FIX)
     """
 
     # --- Dimensiones de features ---
@@ -33,9 +34,10 @@ class L2TacticProcessor:
     CROSS_FEATURES_DIM = 11
     PREFERRED_BASE_COLS: Optional[List[str]] = None
 
-    def __init__(self, config):
+    def __init__(self, config, portfolio_manager=None):
         """Inicializa el procesador táctico."""
         self.config = config
+        self.portfolio_manager = portfolio_manager  # CRITICAL: Add portfolio manager reference
         self.multi_timeframe = MultiTimeframeTechnical(config)
         self.risk_overlay = RiskOverlay(config)
 
@@ -191,6 +193,12 @@ class L2TacticProcessor:
                     logger.warning(f"⚠️ No se pudo generar señal combinada para {symbol}")
                     continue
 
+                # CRITICAL FIX: Apply position-aware validation
+                position_aware_signal = self._apply_position_aware_validation(combined_signal, symbol, state)
+                if not position_aware_signal:
+                    logger.warning(f"⚠️ Position-aware validation rejected signal for {symbol}")
+                    continue
+
                 # Evaluar contexto L3
                 l3_context = self._check_l3_context_freshness(state, symbol, df)
                 l3_context_cache = state.get("l3_context_cache", {})
@@ -205,6 +213,8 @@ class L2TacticProcessor:
                     if risk_signals:
                         combined_signal = self._apply_risk_adjustment(combined_signal, risk_signals, l3_output)
 
+                    # HOTFIX: Apply L3 position-aware filtering
+                    combined_signal = self._apply_l3_position_hotfix(combined_signal, symbol, state)
                     risk_filtered = combined_signal
 
                 elif l3_output and not l3_context['is_fresh']:
@@ -255,7 +265,7 @@ class L2TacticProcessor:
             logger.info(f"   Actually running: {l1_status['count']} L1 + 1 L2 + {l3_status['count']} L3 models")
             logger.info(f"   {l1_status['status']}")
             logger.info(f"   {l3_status['status']}")
-            logger.info("   🎯 System now has complete L1→L2→L3→L4 pipeline!")
+            logger.info("   🎯 System now has complete L1→L2→L3 pipeline!")
 
             # Check if we have the complete 9+ AI models
             total_models = l1_status['count'] + 1 + l3_status['count']  # L1 + L2 + L3
@@ -768,29 +778,68 @@ class L2TacticProcessor:
             return l2_signal  # Fallback a L2
 
     def _apply_risk_adjustment(self, finrl_signal, risk_signals: List, l3_context: Dict) -> Any:
-        """Aplicar ajustes de riesgo a la señal combinada"""
+        """Aplicar ajustes de riesgo a la señal combinada - FIXED LOGIC"""
         try:
+            if not risk_signals:
+                return finrl_signal
+
             risk_appetite = l3_context.get('risk_appetite', 0.5)
             regime = l3_context.get('regime', 'neutral')
-            high_risk = [s for s in risk_signals if getattr(s, 'severity', 'medium')=='high']
-            med_risk = [s for s in risk_signals if getattr(s, 'severity', 'medium')=='medium']
 
-            if high_risk and risk_appetite < 0.3:
-                logger.warning("High risk + conservative - canceling signal")
-                return None
-            if high_risk:
-                finrl_signal.strength *= 0.3
-                finrl_signal.confidence *= 0.5
-            elif med_risk:
-                if regime in ['volatile','bear']:
-                    finrl_signal.strength *= 0.6
+            # Check for critical risk signals
+            has_close_all = any(getattr(s, 'side', '') == 'close_all' for s in risk_signals)
+            has_reduce = any(getattr(s, 'side', '') == 'reduce' for s in risk_signals)
+
+            original_side = getattr(finrl_signal, 'side', 'hold')
+            original_confidence = getattr(finrl_signal, 'confidence', 0.5)
+
+            # CRITICAL RISK: Close all positions - convert any signal to HOLD
+            if has_close_all:
+                logger.warning(f"🚨 CRITICAL RISK: Converting {original_side} to HOLD due to close_all signal")
+                finrl_signal.side = 'hold'
+                finrl_signal.confidence = min(original_confidence, 0.3)  # Very low confidence
+                finrl_signal.strength = 0.1  # Very low strength
+                return finrl_signal
+
+            # HIGH RISK: Reduce positions - be more conservative
+            if has_reduce and risk_appetite < 0.4:
+                if original_side == 'buy':
+                    # Convert BUY to HOLD when reducing positions
+                    logger.warning(f"⚠️ RISK REDUCTION: Converting BUY to HOLD for {finrl_signal.symbol}")
+                    finrl_signal.side = 'hold'
                     finrl_signal.confidence *= 0.7
-                else:
-                    finrl_signal.strength *= 0.8
+                    finrl_signal.strength *= 0.5
+                elif original_side == 'sell':
+                    # Reduce SELL strength but keep signal
                     finrl_signal.confidence *= 0.8
+                    finrl_signal.strength *= 0.7
+                else:  # hold
+                    # Keep HOLD but reduce confidence slightly
+                    finrl_signal.confidence *= 0.9
 
-            logger.info(f"🎛️ Risk adjustment applied: strength={finrl_signal.strength:.2f}, confidence={finrl_signal.confidence:.2f}")
+            # REGIME-BASED ADJUSTMENTS (less aggressive - DISABLED to prevent inappropriate conversions)
+            # elif regime in ['volatile', 'bear']:
+            #     if original_side == 'buy':
+            #         # Reduce BUY confidence in volatile/bear markets
+            #         finrl_signal.confidence *= 0.85
+            #         finrl_signal.strength *= 0.9
+            #         logger.info(f"📉 Volatile/Bear regime: Reduced BUY confidence to {finrl_signal.confidence:.3f}")
+            #     elif original_side == 'sell':
+            #         # Slightly boost SELL in volatile/bear markets
+            #         finrl_signal.confidence *= 1.05
+            #         finrl_signal.strength *= 1.02
+            #         logger.info(f"📈 Volatile/Bear regime: Slightly boosted SELL confidence to {finrl_signal.confidence:.3f}")
+
+            # Ensure minimum confidence threshold
+            if finrl_signal.confidence < 0.2:
+                logger.warning(f"⚠️ Signal confidence too low ({finrl_signal.confidence:.3f}), converting to HOLD")
+                finrl_signal.side = 'hold'
+                finrl_signal.confidence = 0.5
+                finrl_signal.strength = 0.3
+
+            logger.info(f"🎛️ Risk adjustment applied: {original_side}→{finrl_signal.side} conf={finrl_signal.confidence:.3f} strength={finrl_signal.strength:.3f}")
             return finrl_signal
+
         except Exception as e:
             logger.error(f"Error applying risk adjustment: {e}")
             return finrl_signal
@@ -814,6 +863,119 @@ class L2TacticProcessor:
         except Exception as e:
             logger.error(f"Error checking L1 models status: {e}")
             return {'count': 0, 'status': '❌ MISSING: All 3 L1 operational models'}
+
+    def _apply_position_aware_validation(self, signal: TacticalSignal, symbol: str, state: Dict[str, Any]) -> Optional[TacticalSignal]:
+        """
+        CRITICAL FIX: Apply position-aware validation to prevent invalid signals
+        - No SELL signals without positions
+        - High confidence required for BUY with existing positions
+        """
+        try:
+            if not self.portfolio_manager:
+                logger.warning("⚠️ No portfolio manager available for position validation")
+                return signal
+
+            # Get current position for this symbol
+            current_position = 0.0
+            try:
+                if hasattr(self.portfolio_manager, 'get_position'):
+                    current_position = self.portfolio_manager.get_position(symbol) or 0.0
+                elif hasattr(self.portfolio_manager, 'get_balance'):
+                    # Fallback: check balance directly
+                    balance = self.portfolio_manager.get_balance(symbol)
+                    current_position = balance if balance and abs(balance) > 0.0001 else 0.0
+                else:
+                    # Last resort: check portfolio state
+                    portfolio = state.get("portfolio", {})
+                    symbol_data = portfolio.get(symbol, {})
+                    current_position = symbol_data.get("position", 0.0) if isinstance(symbol_data, dict) else 0.0
+            except Exception as e:
+                logger.warning(f"⚠️ Error getting position for {symbol}: {e}")
+                current_position = 0.0
+
+            has_position = abs(current_position) > 0.0001
+            signal_side = getattr(signal, 'side', 'hold')
+            signal_confidence = getattr(signal, 'confidence', 0.5)
+
+            logger.info(f"🔍 POSITION CHECK for {symbol}: position={current_position:.6f}, has_position={has_position}, signal={signal_side}")
+
+            # CRITICAL VALIDATION RULES
+            if signal_side == 'sell' and not has_position:
+                logger.warning(f"🛑 BLOCKED: SELL signal for {symbol} but no position! Converting to HOLD")
+                # Convert to HOLD signal
+                signal.side = 'hold'
+                signal.confidence = 0.5  # Neutral confidence
+                signal.strength = 0.3    # Low strength
+                if hasattr(signal, 'features'):
+                    signal.features = signal.features or {}
+                    signal.features['position_validation'] = 'blocked_sell_no_position'
+                return signal
+
+            elif signal_side == 'buy' and has_position:
+                # Allow BUY with existing position but require higher confidence
+                if signal_confidence < 0.7:
+                    logger.warning(f"⚠️ LOW CONFIDENCE: BUY signal for {symbol} with existing position (conf={signal_confidence:.3f})")
+                    # Reduce confidence but allow signal
+                    signal.confidence *= 0.8
+                    if hasattr(signal, 'features'):
+                        signal.features = signal.features or {}
+                        signal.features['position_validation'] = 'reduced_confidence_existing_position'
+
+            # Valid signal
+            if hasattr(signal, 'features'):
+                signal.features = signal.features or {}
+                signal.features['position_validation'] = 'valid'
+                signal.features['current_position'] = current_position
+
+            logger.info(f"✅ POSITION VALIDATION PASSED for {symbol}: {signal_side} (conf={signal.confidence:.3f})")
+            return signal
+
+        except Exception as e:
+            logger.error(f"❌ Error in position-aware validation for {symbol}: {e}")
+            return signal  # Return original signal on error
+
+    def _apply_l3_position_hotfix(self, signal: TacticalSignal, symbol: str, state: Dict[str, Any]) -> TacticalSignal:
+        """
+        HOTFIX: Apply L3 position-aware filtering to prevent invalid conversions
+        - Prevent L3 from converting HOLD to SELL when no position exists
+        """
+        try:
+            if not self.portfolio_manager:
+                return signal
+
+            # Get current position for this symbol
+            current_position = 0.0
+            try:
+                if hasattr(self.portfolio_manager, 'get_position'):
+                    current_position = self.portfolio_manager.get_position(symbol) or 0.0
+                elif hasattr(self.portfolio_manager, 'get_balance'):
+                    balance = self.portfolio_manager.get_balance(symbol)
+                    current_position = balance if balance and abs(balance) > 0.0001 else 0.0
+                else:
+                    portfolio = state.get("portfolio", {})
+                    symbol_data = portfolio.get(symbol, {})
+                    current_position = symbol_data.get("position", 0.0) if isinstance(symbol_data, dict) else 0.0
+            except Exception as e:
+                logger.warning(f"⚠️ Error getting position for L3 hotfix {symbol}: {e}")
+                current_position = 0.0
+
+            has_position = abs(current_position) > 0.0001
+            signal_side = getattr(signal, 'side', 'hold')
+
+            # HOTFIX: If L3 converted HOLD to SELL without position, revert
+            if signal_side == 'sell' and not has_position:
+                logger.warning(f"🔥 L3 HOTFIX: Reverting SELL→HOLD for {symbol} (no position)")
+                signal.side = 'hold'
+                signal.confidence *= 0.9  # Slightly reduce confidence
+                if hasattr(signal, 'features'):
+                    signal.features = signal.features or {}
+                    signal.features['l3_hotfix'] = 'reverted_sell_to_hold'
+
+            return signal
+
+        except Exception as e:
+            logger.error(f"❌ Error in L3 position hotfix for {symbol}: {e}")
+            return signal
 
     def _check_l3_models_status(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Check if L3 regime-specific models are implemented and working"""

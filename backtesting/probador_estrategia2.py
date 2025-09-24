@@ -34,7 +34,7 @@ class TestMode(Enum):
     """Modos de testing disponibles"""
     UNIT = "unit"           # Tests unitarios por nivel
     INTEGRATION = "integration"  # Tests de integración entre niveles
-    END_TO_END = "end_to_end"   # Test completo L4->L3->L2->L1
+    END_TO_END = "end_to_end"   # Test completo L3->L2->L1
     PERFORMANCE = "performance"  # Tests de rendimiento
     REGRESSION = "regression"    # Tests de regresión
 
@@ -814,10 +814,10 @@ class HRMStrategyTester:
                 duration_hours=1
             )
             
-            # 2. Simular flujo completo L4->L3->L2->L1
+            # 2. Simular flujo completo L3->L2->L1
             
-            # L4: Meta-razonamiento (simulado)
-            l4_context = {
+            # Meta-razonamiento (simulado)
+            meta_context = {
                 "market_regime": "bull_market",
                 "risk_appetite": "moderate",
                 "capital_allocation": {"BTC": 0.6, "ETH": 0.4},
@@ -826,7 +826,7 @@ class HRMStrategyTester:
             
             # L3: Decisión estratégica
             l3_decision = {
-                "regime": l4_context["market_regime"],
+                "regime": meta_context["market_regime"],
                 "target_exposure": 0.7,
                 "universe": self.config["mock_symbols"],
                 "strategy_mode": "aggressive_trend",

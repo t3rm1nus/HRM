@@ -133,6 +133,7 @@ class OrderManager:
                     # Check against dynamic minimum order size
                     order_value_usdt = abs(quantity) * current_price
                     if order_value_usdt >= dynamic_min_order:
+                        # Create main market order
                         order = {
                             "symbol": signal.symbol,
                             "side": signal.side,
@@ -147,6 +148,44 @@ class OrderManager:
                             "risk_appetite_used": risk_appetite,
                             "status": "pending"
                         }
+
+                        # CRÍTICO: Agregar STOP-LOSS order si está disponible en la señal
+                        stop_loss = getattr(signal, "stop_loss", None)
+                        if stop_loss and stop_loss > 0:
+                            # Validar stop-loss según dirección
+                            if signal.side == "buy" and stop_loss < current_price:
+                                sl_order = {
+                                    "symbol": signal.symbol,
+                                    "side": "SELL",  # Stop-loss siempre vende
+                                    "type": "STOP_LOSS",
+                                    "quantity": abs(quantity),  # Siempre positivo
+                                    "stop_price": stop_loss,
+                                    "price": current_price,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "signal_strength": getattr(signal, "strength", 0.5),
+                                    "signal_source": "stop_loss_protection",
+                                    "parent_order": f"{signal.symbol}_{signal.side}_{datetime.utcnow().isoformat()}",
+                                    "status": "pending"
+                                }
+                                orders.append(sl_order)
+                                logger.info(f"🛡️ STOP-LOSS generado: {signal.symbol} SELL {abs(quantity):.4f} @ stop={stop_loss:.2f}")
+                            elif signal.side == "sell" and stop_loss > current_price:
+                                sl_order = {
+                                    "symbol": signal.symbol,
+                                    "side": "BUY",  # Stop-loss para short vende para cubrir
+                                    "type": "STOP_LOSS",
+                                    "quantity": abs(quantity),  # Siempre positivo
+                                    "stop_price": stop_loss,
+                                    "price": current_price,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "signal_strength": getattr(signal, "strength", 0.5),
+                                    "signal_source": "stop_loss_protection",
+                                    "parent_order": f"{signal.symbol}_{signal.side}_{datetime.utcnow().isoformat()}",
+                                    "status": "pending"
+                                }
+                                orders.append(sl_order)
+                                logger.info(f"🛡️ STOP-LOSS generado: {signal.symbol} BUY {abs(quantity):.4f} @ stop={stop_loss:.2f}")
+
                         orders.append(order)
                         logger.info(f"✅ Order generated: {signal.symbol} {signal.side} {quantity:.4f} (${order_value_usdt:.2f}) [min: ${dynamic_min_order:.2f}]")
                     else:
@@ -163,7 +202,7 @@ class OrderManager:
             return []
 
     async def execute_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute a list of orders."""
+        """Execute a list of orders, including STOP_LOSS orders."""
         if not orders:
             return []
 
@@ -171,19 +210,55 @@ class OrderManager:
 
         for order in orders:
             try:
+                order_type = order.get("type", "MARKET")
+
                 if self.execution_config["PAPER_MODE"]:
-                    order["status"] = "filled"
-                    order["filled_price"] = order["price"]
-                    order["filled_quantity"] = order["quantity"]
-                    # Calculate commission consistently with portfolio manager
-                    order_value = order["price"] * order["quantity"]
-                    order["commission"] = order_value * 0.001  # 0.1% fee
+                    # Simular ejecución en paper mode
+                    if order_type == "STOP_LOSS":
+                        # Stop-loss orders se simulan como pendientes hasta activación
+                        order["status"] = "placed"  # No "filled" hasta que se active
+                        order["order_id"] = f"sl_{order['symbol']}_{order['side']}_{order['stop_price']}"
+                        logger.info(f"🛡️ STOP-LOSS simulado: {order['symbol']} {order['side']} {order['quantity']:.4f} @ stop={order['stop_price']:.2f}")
+                    else:
+                        # Market orders se ejecutan inmediatamente
+                        order["status"] = "filled"
+                        order["filled_price"] = order["price"]
+                        order["filled_quantity"] = order["quantity"]
+                        # Calculate commission consistently with portfolio manager
+                        order_value = abs(order["price"] * order["quantity"])
+                        order["commission"] = order_value * 0.001  # 0.1% fee
+                        logger.info(f"✅ MARKET ejecutado: {order['symbol']} {order['side']} {order['quantity']:.4f} @ {order['price']:.2f}")
+
+                elif order_type == "STOP_LOSS":
+                    # CRÍTICO: Ejecutar STOP_LOSS orders reales en modo producción
+                    if not self.binance_client:
+                        logger.error("❌ No Binance client available for stop-loss orders")
+                        order["status"] = "rejected"
+                        order["error"] = "No Binance client"
+                    else:
+                        try:
+                            # Colocar orden STOP_LOSS real en Binance
+                            sl_order = await self.binance_client.place_stop_loss_order(
+                                symbol=order["symbol"],
+                                side=order["side"],
+                                quantity=order["quantity"],
+                                stop_price=order["stop_price"],
+                                limit_price=order.get("price")  # Usar precio de mercado como limit
+                            )
+                            order["status"] = "placed"
+                            order["order_id"] = sl_order.get("id", f"sl_{order['symbol']}")
+                            order["exchange_order"] = sl_order
+                            logger.info(f"🛡️ STOP-LOSS REAL colocado: {order['symbol']} {order['side']} {order['quantity']:.4f} @ stop={order['stop_price']:.2f} (ID: {order['order_id']})")
+                        except Exception as sl_error:
+                            logger.error(f"❌ Error colocando stop-loss real: {sl_error}")
+                            order["status"] = "rejected"
+                            order["error"] = str(sl_error)
 
                 else:
-                    raise NotImplementedError("Only paper trading for now")
+                    # Market orders en modo real (no implementado aún)
+                    raise NotImplementedError(f"Real market orders not implemented yet. Order: {order}")
 
                 processed_orders.append(order)
-                logger.info(f"✅ Order executed: {order['symbol']} {order['side']} {order['quantity']:.4f}")
 
             except Exception as e:
                 logger.error(f"❌ Error executing order {order}: {e}")

@@ -20,7 +20,7 @@ class MessageBus:
     MessageBus asíncrono en memoria.
     - Permite publish/subscribe a tópicos arbitrarios.
     - Los handlers son corutinas (async def).
-    - Base para L1, L2, L3, L4.
+    - Base para L1, L2, L3.
     """
 
     def __init__(self):
