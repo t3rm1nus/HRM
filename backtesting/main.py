@@ -3,7 +3,9 @@
 $env:L2_MODEL = "gemini"; python -m backtesting.main
 $env:L2_MODEL = "grok"; python -m backtesting.main
 $env:L2_MODEL = "claude"; python -m backtesting.main
-
+$env:L2_MODEL = "gpt"; python -m backtesting.main
+$env:L2_MODEL = "kimi"; python -m backtesting.main
+$env:L2_MODEL = "deepseek"; python -m backtesting.main
 """
 
 import os
@@ -155,9 +157,16 @@ class HRMBacktester:
             testing_results = await self.strategy_tester.run_hrm_strategy(historical_data)
             
             # 3. Analizar rendimiento
+            initial_capital = self.config['testing']['initial_capital']
+
+            # DEBUG: Log final portfolio value before performance analysis
+            final_value = testing_results.get('overall', {}).get('total_value', initial_capital)
+            logger.info(f"🎯 FINAL BACKTEST RESULTS - Initial: {initial_capital}, Final: {final_value}, Return: {(final_value - initial_capital):+.2f} ({(final_value - initial_capital)/initial_capital*100:+.2f}%)")
+
             analyzed_results = self.performance_analyzer.analyze_results(
-                testing_results, 
-                self.config['analysis']['metrics']
+                testing_results,
+                self.config['analysis']['metrics'],
+                initial_capital
             )
             
             # 4. Generar reportes
@@ -168,7 +177,27 @@ class HRMBacktester:
 
             self.results = analyzed_results
             self.logger.info("✅ Backtesting completado con éxito.")
-            self.logger.info(f"Resultados finales: {self.results['overall']}")
+
+            # Log detailed performance metrics
+            overall = self.results.get('overall', {})
+            self.logger.info("📊 MÉTRICAS DE RENDIMIENTO DETALLADAS:")
+            self.logger.info(f"   Retorno Total: {overall.get('total_return', 0):.2%}")
+            self.logger.info(f"   Retorno Anualizado: {overall.get('annualized_return', 0):.2%}")
+            self.logger.info(f"   Ratio Sharpe: {overall.get('sharpe_ratio', 0):.3f}")
+            self.logger.info(f"   Ratio Sortino: {overall.get('sortino_ratio', 0):.3f}")
+            self.logger.info(f"   Ratio Calmar: {overall.get('calmar_ratio', 0):.3f}")
+            self.logger.info(f"   Máximo Drawdown: {overall.get('max_drawdown', 0):.2%}")
+            self.logger.info(f"   Duración Máx DD: {overall.get('max_drawdown_duration', 0)} períodos")
+            self.logger.info(f"   Win Rate: {overall.get('win_rate', 0):.1%}")
+            self.logger.info(f"   Factor de Profit: {overall.get('profit_factor', 0):.2f}")
+            self.logger.info(f"   Total Trades: {overall.get('total_trades', 0)}")
+            self.logger.info(f"   Trades Ganadores: {overall.get('winning_trades', 0)}")
+            self.logger.info(f"   Trades Perdedores: {overall.get('losing_trades', 0)}")
+            self.logger.info(f"   VaR 95%: {overall.get('var_95', 0):.2%}")
+            self.logger.info(f"   VaR 99%: {overall.get('var_99', 0):.2%}")
+            self.logger.info(f"   Factor de Recuperación: {overall.get('recovery_factor', 0):.3f}")
+            self.logger.info(f"   Volatilidad: {overall.get('volatility', 0):.2%}")
+            self.logger.info(f"   Valor Final Portfolio: ${overall.get('total_value', 0):.2f}")
 
         except Exception as e:
             self.logger.error(f"❌ Error crítico durante el backtesting: {e}")
@@ -217,7 +246,12 @@ class HRMBacktester:
 async def main():
     """Función principal para ejecutar el backtester"""
     backtester = HRMBacktester()
+
+    # Run main backtest
     await backtester.run_backtest()
+
+    # Run validation across different periods and cost profiles
+    await backtester.run_validation()
 
 if __name__ == "__main__":
     asyncio.run(main())

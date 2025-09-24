@@ -78,8 +78,8 @@ class OrderManager:
                     volatility_forecast = l3_context.get("volatility_forecast", {}).get(signal.symbol, 0.03)
                     risk_appetite = l3_context.get("risk_appetite", 0.5)
 
-                    # Dynamic minimum order size based on volatility and risk - REDUCED for more activity
-                    base_min_order = 5.0  # Reduced from 10.0 for more trades
+                    # Dynamic minimum order size based on volatility and risk - FURTHER REDUCED for more activity
+                    base_min_order = 1.0  # Reduced from 5.0 for much more trades
 
                     # Adjust minimum based on volatility (higher vol = higher min to avoid slippage)
                     vol_multiplier = max(0.5, min(2.0, volatility_forecast * 50))  # 0.5x to 2x based on vol %

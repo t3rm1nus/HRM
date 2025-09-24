@@ -547,14 +547,15 @@ def train_model_fast(df_train_dict, df_val_dict):
     print(f"  • Modelo guardado: {best_model_path}")
 
     # Guardar métricas
+    from l2_tactic.utils import safe_float
     metrics = {
         "training_completed": datetime.now().isoformat(),
         "total_time_hours": total_time / 3600,
-        "fps_average": float(overall_fps),
+        "fps_average": safe_float(overall_fps),
         "initial_steps": loaded_steps,
         "final_evaluation": {
-            "mean_reward": float(final_mean_reward),
-            "std_reward": float(final_std_reward)
+            "mean_reward": safe_float(final_mean_reward),
+            "std_reward": safe_float(final_std_reward)
         },
         "model_path": str(best_model_path)
     }

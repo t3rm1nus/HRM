@@ -109,7 +109,8 @@ def create_l1_filter_target(df: pd.DataFrame,
             entry_price = closes[i]
             
             # Buscar mejor salida en próximos períodos (ventana realista)
-            max_return = -float('inf')
+            from l2_tactic.utils import safe_float
+            max_return = -safe_float('inf')
             
             for j in range(i + 1, min(i + 20, len(df))):  # Evaluar próximos 20 períodos
                 current_return = (closes[j] - entry_price) / entry_price

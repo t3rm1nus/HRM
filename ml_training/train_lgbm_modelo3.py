@@ -123,7 +123,8 @@ def create_l1_filter_target(df: pd.DataFrame,
         if l2_signals[i] == 1:  # Solo cuando L2 genera señal
             signal_count += 1
             entry_price = closes[i]
-            max_return = -float('inf')
+            from l2_tactic.utils import safe_float
+            max_return = -safe_float('inf')
             
             # Evaluar ventana de salida más realista
             for j in range(i + 1, min(i + 15, len(df))):  # Reducido a 15 períodos

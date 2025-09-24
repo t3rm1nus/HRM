@@ -99,7 +99,8 @@ class L2Metrics:
         timeframe: Optional[str] = None,
         side: Optional[str] = None,
     ):
-        pnl = float(result.get("pnl", 0.0))
+        from .utils import safe_float
+        pnl = safe_float(result.get("pnl", 0.0))
         rec = ExecRecord(
             order=order,
             pnl=pnl,
@@ -130,7 +131,8 @@ class L2Metrics:
     ):
         key = (strategy_id, timeframe)
         self._preds[key].append(int(y_pred))
-        self._scores[key].append(float(y_score))
+        from .utils import safe_float
+        self._scores[key].append(safe_float(y_score))
 
     def record_outcome(
         self,
@@ -152,8 +154,9 @@ class L2Metrics:
         if not self.execution_history:
             return 0.0
         rets = [e.pnl for e in self.execution_history]
-        mean = float(np.mean(rets))
-        std = float(np.std(rets))
+        from .utils import safe_float
+        mean = safe_float(np.mean(rets))
+        std = safe_float(np.std(rets))
         if std == 0:
             return 0.0
         return (mean - risk_free_rate) / std
@@ -167,12 +170,14 @@ class L2Metrics:
         peak = np.maximum.accumulate(cum)
         dd = (cum - peak).min() if len(cum) else 0.0
         # devolver positivo como magnitud de DD
-        return float(abs(dd))
+        from .utils import safe_float
+        return safe_float(abs(dd))
 
     def avg_latency(self) -> float:
         if not self.latency_records:
             return 0.0
-        return float(np.mean(self.latency_records))
+        from .utils import safe_float
+        return safe_float(np.mean(self.latency_records))
 
     # ==== Métricas IA ====
     @staticmethod
@@ -196,11 +201,12 @@ class L2Metrics:
         y_pred = self._preds.get(key, [])
         y_true = self._truth.get(key, [])
         precision, recall, f1 = self._precision_recall(y_true, y_pred)
+        from .utils import safe_float
         return {
             "precision": precision,
             "recall": recall,
             "f1": f1,
-            "n_pairs": float(min(len(y_true), len(y_pred))),
+            "n_pairs": safe_float(min(len(y_true), len(y_pred))),
         }
 
     # ==== Telemetría por bucket ====
@@ -222,11 +228,12 @@ class L2Metrics:
             out.setdefault(key_s, {})
             wins = self._wins_buckets[(strategy_id, timeframe)]
             n = self._trades_buckets[(strategy_id, timeframe)]
-            mean = float(np.mean(pnls)) if pnls else 0.0
-            std = float(np.std(pnls)) if pnls else 0.0
+            from .utils import safe_float
+            mean = safe_float(np.mean(pnls)) if pnls else 0.0
+            std = safe_float(np.std(pnls)) if pnls else 0.0
             sharpe = (mean / std) if std > 1e-12 else 0.0
             out[key_s][key_t] = {
-                "trades": float(n),
+                "trades": safe_float(n),
                 "winrate": (wins / n) if n > 0 else 0.0,
                 "sharpe": sharpe,
                 "pnl_mean": mean,

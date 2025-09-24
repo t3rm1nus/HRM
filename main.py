@@ -17,7 +17,7 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.state_manager import initialize_state, validate_state_structure, log_cycle_data
-from core.portfolio_manager import update_portfolio_from_orders, save_portfolio_to_csv
+from core.portfolio_manager import update_portfolio_from_orders, save_portfolio_to_csv, PortfolioManager
 from core.technical_indicators import calculate_technical_indicators
 from core.feature_engineering import integrate_features_with_l2, debug_l2_features
 from core.logging import logger
@@ -63,8 +63,24 @@ async def main():
             logger.error(f"❌ Error initializing L2 components: {e}", exc_info=True)
             raise
         
+        # Initialize Portfolio Manager for persistence
+        portfolio_manager = PortfolioManager(
+            mode="live",  # Use live mode for production with persistence
+            initial_balance=3000.0,
+            client=binance_client,
+            symbols=config["SYMBOLS"]
+        )
+
+        # FORCE FRESH START - Always reset to initial balance for testing/development
+        logger.info("🔄 FORCED FRESH START - Resetting portfolio to initial state")
+        portfolio_manager.force_clean_reset()
+        state["portfolio"] = portfolio_manager.get_portfolio_state()
+        state["peak_value"] = portfolio_manager.peak_value
+        state["total_fees"] = portfolio_manager.total_fees
+        logger.info(f"📂 Fresh portfolio initialized: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
+
         # Initialize L3 (will be called after market data is loaded)
-        
+
         order_manager = OrderManager(binance_client=binance_client, market_data=state.get("market_data", {}))
         
         # Get initial data with retries
@@ -75,7 +91,7 @@ async def main():
         while retry_count < max_retries:
             try:
                 initial_data = await loader.get_realtime_data()
-                if not initial_data:
+                if initial_data is None or (isinstance(initial_data, dict) and len(initial_data) == 0):
                     initial_data = await data_feed.get_market_data()
                 
                 if isinstance(initial_data, dict) and any(initial_data):
@@ -118,6 +134,13 @@ async def main():
             logger.info("✅ L3 initialized successfully with market data")
         except Exception as e:
             logger.error(f"❌ Error initializing L3: {e}", exc_info=True)
+
+        # CRITICAL FIX: Ensure portfolio is properly initialized and logged
+        logger.info("🔍 INITIAL PORTFOLIO STATE:")
+        logger.info(f"   BTC Position: {portfolio_manager.get_balance('BTCUSDT'):.6f}")
+        logger.info(f"   ETH Position: {portfolio_manager.get_balance('ETHUSDT'):.3f}")
+        logger.info(f"   USDT Balance: {portfolio_manager.get_balance('USDT'):.2f}")
+        logger.info(f"   Total Value: {portfolio_manager.get_total_value():.2f}")
         
         # Main loop
         cycle_id = 0
@@ -135,7 +158,7 @@ async def main():
                     if not isinstance(data, dict):
                         return False, f"Not a dictionary (type: {type(data)})"
 
-                    if not data:
+                    if not data or len(data) == 0:
                         return False, "Empty data dictionary"
 
                     valid_symbols = []
@@ -245,9 +268,58 @@ async def main():
                 orders = await order_manager.generate_orders(state, valid_signals)
                 processed_orders = await order_manager.execute_orders(orders)
                 
-                # 4. Update portfolio
-                await update_portfolio_from_orders(state, processed_orders)
-                
+                # 4. Update portfolio using PortfolioManager as single source of truth
+                await portfolio_manager.update_from_orders_async(processed_orders, state.get("market_data", {}))
+
+                # Sync main state with PortfolioManager state
+                state["portfolio"] = portfolio_manager.get_portfolio_state()
+                state["peak_value"] = portfolio_manager.peak_value
+                state["total_fees"] = portfolio_manager.total_fees
+
+                # Calculate and update total value in state
+                total_value = portfolio_manager.get_total_value(state.get("market_data", {}))
+                state["total_value"] = total_value
+                state["btc_balance"] = portfolio_manager.get_balance("BTCUSDT")
+                state["eth_balance"] = portfolio_manager.get_balance("ETHUSDT")
+                state["usdt_balance"] = portfolio_manager.get_balance("USDT")
+
+                # Calculate BTC and ETH values safely
+                btc_market_data = state.get("market_data", {}).get("BTCUSDT")
+                if btc_market_data is not None:
+                    if isinstance(btc_market_data, dict) and 'close' in btc_market_data:
+                        btc_price = btc_market_data['close']
+                    elif hasattr(btc_market_data, 'iloc') and len(btc_market_data) > 0:
+                        btc_price = btc_market_data['close'].iloc[-1] if 'close' in btc_market_data.columns else 50000.0
+                    else:
+                        btc_price = 50000.0
+                    state["btc_value"] = state["btc_balance"] * btc_price
+                else:
+                    state["btc_value"] = 0.0
+
+                eth_market_data = state.get("market_data", {}).get("ETHUSDT")
+                if eth_market_data is not None:
+                    if isinstance(eth_market_data, dict) and 'close' in eth_market_data:
+                        eth_price = eth_market_data['close']
+                    elif hasattr(eth_market_data, 'iloc') and len(eth_market_data) > 0:
+                        eth_price = eth_market_data['close'].iloc[-1] if 'close' in eth_market_data.columns else 3000.0
+                    else:
+                        eth_price = 3000.0
+                    state["eth_value"] = state["eth_balance"] * eth_price
+                else:
+                    state["eth_value"] = 0.0
+
+                # Save portfolio state periodically (every 5 cycles or when significant changes)
+                if cycle_id % 5 == 0:
+                    portfolio_manager.save_to_json()
+
+                # CRITICAL DEBUG: Log portfolio state after update
+                portfolio_after = state.get("portfolio", {})
+                logger.info("🔄 PORTFOLIO AFTER UPDATE:")
+                logger.info(f"   BTC Position: {portfolio_after.get('BTCUSDT', {}).get('position', 0.0):.6f}")
+                logger.info(f"   ETH Position: {portfolio_after.get('ETHUSDT', {}).get('position', 0.0):.6f}")
+                logger.info(f"   USDT Balance: {portfolio_after.get('USDT', {}).get('free', 0.0):.2f}")
+                logger.info(f"   Total Value: {state.get('total_value', 0.0):.2f}")
+
                 # Log cycle stats
                 valid_orders = [o for o in processed_orders if o.get("status") != "rejected"]
                 await log_cycle_data(state, cycle_id, start_time)
@@ -313,7 +385,7 @@ async def main():
                         needs_refresh = True
                         return {}, True
                         
-                    if not market_data:
+                    if not market_data or len(market_data) == 0:
                         logger.warning("⚠️ Empty market_data dictionary")
                         needs_refresh = True
                         return {}, True
@@ -571,6 +643,12 @@ async def main():
                 
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+        # Save final portfolio state before shutdown
+        try:
+            portfolio_manager.save_to_json()
+            logger.info("💾 Final portfolio state saved")
+        except Exception as save_error:
+            logger.error(f"❌ Error saving final portfolio state: {save_error}")
     finally:
         # Cleanup
         for component in [loader, data_feed, bus_adapter, binance_client]:

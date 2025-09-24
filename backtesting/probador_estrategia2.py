@@ -437,7 +437,9 @@ class HRMStrategyTester:
                             gross_profit = sum(t['pnl'] for t in trades_temp if t['pnl'] > 0)
                             gross_loss = abs(sum(t['pnl'] for t in trades_temp if t['pnl'] <= 0))
                             
-                            results['overall']['profit_factor'] = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+                            from l2_tactic.utils import safe_float
+                            from l2_tactic.utils import safe_float
+                            results['overall']['profit_factor'] = gross_profit / gross_loss if gross_loss > 0 else safe_float('inf')
 
             # Esta sección se mantiene sin cambios ya que parece ser mock data
             results['l1_models'] = {

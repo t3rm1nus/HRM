@@ -65,12 +65,13 @@ def procesar_l3(state: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(price, (list, tuple)):
                     price = price[-1] if price else 50000.0
 
+                from l2_tactic.utils import safe_float
                 orden = {
                     "id": f"l3_exposure_{symbol}_{int(time.time())}",
                     "symbol": symbol,
                     "side": action,
                     "quantity": abs(adjustment),
-                    "price": float(price),
+                    "price": safe_float(price),
                     "type": "market",
                     "strategy_id": "l3_exposure_management",
                     "timestamp": time.time(),

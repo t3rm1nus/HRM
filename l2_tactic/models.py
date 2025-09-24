@@ -88,6 +88,7 @@ class TacticalSignal:
         if price is None and 'close' in self.features:
             price = self.features['close']
         
+        from .utils import safe_float
         return {
             'signal_id': str(uuid.uuid4()),
             'strategy_id': 'L2_TACTIC',
@@ -95,7 +96,7 @@ class TacticalSignal:
             'side': self.side.lower(),
             'type': getattr(self, 'type', 'market'),
             'order_type': 'market',
-            'qty': float(self.quantity) if self.quantity is not None else None,
+            'qty': safe_float(self.quantity) if self.quantity is not None else None,
             'price': price,
             'stop_loss': getattr(self, 'stop_loss', None),
             'take_profit': getattr(self, 'take_profit', None),

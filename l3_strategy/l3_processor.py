@@ -23,6 +23,7 @@ except ImportError:
     TRANSFORMERS_AVAILABLE = False
 # Import logging first
 from core import logging as log
+from .regime_specific_models import RegimeSpecificL3Processor, RegimeStrategy
 
 # Initialize TensorFlow variables at module level
 tf = None
@@ -585,7 +586,8 @@ def predict_sentiment(texts: list, tokenizer, model):
                 # Fallback
                 score = probs[:, -1]
 
-            sentiment_score = float(torch.mean(score))
+            from l2_tactic.utils import safe_float
+            sentiment_score = safe_float(torch.mean(score))
 
             # Log detailed results
             log.info(f"✅ Sentimiento calculado: {sentiment_score:.4f} (device: {device}, textos: {len(valid_texts)})")
@@ -690,22 +692,23 @@ def predict_vol_lstm(model, returns: np.ndarray):
 def compute_risk_appetite(volatility_avg, sentiment_score, regime="range"):
     # 1. Ajuste por volatilidad (más volatilidad -> más conservador)
     vol_factor = np.exp(-5 * volatility_avg)  # Decae exponencialmente con volatilidad
-    
+
     # 2. Ajuste por sentimiento (-1 a 1 -> 0 a 1)
     sent_factor = (sentiment_score + 1) / 2
-    
-    # 3. Ajuste por régimen
+
+    # 3. Ajuste por régimen - CALIBRATED FOR AGGRESSIVE RISK APPETITE
     regime_factors = {
-        "bull": 1.2,
-        "bear": 0.6,
-        "range": 0.9,
-        "volatile": 0.7
+        "bull": 1.8,      # Much more aggressive in bull markets
+        "bear": 0.4,      # More conservative in bear markets
+        "range": 1.1,     # Slightly aggressive in range markets
+        "volatile": 0.9,  # Moderately conservative in volatile markets
+        "crisis": 0.1     # Ultra-conservative in crisis
     }
-    regime_factor = regime_factors.get(regime.lower().replace("_market", ""), 0.9)
-    
+    regime_factor = regime_factors.get(regime.lower().replace("_market", ""), 1.0)
+
     # Combinar factores (vol y sent entre 0-1, regime modifica el resultado)
     appetite_score = (0.6 * vol_factor + 0.4 * sent_factor) * regime_factor
-    
+
     # Mapear score a categorías
     if appetite_score < 0.33:
         ra = "conservative"
@@ -713,7 +716,7 @@ def compute_risk_appetite(volatility_avg, sentiment_score, regime="range"):
         ra = "moderate"
     else:
         ra = "aggressive"
-    
+
     log.info(f"Risk appetite calculado: {ra} (score={appetite_score:.2f}, vol={vol_factor:.2f}, sent={sent_factor:.2f}, regime={regime_factor:.2f})")
     return ra
 
@@ -1138,6 +1141,51 @@ def _calculate_price_change_from_hash(old_hash: str, new_hash: str, market_data:
         log.warning(f"Error calculating price change from hash: {e}")
         return 0.0
 
+def _detect_crisis_conditions(market_data: dict, volatility_avg: float, vol_btc: float, vol_eth: float) -> bool:
+    """
+    Detect extreme market conditions that warrant crisis regime activation.
+    """
+    try:
+        # Crisis thresholds
+        CRISIS_VOLATILITY_THRESHOLD = 0.15  # 15% annualized volatility
+        CRISIS_DRAWDOWN_THRESHOLD = 0.20    # 20% drawdown
+
+        # Check volatility crisis
+        volatility_crisis = volatility_avg > CRISIS_VOLATILITY_THRESHOLD
+
+        # Check drawdown crisis
+        drawdown_crisis = False
+        for symbol, data in market_data.items():
+            if isinstance(data, pd.DataFrame) and not data.empty and 'close' in data.columns:
+                try:
+                    prices = data['close'].tail(20)  # Look at recent 20 periods
+                    if len(prices) >= 5:
+                        peak = prices.max()
+                        current = prices.iloc[-1]
+                        if peak > 0:
+                            drawdown = (peak - current) / peak
+                            if drawdown > CRISIS_DRAWDOWN_THRESHOLD:
+                                drawdown_crisis = True
+                                log.warning(f"🚨 {symbol} drawdown crisis: {drawdown:.3f} > {CRISIS_DRAWDOWN_THRESHOLD}")
+                                break
+                except Exception as e:
+                    log.debug(f"Error checking drawdown for {symbol}: {e}")
+
+        # Combined crisis detection
+        crisis_detected = volatility_crisis or drawdown_crisis
+
+        if crisis_detected:
+            log.warning("🚨 CRISIS DETECTED:")
+            log.warning(f"   Volatility: {volatility_avg:.4f} > {CRISIS_VOLATILITY_THRESHOLD} = {volatility_crisis}")
+            log.warning(f"   Drawdown crisis: {drawdown_crisis}")
+            log.warning("   Activating Crisis Market Model")
+
+        return crisis_detected
+
+    except Exception as e:
+        log.error(f"Error detecting crisis conditions: {e}")
+        return False
+
 def cleanup_models():
     """Cleanup model memory and caches."""
     global tf
@@ -1177,6 +1225,9 @@ def cleanup_models():
 def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_models: dict = None):
     log.info("Generando L3 output estratégico")
 
+    # Define current_time early for use throughout the function
+    current_time = datetime.utcnow()
+
     # Validar el estado
     if state is None or not isinstance(state, dict):
         log.error("Estado inválido: no es un diccionario")
@@ -1202,7 +1253,7 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
 
     # Check for L3 context staleness and implement caching
     l3_context_cache = state.get("l3_context_cache", {})
-    current_timestamp = datetime.utcnow()
+    current_timestamp = current_time
 
     # Check if we can use cached L3 output
     if _is_l3_context_fresh(l3_context_cache, market_data, current_timestamp):
@@ -1241,7 +1292,19 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
                     log.warning("No se pudieron construir features para regime detection")
                     regime = 'neutral'
                 else:
+                    # L3_Regime | Contexto estratégico: features summary
+                    features_summary = {col: f"{df_features[col].iloc[-1]:.4f}" for col in df_features.columns[:5]}
+                    log.info(f"L3_Regime | Contexto estratégico: {features_summary}")
+
                     regime = predict_regime(df_features, regime_model)
+
+                    # L3_Regime | Decisión final: regime prediction
+                    log.info(f"L3_Regime | Decisión final: {regime}")
+
+                    # L3_Regime | Ponderación aplicada: confidence score
+                    confidence_score = getattr(regime_model, 'predict_proba', lambda x: [[0.5]]) if hasattr(regime_model, 'predict_proba') else 0.5
+                    log.info(f"L3_Regime | Ponderación aplicada: {confidence_score}")
+
                     if regime is None:
                         regime = 'neutral'
         except Exception as e:
@@ -1258,7 +1321,19 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
             tokenizer, sentiment_model = load_sentiment_model()
 
         try:
+            # L3_Sentiment | Contexto estratégico: input texts summary
+            texts_summary = f"{len(texts_for_sentiment or [])} textos" + (f" - primeros: {str(texts_for_sentiment[0])[:50]}..." if texts_for_sentiment else "")
+            log.info(f"L3_Sentiment | Contexto estratégico: {texts_summary}")
+
             sentiment_score = predict_sentiment(texts_for_sentiment or [], tokenizer, sentiment_model)
+
+            # L3_Sentiment | Decisión final: sentiment score
+            log.info(f"L3_Sentiment | Decisión final: {sentiment_score:.4f}")
+
+            # L3_Sentiment | Ponderación aplicada: confidence based on text count
+            confidence = min(1.0, len(texts_for_sentiment or []) / 10.0) if texts_for_sentiment else 0.0
+            log.info(f"L3_Sentiment | Ponderación aplicada: {confidence:.2f}")
+
         except Exception as e:
             log.critical(f"Sentiment fallback por error: {e}")
             sentiment_score = 0.0
@@ -1328,6 +1403,9 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
         btc_series = _safe_close_series(market_data.get('BTCUSDT'))
         eth_series = _safe_close_series(market_data.get('ETHUSDT'))
 
+        # L3_Volatility | Contexto estratégico: series data summary
+        log.info(f"L3_Volatility | Contexto estratégico: BTC_series={len(btc_series)}pts, ETH_series={len(eth_series)}pts")
+
         if len(btc_series) < MIN_VOL_BARS or len(eth_series) < MIN_VOL_BARS:
             log.warning(f"Volatility warmup: series cortas (BTC={len(btc_series)}, ETH={len(eth_series)})")
             vol_btc = vol_eth = WARMUP_VOL
@@ -1345,15 +1423,35 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
             if lstm_eth is not None and tf is not None:
                 eth_vols.append(predict_vol_lstm(lstm_eth, eth_series))
             vol_eth = np.mean(eth_vols) if eth_vols else WARMUP_VOL
+
+        # L3_Volatility | Decisión final: volatility forecasts
+        log.info(f"L3_Volatility | Decisión final: BTC_vol={vol_btc:.4f}, ETH_vol={vol_eth:.4f}")
+
+        # L3_Volatility | Ponderación aplicada: model confidence
+        models_used = sum([garch_btc is not None, lstm_btc is not None, garch_eth is not None, lstm_eth is not None])
+        confidence = models_used / 4.0
+        log.info(f"L3_Volatility | Ponderación aplicada: {confidence:.2f} (models_used={models_used}/4)")
+
     except Exception as e:
         log.critical(f"Error en cálculo de volatilidad: {e}")
         vol_btc = vol_eth = WARMUP_VOL
 
     volatility_avg = float(np.mean([vol_btc, vol_eth]))
 
+    # Convertir risk_appetite a valor numérico - definir antes de usar
+    risk_map = {
+        "low": 0.2,
+        "moderate": 0.5,
+        "aggressive": 0.8,
+        "high": 0.8
+    }
+
     # Portfolio allocation
     try:
         if cov_matrix is not None and optimal_weights is not None:
+            # L3_Portfolio | Contexto estratégico: risk factors
+            log.info(f"L3_Portfolio | Contexto estratégico: vol_avg={volatility_avg:.4f}, sentiment={sentiment_score:.4f}, regime={regime}")
+
             risk_appetite = compute_risk_appetite(volatility_avg, sentiment_score, regime=regime)
             first_row = optimal_weights.iloc[0]
             allowed = {"BTC","ETH","CASH","BTCUSDT","ETHUSDT"}
@@ -1363,6 +1461,14 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
             asset_allocation = {str(col): float(first_row[col]) for col in cols}
             if not asset_allocation:
                 raise ValueError("sin columnas de asignación válidas")
+
+            # L3_Portfolio | Decisión final: asset allocation
+            log.info(f"L3_Portfolio | Decisión final: {asset_allocation}")
+
+            # L3_Portfolio | Ponderación aplicada: risk appetite
+            risk_value = risk_map.get(str(risk_appetite).lower(), 0.5)
+            log.info(f"L3_Portfolio | Ponderación aplicada: {risk_appetite} (value={risk_value:.2f})")
+
         else:
             raise ValueError("Modelos de portfolio no disponibles")
     except Exception as e:
@@ -1370,14 +1476,6 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
         asset_allocation = {"BTC": 0.5, "ETH": 0.4, "CASH": 0.1}
 
     risk_appetite = compute_risk_appetite(volatility_avg, sentiment_score)
-
-    # Convertir risk_appetite a valor numérico
-    risk_map = {
-        "low": 0.2,
-        "moderate": 0.5,
-        "aggressive": 0.8,
-        "high": 0.8
-    }
     risk_value = risk_map.get(str(risk_appetite).lower(), 0.5)
 
     # Asegurar que asset_allocation tiene los campos correctos
@@ -1395,22 +1493,74 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
             base_alloc = {"BTC": 0.3, "ETH": 0.2, "CASH": 0.5}
         asset_allocation = base_alloc
 
-    # Generate timestamp with proper UTC format and 'Z' suffix
-    current_time = datetime.utcnow()
-    timestamp_str = current_time.isoformat() + "Z"
-    log.debug(f"L3 timestamp generated: {timestamp_str}")
+    # INTEGRATE REGIME-SPECIFIC MODELS
+    try:
+        log.info("🎯 Integrating regime-specific L3 models")
 
-    strategic_guidelines = {
-        "regime": regime,
-        "asset_allocation": asset_allocation,
-        "risk_appetite": risk_value,
-        "sentiment_score": float(sentiment_score),
-        "volatility_forecast": {
-            "BTCUSDT": float(vol_btc),
-            "ETHUSDT": float(vol_eth)
-        },
-        "timestamp": timestamp_str
-    }
+        # CRISIS DETECTION: Check for extreme market conditions
+        crisis_detected = _detect_crisis_conditions(market_data, volatility_avg, vol_btc, vol_eth)
+
+        # Override regime if crisis detected
+        if crisis_detected:
+            regime = 'crisis'
+            log.warning("🚨 CRISIS OVERRIDE: Market conditions indicate crisis regime")
+
+        # Create regime context for the specific models
+        regime_context = {
+            'regime': regime,
+            'volatility_avg': volatility_avg,
+            'sentiment_score': sentiment_score,
+            'risk_appetite': risk_appetite,
+            'vol_btc': vol_btc,
+            'vol_eth': vol_eth,
+            'current_time': current_timestamp,  # Pass current_time to regime models
+            'crisis_detected': crisis_detected
+        }
+
+        # Generate regime-specific strategy
+        regime_processor = RegimeSpecificL3Processor()
+        regime_strategy = regime_processor.generate_regime_strategy(market_data, regime_context)
+
+        # Merge regime-specific strategy with base L3 output
+        strategic_guidelines = {
+            "regime": regime,
+            "asset_allocation": regime_strategy.asset_allocation,
+            "risk_appetite": regime_strategy.risk_appetite,
+            "sentiment_score": float(sentiment_score),
+            "volatility_forecast": {
+                "BTCUSDT": float(vol_btc),
+                "ETHUSDT": float(vol_eth)
+            },
+            "regime_strategy": {
+                "position_sizing": regime_strategy.position_sizing,
+                "stop_loss_policy": regime_strategy.stop_loss_policy,
+                "take_profit_policy": regime_strategy.take_profit_policy,
+                "rebalancing_frequency": regime_strategy.rebalancing_frequency,
+                "volatility_target": regime_strategy.volatility_target,
+                "correlation_limits": regime_strategy.correlation_limits,
+                "strategy_metadata": regime_strategy.metadata
+            },
+            "timestamp": current_time.isoformat() + "Z"
+        }
+
+        log.info(f"✅ Regime-specific strategy integrated: {regime} regime with risk_appetite={regime_strategy.risk_appetite:.2f}")
+
+    except Exception as e:
+        log.error(f"❌ Error integrating regime-specific models: {e}")
+        # Fallback to basic L3 output
+        current_time = datetime.utcnow()
+        strategic_guidelines = {
+            "regime": regime,
+            "asset_allocation": asset_allocation,
+            "risk_appetite": risk_value,
+            "sentiment_score": float(sentiment_score),
+            "volatility_forecast": {
+                "BTCUSDT": float(vol_btc),
+                "ETHUSDT": float(vol_eth)
+            },
+            "timestamp": current_time.isoformat() + "Z"
+        }
+        log.warning("⚠️ Using fallback L3 output without regime-specific models")
 
     # Update L3 context cache in state for future reuse
     if 'l3_context_cache' not in state:

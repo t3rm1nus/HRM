@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 from .config import *  # Import L2 config settings
 from .models import TacticalSignal
+from .utils import safe_float
 from datetime import datetime
 from core.logging import logger
 logger.info("l2_tactic.signal_composer")
@@ -20,51 +21,60 @@ class SignalComposer:
     def compose_signal(self, symbol: str, base_signal: TacticalSignal, indicators: Dict, state: Dict) -> Optional[TacticalSignal]:
         """
         Compone una señal táctica final combinando la señal base con indicadores técnicos
-        
+
         Args:
             symbol: El símbolo para el que se genera la señal
             base_signal: La señal base (típicamente de FinRL)
             indicators: Indicadores técnicos calculados
             state: Estado del sistema
-            
+
         Returns:
             TacticalSignal opcional (None si la señal es rechazada)
         """
         try:
+        # DEBUG: Log signal processing
+            logger.info(f"🎯 SIGNAL COMPOSER INPUT for {symbol}: side={getattr(base_signal, 'side', 'no_side')}, conf={getattr(base_signal, 'confidence', 'no_conf'):.3f}, strength={getattr(base_signal, 'strength', 'no_strength'):.3f}")
+
             # Validar entrada básica
             if not symbol:
                 logger.error("❌ Símbolo vacío en compose_signal")
                 return None
-                
+
             # Validar señal base
             if not base_signal:
                 logger.error(f"❌ Señal base vacía para {symbol}")
                 return None
-                
+
             if not isinstance(base_signal, TacticalSignal):
                 logger.error(f"❌ Señal base no es TacticalSignal para {symbol}: {type(base_signal)}")
                 return None
-                
+
             # Validar que la señal base tenga los campos requeridos
             required_attrs = ['side', 'confidence', 'strength']
             missing_attrs = [attr for attr in required_attrs if not hasattr(base_signal, attr)]
             if missing_attrs:
                 logger.error(f"❌ Señal base incompleta para {symbol}, faltan: {missing_attrs}")
                 return None
-                
-            # Validar valores de confianza y fuerza
+
+            # Validar valores de confianza y fuerza usando safe_float
             try:
-                confidence = float(base_signal.confidence)
-                strength = float(base_signal.strength)
+                confidence = safe_float(base_signal.confidence)
+                strength = safe_float(base_signal.strength)
+                if np.isnan(confidence) or np.isnan(strength):
+                    logger.error(f"❌ Valores NaN en señal base para {symbol}: conf={base_signal.confidence}, strength={base_signal.strength}")
+                    return None
             except (ValueError, TypeError):
                 logger.error(f"❌ Valores inválidos en señal base para {symbol}: conf={base_signal.confidence}, strength={base_signal.strength}")
                 return None
-                
+
+            # DEBUG: Log threshold check
+            logger.debug(f"🔍 THRESHOLD CHECK for {symbol}: conf={confidence:.3f} >= {self.min_conf:.3f}, strength={strength:.3f} >= {self.min_strength:.3f}")
+
             # Validar fuerza y confianza de la señal base
             if confidence < self.min_conf or strength < self.min_strength:
                 logger.debug(f"Señal {symbol} rechazada por baja confianza/fuerza: {confidence:.2f}/{strength:.2f}")
                 return None
-                
+
             # Validar side
             if not hasattr(base_signal, 'side') or base_signal.side not in ['buy', 'sell', 'hold']:
                 logger.error(f"❌ Side inválido para {symbol}: {getattr(base_signal, 'side', 'None')}")
@@ -77,10 +87,10 @@ class SignalComposer:
                 # Agregar indicadores técnicos a las features
                 for key, value in indicators.items():
                     if isinstance(value, (int, float)) and not np.isnan(value):
-                        enhanced_features[key] = float(value)
+                        enhanced_features[key] = safe_float(value)
                     elif hasattr(value, 'iloc') and len(value) > 0:  # Series
                         try:
-                            last_val = float(value.iloc[-1])
+                            last_val = safe_float(value.iloc[-1])
                             if not np.isnan(last_val):
                                 enhanced_features[key] = last_val
                         except (IndexError, ValueError, TypeError):
@@ -130,8 +140,9 @@ class SignalComposer:
         self.w_pattern = getattr(config, "pattern_weight", config_defaults["pattern_weight"])
 
         # ✅ FIXED: Use correct attribute names from L2Config
-        self.min_conf = getattr(config, "min_signal_confidence", 0.25)
-        self.min_strength = getattr(config, "min_signal_strength", 0.05)
+        # LOWER THRESHOLDS TO ALLOW WRAPPER SIGNALS THROUGH
+        self.min_conf = getattr(config, "min_signal_confidence", 0.1)  # Lower from 0.25 to 0.1
+        self.min_strength = getattr(config, "min_signal_strength", 0.01)  # Lower from 0.05 to 0.01
 
         # ✅ FIXED: Use proper attribute access for SignalConfig dataclass
         self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", config_defaults["conflict_tie_threshold"])
@@ -144,18 +155,18 @@ class SignalComposer:
     def _process_signal_dict(self, signal_dict: dict) -> Optional[TacticalSignal]:
         """Helper to process dictionary signals"""
         try:
-            # Ensure numeric values are properly converted
+            # Ensure numeric values are properly converted using safe_float
             if 'strength' in signal_dict:
-                signal_dict['strength'] = float(signal_dict['strength'])
+                signal_dict['strength'] = safe_float(signal_dict['strength'])
             if 'confidence' in signal_dict:
-                signal_dict['confidence'] = float(signal_dict['confidence'])
-            
+                signal_dict['confidence'] = safe_float(signal_dict['confidence'])
+
             # Convert features to proper types
             if 'features' in signal_dict and isinstance(signal_dict['features'], dict):
                 features = {}
                 for k, v in signal_dict['features'].items():
                     if isinstance(v, (int, float)):
-                        features[k] = float(v)
+                        features[k] = safe_float(v)
                 signal_dict['features'] = features
             
             return TacticalSignal(**signal_dict)
@@ -223,28 +234,36 @@ class SignalComposer:
                 # Decidir el lado dominante
                 side = 'buy' if buy_strength > sell_strength else 'sell'
                 strength_diff = abs(buy_strength - sell_strength)
-                
-                # Si la diferencia es pequeña, no generar señal
+
+                # Si la diferencia es pequeña, mantener la señal original en lugar de ignorar
                 if strength_diff < self.conflict_tie_threshold:
-                    logger.debug(f"Señales {symbol} muy cercanas (diff={strength_diff:.3f}), ignorando")
-                    continue
-                
-                # Usar señales del lado dominante
-                relevant_signals = buy_signals if side == 'buy' else sell_signals
-                if not relevant_signals:
-                    continue
-                
-                # Calcular métricas finales
-                dominant_signal = max(relevant_signals, key=lambda s: s.strength * self._get_dynamic_weight(s))
-                avg_strength = max(buy_strength, sell_strength)
-                avg_confidence = sum(s.confidence * self._get_dynamic_weight(s) for s in relevant_signals) / sum(self._get_dynamic_weight(s) for s in relevant_signals)
+                    logger.debug(f"Señales {symbol} muy cercanas (diff={strength_diff:.3f}), manteniendo señal original")
+                    # Usar la señal dominante por confianza en lugar de ignorar
+                    all_signals = buy_signals + sell_signals
+                    if all_signals:
+                        dominant_signal = max(all_signals, key=lambda s: s.confidence * self._get_dynamic_weight(s))
+                        side = dominant_signal.side
+                        avg_strength = dominant_signal.strength
+                        avg_confidence = dominant_signal.confidence
+                    else:
+                        continue  # No hay señales para procesar
+                else:
+                    # Usar señales del lado dominante
+                    relevant_signals = buy_signals if side == 'buy' else sell_signals
+                    if not relevant_signals:
+                        continue
+
+                    # Calcular métricas finales
+                    dominant_signal = max(relevant_signals, key=lambda s: s.strength * self._get_dynamic_weight(s))
+                    avg_strength = max(buy_strength, sell_strength)
+                    avg_confidence = sum(s.confidence * self._get_dynamic_weight(s) for s in relevant_signals) / sum(self._get_dynamic_weight(s) for s in relevant_signals)
 
                 # Get current price from market data or features
                 current_price = None
                 if 'close' in features and features['close']:
-                    current_price = float(features['close'])
+                    current_price = safe_float(features['close'])
                 elif hasattr(dominant_signal, 'price') and dominant_signal.price:
-                    current_price = float(dominant_signal.price)
+                    current_price = safe_float(dominant_signal.price)
                 
                 # Fallback a precios por defecto si no se encuentra precio
                 if not current_price:
@@ -373,7 +392,7 @@ class SignalComposer:
                         # Get price from features if available
                         current_price = None
                         if sigs[0].features and 'close' in sigs[0].features and sigs[0].features['close']:
-                            current_price = float(sigs[0].features['close'])
+                            current_price = safe_float(sigs[0].features['close'])
                         
                         # Fallback a precios por defecto si no se encuentra precio
                         if not current_price:

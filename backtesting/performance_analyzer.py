@@ -86,19 +86,34 @@ class PerformanceAnalyzer:
     # El resto del código se mantiene igual, pero todos los self.logger.warning / error
     # ya apuntan al logger centralizado automáticamente.
 
-    def analyze_results(self, testing_results: Dict, metrics: List[str]) -> Dict:
+    def analyze_results(self, testing_results: Dict, metrics: List[str], initial_capital: float = 1000.0) -> Dict:
         """Calcula métricas básicas a partir de 'testing_results'.
         Espera una clave 'trades' con elementos que incluyan 'entry_price', 'exit_price', y 'pnl'.
         Devuelve un diccionario con sección 'overall' enriquecida.
         """
         try:
             trades = testing_results.get('trades', []) or []
+
+            # DEBUG: Log what data we're receiving
+            self.logger.info("🔍 PERFORMANCE ANALYZER DEBUG:")
+            self.logger.info(f"   Initial capital: {initial_capital}")
+            self.logger.info(f"   Number of trades: {len(trades)}")
+            overall_data = testing_results.get('overall', {})
+            self.logger.info(f"   Overall data keys: {list(overall_data.keys())}")
+            final_value = overall_data.get('total_value', initial_capital)
+            self.logger.info(f"   Final value from results: {final_value}")
+            self.logger.info(f"   HRM tester total_return: {overall_data.get('total_return', 'N/A')}")
+
+            # GET FINAL PORTFOLIO VALUE FROM RESULTS (more accurate than trade P&L)
+            total_return = (final_value - initial_capital) / initial_capital if initial_capital > 0 else 0.0
+            self.logger.info(f"   Calculated total_return: {total_return:.4f} ({total_return:.2%})")
+
             if not trades:
                 self.logger.warning("No hay trades para analizar. Devolviendo resultados originales.")
                 # Asegura estructura mínima
                 overall = testing_results.get('overall', {})
                 defaults = {
-                    'total_return': 0.0,
+                    'total_return': total_return,  # Use calculated total return
                     'annualized_return': 0.0,
                     'volatility': 0.0,
                     'sharpe_ratio': 0.0,
@@ -120,39 +135,50 @@ class PerformanceAnalyzer:
                 testing_results['overall'] = defaults
                 return testing_results
 
-            # Construir serie de retornos por trade usando pnl directo
+            # For immediate execution backtesting, individual trade P&L is 0
+            # Risk metrics should be based on overall portfolio performance, not trade-by-trade
             trade_returns = []
             equity_curve = []
-            equity = 1.0
             durations_days = []
             pnl_list = []
             timestamps = []
 
-            for t in trades:
-                # Use pnl directly if available (more accurate than calculating from prices)
-                pnl = t.get('pnl')
-                if pnl is not None:
-                    pnl_list.append(float(pnl))
-                    # Calculate return based on position size and entry price
-                    entry_price = float(t.get('entry_price', 0) or 0)
-                    quantity = float(t.get('quantity', 0) or 0)
-                    if entry_price > 0 and quantity > 0:
-                        position_value = entry_price * quantity
-                        r = pnl / position_value if position_value > 0 else 0.0
+            # Check if this is immediate execution (all P&L = 0)
+            all_pnl_zero = all(t.get('pnl', 0) == 0 for t in trades) if trades else False
+
+            if all_pnl_zero and trades:
+                # Immediate execution system - use overall return for risk metrics
+                self.logger.info("🔍 IMMEDIATE EXECUTION DETECTED - Using overall return for risk metrics")
+                # Create synthetic trade returns based on overall performance
+                # This is a simplified approach for immediate execution backtesting
+                total_return = (final_value - initial_capital) / initial_capital if initial_capital > 0 else 0.0
+                avg_trade_return = total_return / len(trades) if len(trades) > 0 else 0.0
+
+                for t in trades:
+                    pnl_list.append(0.0)  # P&L is 0 for immediate execution
+                    r = avg_trade_return  # Distribute total return across trades
+                    trade_returns.append(r)
+                    equity = 1.0 + total_return  # Final equity level
+                    equity_curve.append(equity)
+            else:
+                # Normal trade-by-trade P&L calculation
+                for t in trades:
+                    pnl = t.get('pnl')
+                    commission = t.get('commission', 0)
+                    if pnl is not None:
+                        from l2_tactic.utils import safe_float
+                        pnl_list.append(safe_float(pnl))
+                        r = pnl / initial_capital if initial_capital > 0 else 0.0
                         trade_returns.append(r)
                         equity *= (1.0 + r)
                         equity_curve.append(equity)
-                else:
-                    # Fallback to price calculation if pnl not available
-                    entry = float(t.get('entry_price', 0) or 0)
-                    exitp = float(t.get('exit_price', 0) or 0)
-                    if entry <= 0 or exitp <= 0:
-                        continue
-                    r = (exitp - entry) / entry
-                    trade_returns.append(r)
-                    equity *= (1.0 + r)
-                    equity_curve.append(equity)
-                    pnl_list.append(float(t.get('pnl', (exitp - entry) * float(t.get('quantity', 1))) or (exitp - entry)))
+                    else:
+                        commission = safe_float(t.get('commission', 0.001))
+                        pnl_list.append(-commission)
+                        r = -commission / initial_capital if initial_capital > 0 else 0.0
+                        trade_returns.append(r)
+                        equity *= (1.0 + r)
+                        equity_curve.append(equity)
 
                 # Duración
                 et = t.get('entry_timestamp')
@@ -225,8 +251,8 @@ class PerformanceAnalyzer:
 
             sharpe = (mean_ret / vol * np.sqrt(periods_per_year)) if vol > 0 else 0.0
 
-            # Retorno total compuesto y anualizado
-            total_return = float(equity - 1.0)
+            # DON'T OVERRIDE TOTAL RETURN - use the one calculated from final portfolio value
+            # total_return = float(equity - 1.0)  # This is wrong for backtesting
             annualized_return = float((1.0 + mean_ret) ** periods_per_year - 1.0) if mean_ret != -1.0 else -1.0
 
             # VaR empírico sobre distribución de retornos de trade

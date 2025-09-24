@@ -72,9 +72,10 @@ class DynamicStopLoss:
         support = getattr(mf, "support", None)
         resistance = getattr(mf, "resistance", None)
         if side == "buy" and support:
-            return float(support) * 0.995
+            from .utils import safe_float
+            return safe_float(support) * 0.995
         if side == "sell" and resistance:
-            return float(resistance) * 1.005
+            return safe_float(resistance) * 1.005
         return None
 
     # ---------- API pública ----------

@@ -1,4 +1,3 @@
-# l2_tactic/signal_generators.py
 """
 Signal generation utilities for different FinRL models
 """
@@ -12,12 +11,14 @@ from loguru import logger
 # Handle relative imports for when running as script
 try:
     from .models import TacticalSignal
+    from .utils import safe_float
 except ImportError:
     # Fallback for direct execution
     import sys
     import os
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from l2_tactic.models import TacticalSignal
+    from l2_tactic.utils import safe_float
 
 
 class SignalGenerators:
@@ -39,6 +40,11 @@ class SignalGenerators:
             elif isinstance(data, pd.DataFrame):
                 data = data.iloc[-1]
 
+            # Ensure data has the get method
+            if not hasattr(data, 'get'):
+                logger.warning(f"Data object doesn't have get method: {type(data)}")
+                data = pd.Series({})
+
             # Define the 13 features expected by the model
             feature_names = [
                 'open', 'high', 'low', 'close', 'volume',
@@ -49,8 +55,17 @@ class SignalGenerators:
             obs_values = []
             for f in feature_names:
                 try:
-                    obs_values.append(float(data.get(f, 0.0)))
-                except (ValueError, TypeError):
+                    # Safely get value from data
+                    if hasattr(data, 'get'):
+                        val = data.get(f, 0.0)
+                    else:
+                        val = getattr(data, f, 0.0)
+
+                    # Use safe_float to handle arrays safely
+                    safe_val = safe_float(val)
+                    obs_values.append(safe_val if not np.isnan(safe_val) else 0.0)
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"Error getting feature {f}: {e}")
                     obs_values.append(0.0)
 
             obs = np.array(obs_values, dtype=np.float32).reshape(1, -1)
@@ -72,15 +87,27 @@ class SignalGenerators:
             value: Optional value prediction from the model's value head
         """
         try:
-            # Handle tensor inputs
+            # Handle tensor inputs with robust conversion
             if torch.is_tensor(action_value):
                 if action_value.numel() > 1:
                     # If action_value is a probability vector, get the highest prob action
-                    action_val = action_value.detach().cpu().max().item()
+                    try:
+                        max_val = action_value.detach().cpu().max()
+                        action_val = safe_float(max_val.item())
+                    except:
+                        # Fallback: convert tensor to numpy and get max
+                        action_val = safe_float(action_value.detach().cpu().numpy().max())
                 else:
-                    action_val = action_value.detach().cpu().item()
+                    try:
+                        action_val = safe_float(action_value.detach().cpu().item())
+                    except:
+                        # Fallback: convert to numpy scalar
+                        action_val = safe_float(action_value.detach().cpu().numpy().item())
             else:
-                action_val = float(action_value)
+                # Use safe_float for robust conversion
+                action_val = safe_float(action_value)
+                if np.isnan(action_val):
+                    action_val = 0.0
 
             # Clamp to valid range [0,1]
             action_val = max(0.0, min(1.0, action_val))
@@ -160,13 +187,26 @@ class SignalGenerators:
 
             # 2️⃣ Llamada al modelo PPO (Stable Baselines3)
             action, _states = model.predict(obs, deterministic=True)
-            # action puede ser un array, tomar el valor si es necesario
-            if isinstance(action, np.ndarray):
-                action_value = action.item() if action.size == 1 else float(action[0])
-            elif isinstance(action, (list, tuple)):
-                action_value = float(action[0])
+
+            # Handle different action formats from Stable Baselines3
+            if hasattr(action, 'shape') and len(action.shape) > 0:
+                # Multi-dimensional array/tensor
+                if action.shape[0] == 1:
+                    # Single batch, extract first element
+                    action_value = safe_float(action[0])
+                else:
+                    # Multiple elements, take mean or first element
+                    action_value = safe_float(action.mean()) if hasattr(action, 'mean') else safe_float(action[0])
+            elif hasattr(action, 'item'):
+                # PyTorch scalar tensor
+                action_value = safe_float(action.item())
+            elif hasattr(action, '__len__') and len(action) == 1:
+                # Single element array/list
+                action_value = safe_float(action[0])
             else:
-                action_value = float(action)
+                # Direct scalar or other format
+                action_value = safe_float(action)
+
             logger.debug(f"Action value: {action_value}")
             # No hay value head accesible directamente, así que se pasa None
             signal = SignalGenerators.action_to_signal(action_value, symbol, value=None)

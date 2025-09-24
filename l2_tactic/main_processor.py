@@ -99,8 +99,9 @@ class L2MainProcessor:
                 try:
                     # Construir portfolio_state con caja real
                     port = state.get('portfolio', {}) or {}
-                    total_cap = float(state.get('total_value', state.get('initial_capital', 0.0)) or 0.0)
-                    avail_cap = float(port.get('USDT', 0.0) or 0.0)
+                    from .utils import safe_float
+                    total_cap = safe_float(state.get('total_value', state.get('initial_capital', 0.0)) or 0.0)
+                    avail_cap = safe_float(port.get('USDT', 0.0) or 0.0)
                     portfolio_state = {
                         'total_capital': total_cap,
                         'available_capital': avail_cap,

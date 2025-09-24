@@ -72,13 +72,23 @@ async def log_cycle_data(state, cycle_id, ciclo_start):
     
     # Actualizar state con stats
     state['cycle_stats'] = cycle_stats
-    # Ensure portfolio has the correct structure
-    if 'portfolio' not in state or not isinstance(state['portfolio'], dict):
+    # CRITICAL FIX: Only reset portfolio if it's completely missing or invalid
+    # DO NOT reset existing portfolio data during error recovery
+    if 'portfolio' not in state:
+        logger.warning("⚠️ Portfolio key missing from state, initializing empty portfolio")
         state['portfolio'] = {
             'BTCUSDT': {'position': 0.0, 'free': 0.0},
             'ETHUSDT': {'position': 0.0, 'free': 0.0},
             'USDT': {'free': 3000.0}
         }
+    elif not isinstance(state['portfolio'], dict):
+        logger.warning("⚠️ Portfolio is not a dict, resetting to empty portfolio")
+        state['portfolio'] = {
+            'BTCUSDT': {'position': 0.0, 'free': 0.0},
+            'ETHUSDT': {'position': 0.0, 'free': 0.0},
+            'USDT': {'free': 3000.0}
+        }
+    # If portfolio exists and is a dict, LEAVE IT ALONE - don't reset!
     
     # Usar el logger centralizado
     await core_log_cycle_data(state, cycle_id, ciclo_start)

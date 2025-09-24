@@ -7,15 +7,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Variables sueltas para compatibilidad con módulos existentes
-RISK_LIMIT_BTC = float(os.getenv("RISK_LIMIT_BTC", 0.05))
-RISK_LIMIT_ETH = float(os.getenv("RISK_LIMIT_ETH", 1.0))
-EXPOSURE_MAX_BTC = float(os.getenv("EXPOSURE_MAX_BTC", 0.20))
-EXPOSURE_MAX_ETH = float(os.getenv("EXPOSURE_MAX_ETH", 0.15))
-CORRELATION_LIMIT = float(os.getenv("CORRELATION_LIMIT", 0.80))
-TECHNICAL_THRESHOLD = float(os.getenv("TECHNICAL_THRESHOLD", 0.1))
-FINRL_THRESHOLD = float(os.getenv("FINRL_THRESHOLD", 0.2))
-MEAN_REVERSION_THRESHOLD = float(os.getenv("MEAN_REVERSION_THRESHOLD", 0.3))
-MIN_SIGNAL_STRENGTH = float(os.getenv("MIN_SIGNAL_STRENGTH", 0.4))
+from l2_tactic.utils import safe_float
+
+RISK_LIMIT_BTC = safe_float(os.getenv("RISK_LIMIT_BTC", 0.05))
+RISK_LIMIT_ETH = safe_float(os.getenv("RISK_LIMIT_ETH", 1.0))
+EXPOSURE_MAX_BTC = safe_float(os.getenv("EXPOSURE_MAX_BTC", 0.20))
+EXPOSURE_MAX_ETH = safe_float(os.getenv("EXPOSURE_MAX_ETH", 0.15))
+CORRELATION_LIMIT = safe_float(os.getenv("CORRELATION_LIMIT", 0.80))
+TECHNICAL_THRESHOLD = safe_float(os.getenv("TECHNICAL_THRESHOLD", 0.1))
+FINRL_THRESHOLD = safe_float(os.getenv("FINRL_THRESHOLD", 0.2))
+MEAN_REVERSION_THRESHOLD = safe_float(os.getenv("MEAN_REVERSION_THRESHOLD", 0.3))
+MIN_SIGNAL_STRENGTH = safe_float(os.getenv("MIN_SIGNAL_STRENGTH", 0.4))
 ENABLED_GENERATORS = os.getenv("ENABLED_GENERATORS", "technical,finrl,mean_reversion").split(',')
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")

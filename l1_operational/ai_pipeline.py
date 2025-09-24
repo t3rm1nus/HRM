@@ -120,14 +120,18 @@ class AIModelPipeline:
         """Ejecuta predicción con un modelo específico"""
         import time
         start_time = time.time()
-        
+
+        # L1_{model_name} | Entrada: input features summary
+        features_summary = {k: f"{v:.4f}" for k, v in list(features.items())[:5]}
+        logger.info(f"L1_{model_name} | Entrada: {features_summary}")
+
         try:
             model = self.models[model_name]
             metadata = self.models.get(f"{model_name}_meta", {})
-            
+
             # Preparar features para el modelo
             feature_vector = self._prepare_feature_vector(features, metadata)
-            
+
             # Predicción
             if hasattr(model, 'predict_proba'):
                 # Clasificación
@@ -138,9 +142,16 @@ class AIModelPipeline:
                 # Regresión
                 prediction = float(model.predict([feature_vector])[0])
                 confidence = min(abs(prediction), 1.0)  # Normalizar confianza
-            
+
             processing_time = (time.time() - start_time) * 1000
-            
+
+            # L1_{model_name} | Predicción: prediction result
+            logger.info(f"L1_{model_name} | Predicción: {prediction:.4f} (confianza: {confidence:.3f})")
+
+            # L1_{model_name} | Señal generada: signal type
+            signal_type = "BUY" if prediction > 0.5 else "SELL" if prediction < -0.5 else "HOLD"
+            logger.info(f"L1_{model_name} | Señal generada: {signal_type}")
+
             return ModelPrediction(
                 model_name=model_name,
                 confidence=confidence,
@@ -148,7 +159,7 @@ class AIModelPipeline:
                 features_used=features,
                 processing_time_ms=processing_time
             )
-            
+
         except Exception as e:
             logger.error(f"Error in model {model_name}: {e}")
             return ModelPrediction(

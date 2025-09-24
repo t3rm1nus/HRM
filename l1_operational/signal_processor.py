@@ -28,15 +28,17 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
                 signal_data = signal.copy()
                 for k in ['strength', 'confidence']:
                     if k in signal_data:
-                        signal_data[k] = float(signal_data[k])
-                
+                        from l2_tactic.utils import safe_float
+                        signal_data[k] = safe_float(signal_data[k])
+
                 # Process features and metadata
                 features = signal_data.get('features', {})
                 metadata = signal_data.get('metadata', {})
                 if isinstance(metadata, dict):
                     # Add numerical metadata to features
+                    from l2_tactic.utils import safe_float
                     features.update({
-                        k: float(v) for k, v in metadata.items()
+                        k: safe_float(v) for k, v in metadata.items()
                         if isinstance(v, (int, float))
                     })
                 signal_data['features'] = features
@@ -51,6 +53,7 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
                 return None
         
         # Now create a proper Signal object with all required fields
+        from l2_tactic.utils import safe_float
         signal_dict = {
             'signal_id': str(uuid.uuid4()),
             'strategy_id': 'L2_TACTIC',
@@ -58,10 +61,10 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
             'side': signal.side.lower(),
             'qty': 0.0,  # Will be calculated later
             'order_type': getattr(signal, 'type', 'market'),
-            'confidence': float(getattr(signal, 'confidence', 0.5)),
+            'confidence': safe_float(getattr(signal, 'confidence', 0.5)),
             'timestamp': time.time(),
             'technical_indicators': {},
-            'strength': float(getattr(signal, 'strength', 0.5)),
+            'strength': safe_float(getattr(signal, 'strength', 0.5)),
             'signal_type': getattr(signal, 'signal_type', 'tactical')
         }
         
@@ -83,16 +86,17 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
             features = {}
             
         # Add required technical indicators
+        from l2_tactic.utils import safe_float
         signal_dict['technical_indicators'] = {
-            'signal_strength': float(getattr(signal, 'strength', 0.5)),
-            'rsi': float(features.get('rsi', 50.0)),
-            'macd': float(features.get('macd', 0.0)),
-            'macd_signal': float(features.get('macd_signal', 0.0)),
-            'sma_20': float(features.get('sma_20', 0.0)),
-            'sma_50': float(features.get('sma_50', 0.0)),
-            'bollinger_upper': float(features.get('bollinger_upper', 0.0)),
-            'bollinger_lower': float(features.get('bollinger_lower', 0.0)),
-            'vol_zscore': float(features.get('vol_zscore', 0.0))
+            'signal_strength': safe_float(getattr(signal, 'strength', 0.5)),
+            'rsi': safe_float(features.get('rsi', 50.0)),
+            'macd': safe_float(features.get('macd', 0.0)),
+            'macd_signal': safe_float(features.get('macd_signal', 0.0)),
+            'sma_20': safe_float(features.get('sma_20', 0.0)),
+            'sma_50': safe_float(features.get('sma_50', 0.0)),
+            'bollinger_upper': safe_float(features.get('bollinger_upper', 0.0)),
+            'bollinger_lower': safe_float(features.get('bollinger_lower', 0.0)),
+            'vol_zscore': safe_float(features.get('vol_zscore', 0.0))
         }
         
         # Store complete features for AI processing
@@ -115,21 +119,23 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
             if isinstance(market_data, dict) and 'close' in market_data:
                 price = market_data['close']
                 
-        signal_dict['price'] = float(price) if price is not None else 0.0  # Default to 0.0 instead of None
-        
+        from l2_tactic.utils import safe_float
+        signal_dict['price'] = safe_float(price) if price is not None else 0.0  # Default to 0.0 instead of None
+
         # Add timestamp if available
         if hasattr(signal, 'timestamp'):
             if isinstance(signal.timestamp, pd.Timestamp):
                 signal_dict['timestamp'] = signal.timestamp.timestamp()
             elif signal.timestamp is not None:
-                signal_dict['timestamp'] = float(signal.timestamp)
-        
+                signal_dict['timestamp'] = safe_float(signal.timestamp)
+
         # Add features as technical indicators
         if hasattr(signal, 'features'):
             features = signal.features
             if isinstance(features, dict):
+                from l2_tactic.utils import safe_float
                 signal_dict['technical_indicators'].update(
-                    {k: float(v) for k, v in features.items() 
+                    {k: safe_float(v) for k, v in features.items()
                      if isinstance(v, (int, float))}
                 )
         

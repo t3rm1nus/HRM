@@ -182,6 +182,9 @@ class BinanceDataCollector:
                 self.logger.error(f"    ❌ Error en filtro de fechas: {e}")
                 pass
 
+            # Llenar NaN en volume con 0 para evitar problemas en resampling
+            df['volume'] = df['volume'].fillna(0)
+
             # El parquet está a 5m; re-muestrea a lo solicitado
             if interval:
                 rule = interval
@@ -196,7 +199,7 @@ class BinanceDataCollector:
                         'low': 'min',
                         'close': 'last',
                         'volume': 'sum',
-                    }).dropna(how='any')
+                    }).dropna(subset=['open', 'high', 'low', 'close'])
 
             # Selecciona columnas OHLCV
             df = df[['open', 'high', 'low', 'close', 'volume']]

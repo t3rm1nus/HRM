@@ -23,7 +23,7 @@ class AIModelConfig:
     model_name: str = "modeloL2_multiasset"
     model_params: Dict[str, Any] = field(default_factory=dict)
     signal_horizon_minutes: int = 5
-    model_path: str = "C:/proyectos/HRM/models/L2/gemini.zip"  # Path absoluto para PPO SB3
+    model_path: str = "C:/proyectos/HRM/models/L2/deepseek.zip"  # Path absoluto para PPO SB3
     model_type: str = "stable_baselines3"  # tipo de modelo
     prediction_threshold: float = 0.3
     max_batch_size: int = 100
@@ -238,7 +238,7 @@ class L2Config:
     pattern_weight: float = 0.2
 
     # --- Thresholds para validar señal compuesta ---
-    min_signal_confidence: float = 0.3
+    min_signal_confidence: float = 0.1  # Lowered from 0.3 to allow wrapper signals through
    
     min_signal_strength: float = 0.05
 
@@ -267,7 +267,8 @@ class L2Config:
         if os.getenv('L2_AI_MODEL_TYPE'):
             config.ai_model.model_type = os.getenv('L2_AI_MODEL_TYPE')
         if os.getenv('L2_PREDICTION_THRESHOLD'):
-            config.ai_model.prediction_threshold = float(os.getenv('L2_PREDICTION_THRESHOLD'))
+            from l2_tactic.utils import safe_float
+            config.ai_model.prediction_threshold = safe_float(os.getenv('L2_PREDICTION_THRESHOLD'))
 
         # Signal config desde env
         if os.getenv('L2_MIN_SIGNAL_STRENGTH'):

@@ -8,13 +8,14 @@ HRM es un sistema de trading algorítmico **REAL Y FUNCIONAL** que opera con BTC
 **🚀 El sistema HRM está completamente operativo y ejecutándose en producción:**
 - ✅ **Conexión real a Binance Spot** (modo LIVE y TESTNET)
 - ✅ **Generación de señales cada 10 segundos** con indicadores técnicos
-- ✅ **Modelos IA integrados** (FinRL + análisis técnico)  
+- ✅ **Modelos IA integrados** (FinRL + análisis técnico)
 - ✅ **Gestión de portfolio automática** con tracking en CSV
 - ✅ **Logging persistente** completo en data/logs/
 - ✅ **Controles de riesgo dinámicos** y stops inteligentes
 - ✅ **Stop-Loss y Take-Profit automáticos** integrados
 - ✅ **Costos reales de trading** (comisiones 0.1% Binance)
 - ✅ **Monitoreo de posiciones** en tiempo real
+- ✅ **9 modelos AI operativos** (3 L1 + 1 L2 + 5 L3)
 Modos de operación
 表格
 复制

@@ -38,7 +38,8 @@ def _best_threshold_by_f1(y_true: np.ndarray, y_proba: np.ndarray) -> float:
         f1 = f1_score(y_true, (y_proba >= t).astype(int))
         if f1 > best_f1:
             best_f1, best_t = f1, t
-    return float(best_t)
+    from l2_tactic.utils import safe_float
+    return safe_float(best_t)
 
 
 def main():
@@ -87,5 +88,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -178,17 +178,18 @@ class TechnicalIndicators:
         if pd.isna(vol):
             vol = last.get("ti_atr_norm", np.nan)
 
+        from .utils import safe_float
         feats = {
-            "volatility": float(vol) if pd.notna(vol) else np.nan,
-            "volume_ratio": float(last.get("ti_volume_ratio", np.nan)),
-            "price_momentum": float(last.get("ti_roc", np.nan)),
+            "volatility": safe_float(vol) if pd.notna(vol) else np.nan,
+            "volume_ratio": safe_float(last.get("ti_volume_ratio", np.nan)),
+            "price_momentum": safe_float(last.get("ti_roc", np.nan)),
             # Extras opcionales:
-            "rsi": float(last.get("ti_rsi", np.nan)),
-            "macd": float(last.get("ti_macd", np.nan)),
-            "macd_signal": float(last.get("ti_macd_signal", np.nan)),
-            "macd_hist": float(last.get("ti_macd_hist", np.nan)),
-            "bb_percent": float(last.get("ti_bb_percent", np.nan)),
-            "vwap_deviation": float(last.get("ti_vwap_dev", np.nan)),
+            "rsi": safe_float(last.get("ti_rsi", np.nan)),
+            "macd": safe_float(last.get("ti_macd", np.nan)),
+            "macd_signal": safe_float(last.get("ti_macd_signal", np.nan)),
+            "macd_hist": safe_float(last.get("ti_macd_hist", np.nan)),
+            "bb_percent": safe_float(last.get("ti_bb_percent", np.nan)),
+            "vwap_deviation": safe_float(last.get("ti_vwap_dev", np.nan)),
         }
         return feats
 

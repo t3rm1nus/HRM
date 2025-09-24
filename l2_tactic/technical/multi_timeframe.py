@@ -115,16 +115,17 @@ class MultiTimeframeTechnical:
 
                 # Obtener la última fila de indicadores
                 latest = data.iloc[-1]
-                rsi = float(latest.get('rsi', 50.0))
-                macd = float(latest.get('macd', 0.0))
-                macd_signal = float(latest.get('macd_signal', 0.0))
-                bollinger_upper = float(latest.get('bollinger_upper', 0.0))
-                bollinger_lower = float(latest.get('bollinger_lower', 0.0))
-                sma_20 = float(latest.get('sma_20', 0.0))
-                sma_50 = float(latest.get('sma_50', 0.0))
-                ema_12 = float(latest.get('ema_12', 0.0))
-                ema_26 = float(latest.get('ema_26', 0.0))
-                close = float(latest.get('close', 0.0))
+                from ..utils import safe_float
+                rsi = safe_float(latest.get('rsi', 50.0))
+                macd = safe_float(latest.get('macd', 0.0))
+                macd_signal = safe_float(latest.get('macd_signal', 0.0))
+                bollinger_upper = safe_float(latest.get('bollinger_upper', 0.0))
+                bollinger_lower = safe_float(latest.get('bollinger_lower', 0.0))
+                sma_20 = safe_float(latest.get('sma_20', 0.0))
+                sma_50 = safe_float(latest.get('sma_50', 0.0))
+                ema_12 = safe_float(latest.get('ema_12', 0.0))
+                ema_26 = safe_float(latest.get('ema_26', 0.0))
+                close = safe_float(latest.get('close', 0.0))
 
                 logger.debug(f"Indicadores para {symbol}: rsi={rsi:.2f}, macd={macd:.2f}, macd_signal={macd_signal:.2f}, "
                             f"bb_upper={bollinger_upper:.2f}, bb_lower={bollinger_lower:.2f}, "

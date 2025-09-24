@@ -3,6 +3,8 @@
 Model loading utilities for different FinRL model formats
 """
 import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
 from loguru import logger
 
 # Import for model loading
@@ -112,7 +114,7 @@ class ModelLoaders:
 
     @staticmethod
     def load_deepseek_model(zip_path: str):
-        """Load DeepSeek model from ZIP with custom logic - matches training configuration"""
+        """Load DeepSeek model with aggressive wrapper - matches HRM native training configuration"""
         try:
             if PPO is None:
                 logger.error("stable_baselines3 not available")
@@ -123,10 +125,93 @@ class ModelLoaders:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             logger.info(f"Loading DeepSeek model with device={device}")
 
-            # Load without policy_kwargs to avoid mismatch with stored model
-            model = PPO.load(zip_path, device=device)
-            logger.info(f"DeepSeek model loaded successfully! Policy: {type(model.policy)}")
-            return model
+            # Load config from JSON if available
+            config_path = os.path.join(os.path.dirname(zip_path), 'deepseek.json')
+            if os.path.exists(config_path):
+                import json
+                with open(config_path, 'r') as f:
+                    loaded_config = json.load(f)
+                logger.info(f"Loaded DeepSeek config: native_compatible={loaded_config.get('hrm_metadata', {}).get('native_compatible', False)}")
+
+            # Load directly without custom objects - HRM native models don't need conversion
+            try:
+                base_model = PPO.load(zip_path, device=device)
+                logger.info(f"DeepSeek base model loaded successfully! Policy: {type(base_model.policy)}")
+
+                # Check if aggressive wrapper exists and apply it
+                wrapper_path = os.path.join(os.path.dirname(zip_path), 'wrapper_deepseek.py')
+                if os.path.exists(wrapper_path):
+                    logger.info("Found aggressive wrapper, applying it to make model more aggressive")
+
+                    # Import the wrapper dynamically
+                    import sys
+                    wrapper_dir = os.path.dirname(wrapper_path)
+                    if wrapper_dir not in sys.path:
+                        sys.path.insert(0, wrapper_dir)
+
+                    try:
+                        from wrapper_deepseek import ImprovedDeepSeekWrapper
+                        wrapped_model = ImprovedDeepSeekWrapper(zip_path)
+                        if wrapped_model.base_model is not None:
+                            logger.info("🎯 IMPROVED wrapper applied successfully - enhanced signal quality!")
+                            # Verify observation space is properly exposed
+                            if hasattr(wrapped_model, 'observation_space'):
+                                obs_shape = wrapped_model.observation_space.shape
+                                logger.info(f"✅ Wrapper observation space: {obs_shape}")
+                            else:
+                                logger.warning("⚠️ Wrapper missing observation_space attribute")
+                            return wrapped_model
+                        else:
+                            logger.warning("Wrapper creation failed, using base model")
+                            return base_model
+                    except ImportError as e:
+                        logger.warning(f"Could not import ImprovedDeepSeekWrapper: {e}, using base model")
+                        return base_model
+                    finally:
+                        if wrapper_dir in sys.path:
+                            sys.path.remove(wrapper_dir)
+                else:
+                    logger.info("No aggressive wrapper found, using base model")
+                    return base_model
+
+            except Exception as e:
+                error_str = str(e).lower()
+                if "optimizer" in error_str:
+                    logger.warning(f"Optimizer loading failed, but model parameters loaded. Recreating optimizer: {e}")
+                    # Try loading again without optimizer
+                    try:
+                        base_model = PPO.load(zip_path, device=device)
+                        # Since optimizer failed, we need to recreate it
+                        import torch.optim as optim
+                        base_model.optimizer = optim.Adam(base_model.policy.parameters(), lr=3e-4)
+                        logger.info("Recreated optimizer with default settings")
+
+                        # Apply wrapper if available
+                        wrapper_path = os.path.join(os.path.dirname(zip_path), 'wrapper_deepseek.py')
+                        if os.path.exists(wrapper_path):
+                            try:
+                                import sys
+                                wrapper_dir = os.path.dirname(wrapper_path)
+                                if wrapper_dir not in sys.path:
+                                    sys.path.insert(0, wrapper_dir)
+                                from wrapper_deepseek import ImprovedDeepSeekWrapper
+                                wrapped_model = ImprovedDeepSeekWrapper(zip_path)
+                                if wrapped_model.base_model is not None:
+                                    logger.info("🎯 IMPROVED wrapper applied after optimizer fix!")
+                                    return wrapped_model
+                            except Exception as wrap_e:
+                                logger.warning(f"Wrapper application failed: {wrap_e}")
+                            finally:
+                                if wrapper_dir in sys.path:
+                                    sys.path.remove(wrapper_dir)
+
+                        return base_model
+                    except Exception as e2:
+                        logger.error(f"Failed to recreate optimizer: {e2}")
+                        return None
+                else:
+                    logger.error(f"Error loading DeepSeek model: {e}")
+                    return None
 
         except Exception as e:
             logger.error(f"Error loading DeepSeek model: {e}", exc_info=True)

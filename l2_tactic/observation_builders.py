@@ -7,6 +7,9 @@ import pandas as pd
 from typing import Dict, Any, Optional, List
 from loguru import logger
 
+# Import safe_float for robust array handling
+from .utils import safe_float
+
 
 class ObservationBuilders:
     """Collection of methods for building observations for different models"""
@@ -85,14 +88,14 @@ class ObservationBuilders:
                     if indicators and f in indicators:
                         indicator_series = indicators[f]
                         if hasattr(indicator_series, 'iloc'):
-                            value = float(indicator_series.iloc[-1])
+                            value = safe_float(indicator_series.iloc[-1])
                         else:
-                            value = float(indicator_series)
+                            value = safe_float(indicator_series)
                     # Then try from market data
                     elif hasattr(last_row, 'get'):
-                        value = float(last_row.get(f, 0.0))
+                        value = safe_float(last_row.get(f, 0.0))
                     elif isinstance(last_row, pd.Series) and f in last_row.index:
-                        value = float(last_row[f])
+                        value = safe_float(last_row[f])
                     else:
                         value = 0.0
 
@@ -142,14 +145,14 @@ class ObservationBuilders:
                     if indicators and f in indicators:
                         indicator_series = indicators[f]
                         if hasattr(indicator_series, 'iloc'):
-                            value = float(indicator_series.iloc[-1])
+                            value = safe_float(indicator_series.iloc[-1])
                         else:
-                            value = float(indicator_series)
+                            value = safe_float(indicator_series)
                     # Then try market data
                     elif hasattr(last_row, 'get'):
-                        value = float(last_row.get(f, 0.0))
+                        value = safe_float(last_row.get(f, 0.0))
                     elif isinstance(last_row, pd.Series) and f in last_row.index:
-                        value = float(last_row[f])
+                        value = safe_float(last_row[f])
                     else:
                         value = 0.0
 
@@ -191,7 +194,7 @@ class ObservationBuilders:
             # Basic OHLCV
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 try:
-                    val = float(last_row.get(col, 0.0)) if hasattr(last_row, 'get') else float(last_row[col])
+                    val = safe_float(last_row.get(col, 0.0)) if hasattr(last_row, 'get') else safe_float(last_row[col])
                     features.append(val if np.isfinite(val) else 0.0)
                 except Exception:
                     features.append(0.0)
@@ -205,9 +208,9 @@ class ObservationBuilders:
                     try:
                         ind_series = indicators[ind]
                         if hasattr(ind_series, 'iloc'):
-                            val = float(ind_series.iloc[-1])
+                            val = safe_float(ind_series.iloc[-1])
                         else:
-                            val = float(ind_series)
+                            val = safe_float(ind_series)
                         features.append(val if np.isfinite(val) else 0.0)
                     except Exception:
                         features.append(0.0)
@@ -276,6 +279,149 @@ class ObservationBuilders:
             return None
 
     @staticmethod
+    def build_hrm_native_obs(market_data: dict, symbol: str, indicators: dict = None):
+        """Construye observación HRM nativa de 85 dimensiones para DeepSeek"""
+        try:
+            # Build features DataFrame
+            features_df = ObservationBuilders._build_features_dataframe(symbol, market_data, indicators or {})
+            if features_df is None or features_df.empty:
+                logger.error(f"❌ Failed to build features DataFrame for {symbol}")
+                return None
+
+            # HRM native features (85 dimensions) - comprehensive market and technical features
+            last_row = features_df.iloc[-1]
+
+            # Basic price features (10 dimensions)
+            basic_features = []
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                try:
+                    val = safe_float(last_row.get(col, 0.0))
+                    basic_features.append(val if np.isfinite(val) else 0.0)
+                except Exception:
+                    basic_features.append(0.0)
+
+            # Add price ratios and changes
+            try:
+                close = safe_float(last_row.get('close', 0.0))
+                open_price = safe_float(last_row.get('open', 0.0))
+                high = safe_float(last_row.get('high', 0.0))
+                low = safe_float(last_row.get('low', 0.0))
+
+                # Intraday change
+                intraday_change = (close - open_price) / open_price if open_price != 0 else 0.0
+                basic_features.append(intraday_change)
+
+                # Daily range
+                daily_range = (high - low) / close if close != 0 else 0.0
+                basic_features.append(daily_range)
+
+                # Volume intensity (normalized)
+                volume = safe_float(last_row.get('volume', 0.0))
+                volume_intensity = volume / close if close != 0 else 0.0
+                basic_features.append(volume_intensity)
+
+                # Gap indicator
+                basic_features.append(0.0)  # Placeholder for gap
+            except Exception:
+                basic_features.extend([0.0, 0.0, 0.0, 0.0])
+
+            # Technical indicators (50 dimensions)
+            tech_features = []
+            tech_indicators = [
+                'rsi', 'macd', 'macd_signal', 'macd_hist', 'sma_5', 'sma_10', 'sma_20', 'sma_50',
+                'ema_5', 'ema_10', 'ema_20', 'ema_50', 'bollinger_upper', 'bollinger_middle', 'bollinger_lower',
+                'stoch_k', 'stoch_d', 'williams_r', 'cci', 'mfi', 'roc', 'mom', 'adx', 'di_plus', 'di_minus',
+                'trix', 'keltner_upper', 'keltner_middle', 'keltner_lower', 'ichimoku_tenkan',
+                'ichimoku_kijun', 'ichimoku_senkou_a', 'ichimoku_senkou_b', 'parabolic_sar',
+                'dpo', 'vortex_pos', 'vortex_neg', 'chande_kroll_stop_long', 'chande_kroll_stop_short',
+                'supertrend', 'aroon_up', 'aroon_down', 'tsf', 'special_k', 'special_d',
+                'elder_force_index', 'elder_thermometer', 'market_mechanics', 'gopalakrishnan_range_index',
+                'balance_of_power', 'volume_price_trend', 'ease_of_movement', 'negative_volume_index'
+            ]
+
+            for ind in tech_indicators:
+                if indicators and ind in indicators:
+                    try:
+                        ind_series = indicators[ind]
+                        if hasattr(ind_series, 'iloc'):
+                            val = safe_float(ind_series.iloc[-1])
+                        else:
+                            val = safe_float(ind_series)
+                        tech_features.append(val if np.isfinite(val) else 0.0)
+                    except Exception:
+                        tech_features.append(0.0)
+                else:
+                    tech_features.append(0.0)
+
+            # Market regime features (10 dimensions)
+            regime_features = []
+
+            # Volatility measures
+            try:
+                if len(features_df) > 5:
+                    close_prices = features_df['close'].tail(10).astype(float)
+                    returns = close_prices.pct_change().dropna()
+                    if len(returns) > 0:
+                        regime_features.append(returns.std())  # Volatility
+                        regime_features.append(returns.mean())  # Mean return
+                        regime_features.append(returns.skew())  # Skewness
+                        regime_features.append(returns.kurtosis())  # Kurtosis
+                    else:
+                        regime_features.extend([0.0, 0.0, 0.0, 0.0])
+                else:
+                    regime_features.extend([0.0, 0.0, 0.0, 0.0])
+            except Exception:
+                regime_features.extend([0.0, 0.0, 0.0, 0.0])
+
+            # Trend strength
+            try:
+                if len(features_df) > 20:
+                    sma20 = features_df['close'].tail(20).mean()
+                    sma50 = features_df['close'].tail(50).mean() if len(features_df) > 50 else features_df['close'].mean()
+                    trend_strength = (sma20 - sma50) / sma50 if sma50 != 0 else 0.0
+                    regime_features.append(trend_strength)
+                else:
+                    regime_features.append(0.0)
+            except Exception:
+                regime_features.append(0.0)
+
+            # Momentum indicators
+            regime_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])  # Placeholders
+
+            # Cross-asset features (15 dimensions) - simplified
+            cross_features = []
+
+            # BTC-ETH ratio and correlation
+            cross_features.extend([
+                ObservationBuilders._compute_eth_btc_ratio(market_data, {symbol: features_df}),
+                ObservationBuilders._compute_btc_eth_corr30(market_data),
+                ObservationBuilders._compute_spread_pct(market_data, {symbol: features_df})
+            ])
+
+            # Additional cross-market features
+            cross_features.extend([0.0] * 12)  # Placeholders for additional cross-market features
+
+            # Combine all features: 10 + 50 + 10 + 15 = 85
+            all_features = basic_features + tech_features + regime_features + cross_features
+
+            # Ensure exactly 85 dimensions
+            if len(all_features) < 85:
+                all_features.extend([0.0] * (85 - len(all_features)))
+            elif len(all_features) > 85:
+                all_features = all_features[:85]
+
+            if len(all_features) != 85:
+                logger.error(f"❌ HRM native feature dimension mismatch: got {len(all_features)}, expected 85")
+                return None
+
+            logger.debug(f"✅ Built HRM native observation: {len(basic_features)} basic + {len(tech_features)} tech + {len(regime_features)} regime + {len(cross_features)} cross")
+            return np.array(all_features, dtype=np.float32)
+
+        except Exception as e:
+            logger.error(f"❌ Error building HRM native observation: {e}")
+            return None
+
+    @staticmethod
     def build_generic_obs(market_data: dict, symbol: str, indicators: dict = None, expected_dims: int = 257):
         """Construye observación genérica para otros modelos"""
         try:
@@ -297,7 +443,7 @@ class ObservationBuilders:
                 all_features = []
                 for c in numeric_cols[:expected_dims]:
                     try:
-                        v = float(last_row[c])
+                        v = safe_float(last_row[c])
                         all_features.append(v if np.isfinite(v) else 0.0)
                     except Exception:
                         all_features.append(0.0)
@@ -337,7 +483,7 @@ class ObservationBuilders:
         # Expand each numeric feature by creating variations
         for c in numeric_cols:
             try:
-                base_val = float(last_row[c]) if np.isfinite(last_row[c]) else 0.0
+                base_val = safe_float(last_row[c]) if np.isfinite(last_row[c]) else 0.0
 
                 # Create multiple variations of each feature
                 values.append(base_val)  # Original
@@ -385,7 +531,7 @@ class ObservationBuilders:
         for c in numeric_cols[:246]:
             try:
                 v = last_row[c]
-                values.append(float(v) if np.isfinite(v) else 0.0)
+                values.append(safe_float(v) if np.isfinite(v) else 0.0)
             except Exception:
                 values.append(0.0)
 
@@ -409,7 +555,7 @@ class ObservationBuilders:
             try:
                 btc_df = df_map.get("BTCUSDT")
                 if isinstance(btc_df, pd.DataFrame) and key in btc_df.columns and not btc_df.empty:
-                    v = float(btc_df[key].iloc[-1])
+                    v = safe_float(btc_df[key].iloc[-1])
                     return v if np.isfinite(v) else default
             except Exception:
                 pass
@@ -433,13 +579,13 @@ class ObservationBuilders:
                 common_idx = v_eth.index.intersection(v_btc.index)
                 v_eth = v_eth.loc[common_idx]
                 v_btc = v_btc.loc[common_idx]
-                ratio = float(v_eth.mean() / v_btc.mean()) if v_btc.mean() != 0 else 0.0
+                ratio = safe_float(v_eth.mean() / v_btc.mean()) if v_btc.mean() != 0 else 0.0
                 feats.append(ratio if np.isfinite(ratio) else 0.0)
                 v_eth_ret = v_eth.pct_change().dropna()
                 v_btc_ret = v_btc.pct_change().dropna()
                 common_idx = v_eth_ret.index.intersection(v_btc_ret.index)
                 if len(common_idx) >= 3:
-                    corr = float(np.corrcoef(v_eth_ret.loc[common_idx], v_btc_ret.loc[common_idx])[0, 1])
+                    corr = safe_float(np.corrcoef(v_eth_ret.loc[common_idx], v_btc_ret.loc[common_idx])[0, 1])
                     feats.append(corr if np.isfinite(corr) else 0.0)
                 else:
                     feats.append(0.0)
@@ -454,7 +600,7 @@ class ObservationBuilders:
             eth_f = features_by_symbol.get("ETHUSDT")
             if (isinstance(btc_f, pd.DataFrame) and "macd" in btc_f.columns and not btc_f.empty and
                 isinstance(eth_f, pd.DataFrame) and "macd" in eth_f.columns and not eth_f.empty):
-                val = float(btc_f["macd"].iloc[-1]) - float(eth_f["macd"].iloc[-1])
+                val = safe_float(btc_f["macd"].iloc[-1]) - safe_float(eth_f["macd"].iloc[-1])
                 feats.append(val if np.isfinite(val) else 0.0)
             else:
                 feats.append(0.0)
@@ -467,7 +613,7 @@ class ObservationBuilders:
         elif len(feats) > 11:
             feats = feats[:11]
 
-        return [float(x) for x in feats]
+        return [safe_float(x) for x in feats]
 
     @staticmethod
     def _build_risk_aware_features(state: Dict[str, Any], symbol: str,
@@ -570,8 +716,8 @@ class ObservationBuilders:
             eth = market_data.get("ETHUSDT")
             btc = market_data.get("BTCUSDT")
             if isinstance(eth, pd.DataFrame) and not eth.empty and isinstance(btc, pd.DataFrame) and not btc.empty:
-                eth_close = float(eth["close"].iloc[-1])
-                btc_close = float(btc["close"].iloc[-1])
+                eth_close = safe_float(eth["close"].iloc[-1])
+                btc_close = safe_float(btc["close"].iloc[-1])
                 if btc_close != 0:
                     return eth_close / btc_close
         except Exception:
@@ -601,7 +747,7 @@ class ObservationBuilders:
             common_idx = eth_ret.index.intersection(btc_ret.index)
             if len(common_idx) < 3:
                 return 0.0
-            corr = float(np.corrcoef(eth_ret.loc[common_idx], btc_ret.loc[common_idx])[0, 1])
+            corr = safe_float(np.corrcoef(eth_ret.loc[common_idx], btc_ret.loc[common_idx])[0, 1])
             if np.isfinite(corr):
                 return corr
         except Exception:
@@ -616,8 +762,8 @@ class ObservationBuilders:
             eth = market_data.get("ETHUSDT")
             btc = market_data.get("BTCUSDT")
             if isinstance(eth, pd.DataFrame) and not eth.empty and isinstance(btc, pd.DataFrame) and not btc.empty:
-                eth_close = float(eth["close"].iloc[-1])
-                btc_close = float(btc["close"].iloc[-1])
+                eth_close = safe_float(eth["close"].iloc[-1])
+                btc_close = safe_float(btc["close"].iloc[-1])
                 if btc_close != 0:
                     return (btc_close - eth_close) / btc_close
         except Exception:

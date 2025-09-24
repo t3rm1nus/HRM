@@ -1,5 +1,6 @@
 import os
 import csv
+import numpy as np
 from typing import Dict, Any
 from loguru import logger
 import joblib
@@ -40,18 +41,65 @@ def _score_trend(signal: Dict[str, Any]) -> float:
 # --- Función para convertir features a vector ML ---
 def _extract_features(signal: dict):
     features = signal.get("features", {}) or {}
+    symbol = signal.get("symbol", "BTC")
+
+    # Lista completa de features en el orden exacto usado en entrenamiento (52 features)
     ordered = [
         features.get("delta_close", 0.0),
-        features.get("delta_close_5m", 0.0),
-        features.get("momentum_stoch", 0.0),
-        features.get("momentum_stoch_5m", 0.0),
+        features.get("ema_10", 0.0),
+        features.get("ema_20", 0.0),
+        features.get("sma_10", 0.0),
+        features.get("sma_20", 0.0),
+        features.get("volume", 0.0),
+        features.get("vol_rel", 0.0),
+        features.get("rsi", 0.0),
         features.get("macd", 0.0),
+        features.get("macd_signal", 0.0),
         features.get("macd_hist", 0.0),
-        features.get("volatility_atr", 0.0),
+        features.get("trend_adx", 0.0),
+        features.get("momentum_stoch", 0.0),
+        features.get("momentum_stoch_signal", 0.0),
+        features.get("volume_obv", 0.0),
         features.get("volatility_bbw", 0.0),
-        # Añadir todas las demás features usadas en entrenamiento
+        features.get("volatility_atr", 0.0),
+        features.get("trend_sma_fast", 0.0),
+        features.get("trend_sma_slow", 0.0),
+        features.get("trend_ema_fast", 0.0),
+        features.get("trend_ema_slow", 0.0),
+        features.get("trend_macd", 0.0),
+        features.get("momentum_rsi", 0.0),
+        features.get("close_5m", 0.0),
+        features.get("delta_close_5m", 0.0),
+        features.get("ema_10_5m", 0.0),
+        features.get("ema_20_5m", 0.0),
+        features.get("sma_10_5m", 0.0),
+        features.get("sma_20_5m", 0.0),
+        features.get("volume_5m", 0.0),
+        features.get("vol_rel_5m", 0.0),
+        features.get("rsi_5m", 0.0),
+        features.get("macd_5m", 0.0),
+        features.get("macd_signal_5m", 0.0),
+        features.get("macd_hist_5m", 0.0),
+        features.get("trend_adx_5m", 0.0),
+        features.get("momentum_stoch_5m", 0.0),
+        features.get("momentum_stoch_signal_5m", 0.0),
+        features.get("volume_obv_5m", 0.0),
+        features.get("volatility_bbw_5m", 0.0),
+        features.get("volatility_atr_5m", 0.0),
+        features.get("trend_sma_fast_5m", 0.0),
+        features.get("trend_sma_slow_5m", 0.0),
+        features.get("trend_ema_fast_5m", 0.0),
+        features.get("trend_ema_slow_5m", 0.0),
+        features.get("trend_macd_5m", 0.0),
+        features.get("momentum_rsi_5m", 0.0),
+        features.get("eth_btc_ratio", 0.0),
+        features.get("eth_btc_ratio_sma", 0.0),
+        features.get("btc_eth_corr", 0.0),
+        1.0 if symbol == "BTC" else 0.0,  # is_btc
+        1.0 if symbol == "ETH" else 0.0   # is_eth
     ]
-    logger.debug(f"[TrendAI] Features extraídas: {ordered}")
+
+    logger.debug(f"[TrendAI] Features extraídas para {symbol}: {len(ordered)} features")
     return [ordered]  # sklearn espera 2D: [n_samples, n_features]
 
 # --- Guardar histórico ---
@@ -84,7 +132,21 @@ def filter_signal(signal: Dict[str, Any]) -> bool:
         # --- Calcular probabilidad de cada modelo ---
         for name in ["RF", "LGBM", "LR"]:
             if models.get(name):
-                probs[name] = float(models[name].predict_proba(X)[0][1])
+                model = models[name]
+                # Handle different model types
+                if hasattr(model, 'predict_proba'):
+                    # sklearn models (RF, LR) have predict_proba
+                    probs[name] = float(model.predict_proba(X)[0][1])
+                elif hasattr(model, 'predict'):
+                    # LightGBM native Booster returns probabilities directly with predict()
+                    pred = model.predict(X)
+                    if isinstance(pred, (list, np.ndarray)) and len(pred) > 0:
+                        # For binary classification, predict() returns probabilities
+                        probs[name] = float(pred[0])
+                    else:
+                        probs[name] = 0.5  # fallback
+                else:
+                    probs[name] = 0.5  # fallback
                 logger.info(f"[TrendAI] Modelo {name} predijo prob: {probs[name]:.3f}")
             else:
                 probs[name] = None
