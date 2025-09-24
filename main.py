@@ -62,7 +62,7 @@ async def main():
 
         # Initialize Portfolio Manager for persistence with new config system
         portfolio_manager = PortfolioManager(
-            mode="live",
+            mode="simulated",  # Use simulated mode for testing with 3000 USDT
             initial_balance=test_initial_balance,  # Use test balance instead of config
             client=binance_client,
             symbols=env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"]),

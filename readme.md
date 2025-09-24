@@ -704,4 +704,3 @@ Configurar parámetros y límites en `core/config/` y en variables de entorno.
 ## 📝 Notas finales
 
 Este README está diseñado para ser **autosuficiente**: describe la jerarquía, arquitectura, flujos, estructura de código, dataset, telemetría, persistencia y puesta en marcha para que un agente externo/colaborador comprenda y opere el proyecto sin necesidad inmediata de otros documentos.
-Si quieres, te lo puedo convertir a un `README.md` listo para push a GitHub, añadir badges (build, coverage), o generar una versión en inglés. ¿Qué prefieres ahora?
