@@ -68,14 +68,28 @@ class RiskGuard:
         return ValidationResult(True, "Basic parameters valid")
     
     def _validate_stop_loss(self, signal: Signal) -> ValidationResult:
-        """Validación de stop loss obligatorio"""
+        """Validación de stop loss obligatorio con límites estrictos para prevenir grandes pérdidas"""
         if not signal.stop_loss:
             return ValidationResult(False, "Stop loss is mandatory")
-        if signal.side == 'buy' and signal.stop_loss >= (signal.price or 50000):
-            return ValidationResult(False, "Buy stop loss must be below entry price")
-        if signal.side == 'sell' and signal.stop_loss <= (signal.price or 50000):
-            return ValidationResult(False, "Sell stop loss must be above entry price")
-        return ValidationResult(True, "Stop loss valid")
+
+        entry_price = signal.price or 50000
+
+        if signal.side == 'buy':
+            if signal.stop_loss >= entry_price:
+                return ValidationResult(False, "Buy stop loss must be below entry price")
+            # STRICT LIMIT: Stop loss must be at least 2% below entry to prevent excessive losses
+            min_stop_distance = entry_price * 0.02  # 2% minimum stop distance
+            if (entry_price - signal.stop_loss) < min_stop_distance:
+                return ValidationResult(False, f"Buy stop loss too close to entry. Must be at least 2% below (${min_stop_distance:.2f})")
+        elif signal.side == 'sell':
+            if signal.stop_loss <= entry_price:
+                return ValidationResult(False, "Sell stop loss must be above entry price")
+            # STRICT LIMIT: Stop loss must be at least 2% above entry
+            min_stop_distance = entry_price * 0.02  # 2% minimum stop distance
+            if (signal.stop_loss - entry_price) < min_stop_distance:
+                return ValidationResult(False, f"Sell stop loss too close to entry. Must be at least 2% above (${min_stop_distance:.2f})")
+
+        return ValidationResult(True, "Stop loss valid with strict limits")
     
     def _validate_order_size(self, signal: Signal) -> ValidationResult:
         """Validación de tamaño de orden"""

@@ -140,9 +140,9 @@ class SignalComposer:
         self.w_pattern = getattr(config, "pattern_weight", config_defaults["pattern_weight"])
 
         # ✅ FIXED: Use correct attribute names from L2Config
-        # FURTHER LOWER THRESHOLDS TO ALLOW MORE SIGNALS THROUGH
-        self.min_conf = getattr(config, "min_signal_confidence", 0.05)  # Lower from 0.1 to 0.05
-        self.min_strength = getattr(config, "min_signal_strength", 0.005)  # Lower from 0.01 to 0.005
+        # 🛠️ AJUSTE: More permissive thresholds to allow stronger L2 signals through to L3
+        self.min_conf = getattr(config, "min_signal_confidence", 0.05)  # Lower threshold for more signals
+        self.min_strength = getattr(config, "min_signal_strength", 0.01)  # Lower threshold for more signals
 
         # ✅ FIXED: Use proper attribute access for SignalConfig dataclass
         self.conflict_tie_threshold = getattr(config, "conflict_tie_threshold", config_defaults["conflict_tie_threshold"])
@@ -277,11 +277,9 @@ class SignalComposer:
                 
                 # Solo generar señal si supera umbrales mínimos
                 if avg_strength >= self.min_strength and avg_confidence >= self.min_conf:
-                    # Calcular cantidad base según el símbolo
-                    base_quantity = 0.01 if symbol == 'BTCUSDT' else 0.1  # ETH y otros
-                    
-                    # Ajustar por fuerza de la señal
-                    quantity = base_quantity * (1 + avg_strength)
+                    # 🛠️ AJUSTE: Signal Composer menos conservador (multiplicador 0.08 como pidió usuario)
+                    base_multiplier = 0.08  # Era probablemente 0.05, ahora 0.08
+                    quantity = base_quantity * base_multiplier * avg_strength * avg_confidence
                     
                     # Calcular stop-loss y take-profit
                     stop_loss, take_profit = self._calculate_stop_loss_take_profit(
@@ -347,10 +345,14 @@ class SignalComposer:
         """Calcula peso dinámico basado en la fuente y calidad de la señal"""
         logger.debug(f"Calculando peso para señal: source={signal.source}, confidence={signal.confidence}")
         base_weight = 1.0
-        
+
         # Por fuente
         if signal.source == 'ai':
             base_weight *= 1.2  # Reducir peso de IA
+            # 🛠️ AJUSTE: Extra weight for high-confidence L2 signals (> 0.85)
+            if signal.confidence > 0.85:
+                base_weight *= 1.5  # Additional 50% weight for very confident L2 signals
+                logger.info(f"🚀 HIGH CONFIDENCE L2 BOOST: {signal.symbol} {signal.side} conf={signal.confidence:.3f} → weight ×1.5")
             if signal.side == 'hold':  # Baja peso para holds
                 base_weight *= 0.2
         elif signal.source == 'technical':

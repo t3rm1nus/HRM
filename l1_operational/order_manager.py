@@ -78,19 +78,25 @@ class OrderManager:
                     volatility_forecast = l3_context.get("volatility_forecast", {}).get(signal.symbol, 0.03)
                     risk_appetite = l3_context.get("risk_appetite", 0.5)
 
-                    # Dynamic minimum order size based on volatility and risk - FURTHER REDUCED for more activity
-                    base_min_order = 1.0  # Reduced from 5.0 for much more trades
+                    # CRITICAL FIX: Much lower minimum for BTCUSDT to allow signals to execute
+                    if signal.symbol == "BTCUSDT":
+                        base_min_order = 0.5  # Allow BTC orders as low as $0.50 to execute signals
+                    else:
+                        base_min_order = 1.0  # Other assets minimum $1.0
 
-                    # Adjust minimum based on volatility (higher vol = higher min to avoid slippage)
-                    vol_multiplier = max(0.5, min(2.0, volatility_forecast * 50))  # 0.5x to 2x based on vol %
+                    # Adjust minimum based on volatility (higher vol = slightly higher min to avoid slippage)
+                    vol_multiplier = max(0.3, min(1.5, volatility_forecast * 30))  # 0.3x to 1.5x based on vol %
                     dynamic_min_order = base_min_order * vol_multiplier
 
                     # Adjust based on risk appetite (higher risk = smaller orders)
                     risk_multiplier = 1.5 - risk_appetite * 0.5  # 1.0 for high risk, 1.5 for low risk
                     dynamic_min_order *= risk_multiplier
 
-                    # Ensure minimum doesn't go below $1 or above $50 for more activity
-                    dynamic_min_order = max(1.0, min(50.0, dynamic_min_order))
+                    # Ensure minimum doesn't go below $0.50 for BTC or $1.00 for others, max $25
+                    if signal.symbol == "BTCUSDT":
+                        dynamic_min_order = max(0.5, min(25.0, dynamic_min_order))
+                    else:
+                        dynamic_min_order = max(1.0, min(25.0, dynamic_min_order))
 
                     logger.info(f"📊 Dynamic thresholds for {signal.symbol}: min_order=${dynamic_min_order:.2f}, vol={volatility_forecast:.4f}, risk={risk_appetite:.2f}")
 

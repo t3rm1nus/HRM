@@ -40,6 +40,9 @@ from comms.config import config
 from l2_tactic.config import L2Config
 from comms.message_bus import MessageBus
 
+# 🔄 AUTO-LEARNING SYSTEM INTEGRATION
+from integration_auto_learning import integrate_with_main_system
+
 async def main():
     """Main HRM system function."""
     try:
@@ -234,6 +237,11 @@ async def main():
         logger.info(f"   ETH Position: {portfolio_manager.get_balance('ETHUSDT'):.3f}")
         logger.info(f"   USDT Balance: {portfolio_manager.get_balance('USDT'):.2f}")
         logger.info(f"   Total Value: {portfolio_manager.get_total_value():.2f}")
+
+        # 🔄 INTEGRATE AUTO-LEARNING SYSTEM
+        logger.info("🤖 Integrating Auto-Learning System...")
+        auto_learning_system = integrate_with_main_system()
+        logger.info("✅ Auto-Learning System integrated - Models will improve automatically!")
 
         # Main loop
         cycle_id = 0

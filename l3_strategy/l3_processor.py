@@ -1028,18 +1028,18 @@ def _is_l3_context_fresh(l3_context_cache: dict, market_data: dict, current_time
     try:
         # Check if cache exists and has required data
         if not l3_context_cache or not isinstance(l3_context_cache, dict):
-            log.info("L3 cache missing or invalid")
+            log.debug("L3 cache missing or invalid - will regenerate")
             return False
 
         last_output = l3_context_cache.get("last_output", {})
         if not last_output:
-            log.info("No cached L3 output available")
+            log.debug("No cached L3 output available - will regenerate")
             return False
 
         # Check timestamp freshness (extended for backtesting stability)
         last_timestamp_str = last_output.get("timestamp")
         if not last_timestamp_str:
-            log.info("No timestamp in cached L3 output")
+            log.debug("No timestamp in cached L3 output - will regenerate")
             return False
 
         try:
@@ -1071,11 +1071,11 @@ def _is_l3_context_fresh(l3_context_cache: dict, market_data: dict, current_time
                 max_age_seconds = 900  # 15 minutes for live trading (increased from 10)
 
             if time_diff > max_age_seconds:
-                log.info(f"L3 cache stale: {time_diff:.1f}s > {max_age_seconds}s threshold")
+                log.debug(f"L3 cache stale: {time_diff:.1f}s > {max_age_seconds}s threshold - will regenerate")
                 return False
 
         except (ValueError, TypeError) as e:
-            log.warning(f"Error parsing L3 cache timestamp: {e}")
+            log.warning(f"Error parsing L3 cache timestamp: {e} - will regenerate")
             return False
 
         # More lenient market data change detection
@@ -1086,7 +1086,7 @@ def _is_l3_context_fresh(l3_context_cache: dict, market_data: dict, current_time
                 # Only invalidate if price changed more than 2% (was 1%)
                 price_change_pct = _calculate_price_change_from_hash(cached_market_hash, current_market_hash, market_data)
                 if abs(price_change_pct) > 2.0:  # Increased threshold
-                    log.info(f"Market data changed significantly: {price_change_pct:.2f}% since last L3 update")
+                    log.info(f"Market data changed significantly: {price_change_pct:.2f}% since last L3 update - will regenerate")
                     return False
                 else:
                     log.debug(f"Minor price change ({price_change_pct:.2f}%), keeping cached L3 context")
@@ -1096,11 +1096,11 @@ def _is_l3_context_fresh(l3_context_cache: dict, market_data: dict, current_time
         if cached_regime:
             log.debug(f"L3 cache regime check passed: {cached_regime}")
 
-        log.info(f"✅ L3 context fresh (age: {time_diff:.1f}s, threshold: {max_age_seconds}s)")
+        log.debug(f"✅ L3 context fresh (age: {time_diff:.1f}s, threshold: {max_age_seconds}s) - using cache")
         return True
 
     except Exception as e:
-        log.warning(f"Error checking L3 context freshness: {e}")
+        log.warning(f"Error checking L3 context freshness: {e} - will regenerate")
         return False
 
 def _calculate_market_data_hash(market_data: dict) -> str:
@@ -1237,6 +1237,43 @@ def cleanup_models():
     except Exception as e:
         log.warning(f"Error durante limpieza de memoria: {e}")
 
+def cleanup_http_resources():
+    """Cleanup HTTP resources and connections to prevent memory leaks."""
+    try:
+        # Cleanup aiohttp sessions if any
+        import asyncio
+        import aiohttp
+
+        loop = asyncio.get_event_loop()
+        if loop and not loop.is_closed():
+            # Get all pending tasks
+            pending_tasks = [task for task in asyncio.all_tasks(loop) if not task.done()]
+
+            # Cancel HTTP-related tasks
+            http_tasks = [task for task in pending_tasks if any(keyword in str(task).lower()
+                                                              for keyword in ['http', 'aiohttp', 'reddit', 'praw'])]
+            if http_tasks:
+                log.debug(f"🧹 Cancelando {len(http_tasks)} tareas HTTP pendientes")
+                for task in http_tasks:
+                    try:
+                        task.cancel()
+                    except Exception as e:
+                        log.debug(f"Error cancelando tarea HTTP: {e}")
+
+        # Force garbage collection
+        import gc
+        gc.collect()
+
+        log.debug("✅ Recursos HTTP limpiados correctamente")
+
+    except Exception as e:
+        log.warning(f"⚠️ Error durante limpieza de recursos HTTP: {e}")
+
+# Register cleanup functions
+import atexit
+atexit.register(cleanup_models)
+atexit.register(cleanup_http_resources)
+
 def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_models: dict = None):
     log.info("🎯 L3_PROCESSOR: Iniciando generación de output estratégico L3")
     log.info(f"   📊 Estado recibido: market_data_keys={list(state.get('market_data', {}).keys()) if state.get('market_data') else 'None'}")
@@ -1274,17 +1311,21 @@ def generate_l3_output(state: dict, texts_for_sentiment: list = None, preloaded_
     current_timestamp = current_time
 
     # Check if we can use cached L3 output
-    if _is_l3_context_fresh(l3_context_cache, market_data, current_timestamp):
-        log.info("♻️ Usando L3 context cacheado - contexto fresco")
-        cached_output = l3_context_cache.get("last_output", {})
-        if cached_output:
-            # Update timestamp with proper 'Z' suffix and return cached output
-            timestamp_str = current_timestamp.isoformat() + "Z"
-            cached_output["timestamp"] = timestamp_str
-            cached_output["cached"] = True
-            log.debug(f"L3 cached timestamp updated: {timestamp_str}")
-            save_json(cached_output, OUTPUT_FILE)
-            return cached_output
+    try:
+        if _is_l3_context_fresh(l3_context_cache, market_data, current_timestamp):
+            log.info("♻️ Usando L3 context cacheado - contexto fresco")
+            cached_output = l3_context_cache.get("last_output", {})
+            if cached_output:
+                # Update timestamp with proper 'Z' suffix and return cached output
+                timestamp_str = current_timestamp.isoformat() + "Z"
+                cached_output["timestamp"] = timestamp_str
+                cached_output["cached"] = True
+                log.debug(f"L3 cached timestamp updated: {timestamp_str}")
+                save_json(cached_output, OUTPUT_FILE)
+                return cached_output
+    except Exception as e:
+        log.warning(f"⚠️ Error verificando cache L3, regenerando: {e}")
+        # Continue with normal processing if cache check fails
 
     # Solo limpiar memoria si no hay modelos pre-cargados (para evitar sobrecarga)
     if not preloaded_models:

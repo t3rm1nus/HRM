@@ -372,21 +372,56 @@ class RiskControlManager:
             # SL: trailing update
             self.stop_loss_manager.update_trailing_stop(sym, px, pos)
 
-            # TP
+            # SCALED TAKE-PROFIT: Allow winners to run longer with multiple profit levels
             if pos.take_profit:
-                tp_hit = (pos.size > 0 and px >= pos.take_profit) or (pos.size < 0 and px <= pos.take_profit)
-                if tp_hit:
-                    alerts.append(
-                        RiskAlert(
-                            alert_type=AlertType.TAKE_PROFIT,
-                            severity=RiskLevel.LOW,
-                            symbol=sym,
-                            message=f"Take profit triggered at {px:.6f}",
-                            current_value=px,
-                            threshold=float(pos.take_profit),
-                            timestamp=datetime.utcnow(),
+                # Get L3 strategic guidelines for profit taking strategy
+                l3_guidelines = getattr(pos, 'l3_guidelines', {}) or {}
+                profit_taking_strategy = l3_guidelines.get('profit_taking_strategy', 'single_target')
+                take_profit_levels = l3_guidelines.get('take_profit_levels', [pos.take_profit])
+
+                if profit_taking_strategy == 'scaled' and len(take_profit_levels) > 1:
+                    # Scaled profit taking: sell portions at different levels
+                    for i, tp_level in enumerate(take_profit_levels):
+                        portion_size = 1.0 / len(take_profit_levels)  # Equal portions
+                        tp_hit = (pos.size > 0 and px >= tp_level) or (pos.size < 0 and px <= tp_level)
+
+                        if tp_hit and not getattr(pos, f'tp_level_{i}_hit', False):
+                            # Mark this level as hit to avoid repeated triggers
+                            setattr(pos, f'tp_level_{i}_hit', True)
+
+                            alerts.append(
+                                RiskAlert(
+                                    alert_type=AlertType.TAKE_PROFIT,
+                                    severity=RiskLevel.LOW,
+                                    symbol=sym,
+                                    message=f"Scaled take profit level {i+1}/{len(take_profit_levels)} triggered at {px:.6f} (selling {portion_size:.1%} of position)",
+                                    current_value=px,
+                                    threshold=float(tp_level),
+                                    timestamp=datetime.utcnow(),
+                                    metadata={
+                                        "level": i+1,
+                                        "total_levels": len(take_profit_levels),
+                                        "portion": portion_size,
+                                        "remaining_levels": len(take_profit_levels) - i - 1
+                                    }
+                                )
+                            )
+                            break  # Only trigger one level at a time
+                else:
+                    # Single target take-profit
+                    tp_hit = (pos.size > 0 and px >= pos.take_profit) or (pos.size < 0 and px <= pos.take_profit)
+                    if tp_hit:
+                        alerts.append(
+                            RiskAlert(
+                                alert_type=AlertType.TAKE_PROFIT,
+                                severity=RiskLevel.LOW,
+                                symbol=sym,
+                                message=f"Take profit triggered at {px:.6f}",
+                                current_value=px,
+                                threshold=float(pos.take_profit),
+                                timestamp=datetime.utcnow(),
+                            )
                         )
-                    )
 
         # metrics de portfolio (opcional)
         self.portfolio_manager.update_portfolio_value(float(portfolio_value))

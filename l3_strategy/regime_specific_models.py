@@ -261,8 +261,8 @@ class BearMarketModel:
                 'ALT': alt_allocation  # Alternative assets
             }
 
-            # Conservative risk parameters
-            risk_appetite = max(0.1, 0.3 - avg_volatility)
+            # 🛠️ AJUSTE: Más agresivo en mercados bajistas (permitir algunas posiciones)
+            risk_appetite = max(0.3, 0.5 - avg_volatility * 0.5)  # Increased from 0.1/0.3 to 0.3/0.5
 
             # Conservative position sizing
             position_sizing = {
@@ -427,8 +427,8 @@ class RangeMarketModel:
                 'CASH': cash_allocation
             }
 
-            # Moderate risk parameters for range markets
-            risk_appetite = 0.5
+            # 🛠️ AJUSTE: Más agresivo en mercados range (permitir más posiciones)
+            risk_appetite = 0.7  # Increased from 0.5 to 0.7 for more aggressive trading
 
             # Position sizing based on distance from mean
             position_sizing = {
@@ -1040,26 +1040,31 @@ class RegimeSpecificL3Processor:
             eth_vol = self._calculate_volatility(eth_data) if eth_data is not None else btc_vol
             avg_volatility = (btc_vol + eth_vol) / 2
 
-            # CRISIS DETECTION: Check for extreme market conditions first
-            crisis_vol_threshold = 0.15  # 15% volatility threshold
-            crisis_dd_threshold = 0.20   # 20% drawdown threshold
+            # 🛠️ AJUSTE CRÍTICO: Thresholds más altos para mercados crypto (menos conservadores)
+            crisis_vol_threshold = 0.25  # Increased from 15% to 25% for crypto volatility
+            crisis_dd_threshold = 0.30   # Increased from 20% to 30% for crypto drawdowns
 
             if avg_volatility > crisis_vol_threshold or max_drawdown > crisis_dd_threshold:
                 logger.warning(f"🚨 CRISIS REGIME DETECTED: Vol={avg_volatility:.3f} > {crisis_vol_threshold}, DD={max_drawdown:.3f} > {crisis_dd_threshold}")
                 return 'crisis'
 
-            # VOLATILE DETECTION: High volatility but not crisis level
-            volatile_vol_threshold = 0.08  # 8% volatility threshold
+            # VOLATILE DETECTION: High volatility but not crisis level (threshold más alto)
+            volatile_vol_threshold = 0.12  # Increased from 8% to 12% for crypto markets
             if avg_volatility > volatile_vol_threshold:
                 logger.info(f"🌪️ VOLATILE REGIME DETECTED: Vol={avg_volatility:.3f} > {volatile_vol_threshold}")
                 return 'volatile'
 
             # Standard regime classification
+            logger.info(f"📊 REGIME CLASSIFICATION: trend={trend:.3f}, volatility={volatility:.3f}, avg_vol={avg_volatility:.3f}, max_dd={max_drawdown:.3f}")
+
             if trend > 0.05 and volatility < 0.03:
+                logger.info("🐂 BULL REGIME: Strong upward trend with low volatility")
                 return 'bull'
             elif trend < -0.05:
+                logger.info("🐻 BEAR REGIME: Strong downward trend")
                 return 'bear'
             else:
+                logger.info("📊 RANGE REGIME: Sideways market or mixed signals")
                 return 'range'
 
         except Exception as e:

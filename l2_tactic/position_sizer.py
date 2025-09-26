@@ -172,6 +172,21 @@ class PositionSizerManager:
                     logger.info(f"SL-based sizing applied: {notional_sl_based:.2f} vs {notional:.2f}")
                 notional = min(notional, notional_sl_based)
 
+        # 5.5) PYRAMIDING: Allow additional position for high confidence signals
+        existing_position = portfolio_state.get(signal.symbol, {}).get("position", 0.0)
+        if existing_position > 0 and signal.side == "buy" and signal.confidence > 0.8:
+            # High confidence signal - allow pyramiding up to 50% of existing position
+            max_pyramid_size = existing_position * 0.5
+            pyramid_notional = max_pyramid_size * signal.price
+            notional = min(notional, pyramid_notional)
+            logger.info(f" pyramiding allowed: existing={existing_position:.4f}, max_add={max_pyramid_size:.4f}, notional={notional:.2f}")
+        elif existing_position < 0 and signal.side == "sell" and signal.confidence > 0.8:
+            # High confidence signal to reduce short position
+            max_pyramid_size = abs(existing_position) * 0.5
+            pyramid_notional = max_pyramid_size * signal.price
+            notional = min(notional, pyramid_notional)
+            logger.info(f" pyramiding short reduction: existing={existing_position:.4f}, max_add={max_pyramid_size:.4f}, notional={notional:.2f}")
+
         # 6) Liquidez
         notional = self._cap_by_liquidity(notional, market_features.get(signal.symbol, {}))
 

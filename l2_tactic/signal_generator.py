@@ -215,7 +215,14 @@ class L2TacticProcessor:
 
                     # HOTFIX: Apply L3 position-aware filtering
                     combined_signal = self._apply_l3_position_hotfix(combined_signal, symbol, state)
-                    risk_filtered = combined_signal
+
+                    # 🛠️ PRIORITY FIX: L1+L2 takes precedence over L3 when confidence > 0.600 (LESS RESTRICTIVE)
+                    l1_l2_confidence = getattr(combined_signal, 'confidence', 0.5)
+                    if l1_l2_confidence > 0.600:
+                        logger.info(f"🎯 L1+L2 PRIORITY: Keeping L1+L2 signal (conf={l1_l2_confidence:.3f}) over L3")
+                        risk_filtered = combined_signal  # Keep L1+L2 signal
+                    else:
+                        risk_filtered = combined_signal  # Use L3-adjusted signal
 
                 elif l3_output and not l3_context['is_fresh']:
                     tactical_signal = self._generate_tactical_fallback_signal(symbol, df, indicators)
@@ -801,11 +808,34 @@ class L2TacticProcessor:
                 finrl_signal.strength = 0.1  # Very low strength
                 return finrl_signal
 
-            # HIGH RISK: Reduce positions - be more conservative
+            # HIGH RISK: Reduce positions - be more conservative, but allow high-confidence L2 signals
             if has_reduce and risk_appetite < 0.4:
-                if original_side == 'buy':
-                    # Convert BUY to HOLD when reducing positions
-                    logger.warning(f"⚠️ RISK REDUCTION: Converting BUY to HOLD for {finrl_signal.symbol}")
+                # 🛠️ AJUSTE AVANZADO: Bypass L3 filtering para señales L2 con prob > 0.85
+                l2_confidence = getattr(finrl_signal, 'confidence', 0.5)
+
+                # Bypass completo para señales L2 muy fuertes (> 0.85)
+                if l2_confidence > 0.85:
+                    logger.info(f"🚀 L2 BYPASS: Maintaining {original_side} signal despite L3 risk reduction (L2 conf={l2_confidence:.3f} > 0.85)")
+                    # Reduce confidence slightly but KEEP SIGNAL DIRECTION
+                    finrl_signal.confidence = max(0.65, finrl_signal.confidence * 0.95)  # Minimum 0.65 for strong signals
+                    finrl_signal.strength *= 0.9
+                    # Add metadata to track bypass
+                    if hasattr(finrl_signal, 'features'):
+                        finrl_signal.features = finrl_signal.features or {}
+                        finrl_signal.features['l2_bypass'] = True
+                        finrl_signal.features['original_l2_conf'] = l2_confidence
+
+                # Permitir señales L2 moderadamente fuertes (> 0.75)
+                elif l2_confidence > 0.75:
+                    logger.info(f"✅ HIGH CONFIDENCE L2: Allowing {original_side} signal despite risk reduction (L2 conf={l2_confidence:.3f})")
+                    # Reduce confidence slightly but keep the signal direction
+                    finrl_signal.confidence *= 0.9
+                    finrl_signal.strength *= 0.8
+
+                # Solo filtrar señales más débiles
+                elif original_side == 'buy':
+                    # Convert BUY to HOLD when reducing positions (only for lower confidence)
+                    logger.warning(f"⚠️ RISK REDUCTION: Converting BUY to HOLD for {finrl_signal.symbol} (L2 conf={l2_confidence:.3f} < 0.75)")
                     finrl_signal.side = 'hold'
                     finrl_signal.confidence *= 0.7
                     finrl_signal.strength *= 0.5

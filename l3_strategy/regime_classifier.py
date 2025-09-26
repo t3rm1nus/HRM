@@ -42,13 +42,28 @@ def clasificar_regimen(datos_mercado):
         else:
             momentum = 0.0
 
-        # Lógica de clasificación
-        if current_price > ma_10 * 1.02 and momentum > 0.02 and volatility < 0.05:
+        # Lógica de clasificación más dinámica - no quedarse atascado en neutral
+        trend_strength = abs(momentum)
+
+        # Bull market: precio por encima de MA y momentum positivo fuerte
+        if current_price > ma_10 * 1.01 and momentum > 0.01:
             regime = "bull"
-        elif current_price < ma_10 * 0.98 and momentum < -0.02:
+        # Bear market: precio por debajo de MA y momentum negativo fuerte
+        elif current_price < ma_10 * 0.99 and momentum < -0.01:
+            regime = "bear"
+        # Volatile market: alta volatilidad independientemente de dirección
+        elif volatility > 0.03:
+            regime = "volatile"
+        # Range market: movimiento lateral con baja volatilidad
+        elif abs(current_price - ma_10) / ma_10 < 0.005 and volatility < 0.02:
+            regime = "range"
+        # Default to bull if slight uptrend, bear if slight downtrend
+        elif momentum > 0.005:
+            regime = "bull"
+        elif momentum < -0.005:
             regime = "bear"
         else:
-            regime = "neutral"
+            regime = "neutral"  # Solo como último recurso
 
         logger.info(f"📈 Régimen detectado: {regime} (Precio: {current_price:.2f}, MA10: {ma_10:.2f}, Momentum: {momentum:.4f})")
         return regime

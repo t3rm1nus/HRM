@@ -65,6 +65,35 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     if regime == "bear":
         max_single_exposure = 0.3  # Reducir exposición máxima en bear market
 
+    # STRICT LOSS PREVENTION FILTERS - but preserve high-confidence L2 signals
+    loss_prevention_filters = {
+        "max_loss_per_trade_pct": 0.02,  # Maximum 2% loss per trade to prevent -372.98 avg losses
+        "require_strong_signal": True,    # Only allow trades with strong conviction
+        "avoid_weak_sentiment": sentiment < -0.3,  # Block trades in very negative sentiment
+        "bear_market_restriction": regime == "bear",  # Extra caution in bear markets
+        "high_volatility_block": False,  # Will be set based on volatility data
+        "preserve_high_conf_l2": True,    # Don't override L2 signals with conf > 0.8
+    }
+
+    # Check volatility from inputs if available
+    volatility_data = inputs.get("volatility", {})
+    if volatility_data:
+        btc_vol = volatility_data.get("btc_volatility", 0.03)
+        eth_vol = volatility_data.get("eth_volatility", 0.04)
+        avg_vol = (btc_vol + eth_vol) / 2
+        if avg_vol > 0.05:  # 5% daily volatility threshold
+            loss_prevention_filters["high_volatility_block"] = True
+            loss_prevention_filters["max_loss_per_trade_pct"] = 0.015  # Tighter stops in high vol
+
+    # WINNING TRADE ENHANCEMENT
+    winning_trade_rules = {
+        "allow_profit_running": True,
+        "trailing_stop_activation": 0.01,  # 1% profit before trailing stop
+        "take_profit_levels": [0.05, 0.10, 0.20],  # Multiple profit targets
+        "scale_out_profits": True,  # Sell portions at different profit levels
+        "hold_winners_longer": regime in ["bull", "range"],  # Let winners run in favorable regimes
+    }
+
     decision = {
         "timestamp": datetime.utcnow().isoformat(),
         "market_regime": regime,
@@ -73,13 +102,18 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         "risk_appetite": risk_appetite,
         "macro_context": macro,
         "exposure_decisions": exposure_decisions,
+        "loss_prevention_filters": loss_prevention_filters,
+        "winning_trade_rules": winning_trade_rules,
         "strategic_guidelines": {
             "rebalance_frequency": "daily" if regime == "volatile" else "weekly",
             "max_single_asset_exposure": max_single_exposure,
             "volatility_target": 0.25 if risk_appetite == "high" else 0.15,
             "liquidity_requirement": "high" if risk_appetite != "high" or regime == "bear" else "medium",
             "btc_max_exposure": 0.2 if regime == "bear" else 0.5,
-            "usdt_min_liquidity": 0.10  # 10% mínimo en liquidez
+            "usdt_min_liquidity": 0.10,  # 10% mínimo en liquidez
+            "max_loss_per_trade_pct": loss_prevention_filters["max_loss_per_trade_pct"],
+            "require_stop_loss": True,  # Mandatory stop losses
+            "profit_taking_strategy": "scaled" if winning_trade_rules["scale_out_profits"] else "single_target"
         }
     }
     return decision
