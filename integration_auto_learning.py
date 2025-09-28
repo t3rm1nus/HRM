@@ -68,14 +68,20 @@ class TradingSystemWithAutoLearning:
                 self.auto_learning.record_trade(trade_data)
                 self.trade_count += 1
 
-                logger.info(f"📊 Trade #{self.trade_count} registrado para auto-aprendizaje: {symbol} BUY")
+                logger.info(f"🤖 AUTO-LEARNING | Trade #{self.trade_count} registrado: {symbol} BUY ${cost:.2f} @ ${price:.2f}")
+                logger.info(f"🤖 AUTO-LEARNING | Buffer size: {len(self.auto_learning.auto_retrainer.data_buffer)} trades")
+                logger.info(f"🤖 AUTO-LEARNING | Anti-overfitting: {self.auto_learning.get_system_status()['anti_overfitting_active']}")
+
+                # Verificar si se activa reentrenamiento
+                if len(self.auto_learning.auto_retrainer.data_buffer) >= 5:
+                    logger.info(f"🤖 AUTO-LEARNING | ⚠️ TRIGGER: {len(self.auto_learning.auto_retrainer.data_buffer)} trades - evaluando reentrenamiento")
 
             elif "✅ SELL" in log_line:
                 # Similar para ventas
-                pass
+                logger.info(f"🤖 AUTO-LEARNING | SELL trade detectado - pendiente de implementación completa")
 
         except Exception as e:
-            logger.debug(f"No se pudo parsear trade desde log: {e}")
+            logger.debug(f"🤖 AUTO-LEARNING | Error parseando trade: {e}")
 
     def get_status(self) -> Dict[str, Any]:
         """Obtener estado del sistema integrado"""

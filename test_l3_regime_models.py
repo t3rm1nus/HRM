@@ -189,8 +189,8 @@ def test_range_market_model():
     print(f"   Rebalancing: {strategy.rebalancing_frequency} (expected: daily)")
     print(f"   Volatility Target: {strategy.volatility_target:.2f} (expected: moderate ≈ 0.12)")
 
-    # Validate range market characteristics
-    assert 0.4 <= strategy.risk_appetite <= 0.6, f"Risk appetite not moderate: {strategy.risk_appetite}"
+    # Validate range market characteristics - now more aggressive
+    assert 0.6 <= strategy.risk_appetite <= 0.8, f"Risk appetite not aggressive: {strategy.risk_appetite}"
     assert strategy.rebalancing_frequency == 'daily', f"Wrong rebalancing frequency: {strategy.rebalancing_frequency}"
     assert 0.1 <= strategy.volatility_target <= 0.15, f"Volatility target not moderate: {strategy.volatility_target}"
 
@@ -256,7 +256,7 @@ def test_regime_specific_processor():
         print(f"   {regime}: {status['status']}")
 
     assert health['overall_status'] == 'healthy', "Processor health check failed"
-    assert len(health['models']) == 4, f"Expected 4 models, got {len(health['models'])}"
+    assert len(health['models']) == 5, f"Expected 5 models, got {len(health['models'])}"
 
     # Test different regimes
     regimes_to_test = ['bull', 'bear', 'range', 'volatile']

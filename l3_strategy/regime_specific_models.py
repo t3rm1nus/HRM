@@ -261,8 +261,8 @@ class BearMarketModel:
                 'ALT': alt_allocation  # Alternative assets
             }
 
-            # 🛠️ AJUSTE: Más agresivo en mercados bajistas (permitir algunas posiciones)
-            risk_appetite = max(0.3, 0.5 - avg_volatility * 0.5)  # Increased from 0.1/0.3 to 0.3/0.5
+            # 🛠️ AJUSTE: Ultra-conservadora en mercados bajistas (preservación defensiva)
+            risk_appetite = max(0.1, 0.2 - avg_volatility * 0.5)  # More conservative: max 0.1-0.2 range
 
             # Conservative position sizing
             position_sizing = {

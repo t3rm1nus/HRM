@@ -34,10 +34,14 @@ class L2TacticProcessor:
     CROSS_FEATURES_DIM = 11
     PREFERRED_BASE_COLS: Optional[List[str]] = None
 
-    def __init__(self, config, portfolio_manager=None):
+    # Take-profit configuration
+    TAKE_PROFIT_RATIO = 0.02  # 2% profit target
+
+    def __init__(self, config, portfolio_manager=None, apagar_l3=False):
         """Inicializa el procesador táctico."""
         self.config = config
         self.portfolio_manager = portfolio_manager  # CRITICAL: Add portfolio manager reference
+        self.apagar_l3 = apagar_l3  # Store L3 disable flag
         self.multi_timeframe = MultiTimeframeTechnical(config)
         self.risk_overlay = RiskOverlay(config)
 
@@ -199,42 +203,110 @@ class L2TacticProcessor:
                     logger.warning(f"⚠️ Position-aware validation rejected signal for {symbol}")
                     continue
 
-                # Evaluar contexto L3
-                l3_context = self._check_l3_context_freshness(state, symbol, df)
-                l3_context_cache = state.get("l3_context_cache", {})
-                l3_output = l3_context_cache.get("last_output", {}) or state.get("l3_output", {})
-
-                if l3_output and l3_context['is_fresh']:
-                    risk_signals = await self.risk_overlay.generate_risk_signals(
-                        market_data={symbol: df},
-                        portfolio_data=state.get("portfolio", {}),
-                        l3_context=l3_output
-                    )
-                    if risk_signals:
-                        combined_signal = self._apply_risk_adjustment(combined_signal, risk_signals, l3_output)
-
-                    # HOTFIX: Apply L3 position-aware filtering
-                    combined_signal = self._apply_l3_position_hotfix(combined_signal, symbol, state)
-
-                    # 🛠️ PRIORITY FIX: L1+L2 takes precedence over L3 when confidence > 0.600 (LESS RESTRICTIVE)
-                    l1_l2_confidence = getattr(combined_signal, 'confidence', 0.5)
-                    if l1_l2_confidence > 0.600:
-                        logger.info(f"🎯 L1+L2 PRIORITY: Keeping L1+L2 signal (conf={l1_l2_confidence:.3f}) over L3")
-                        risk_filtered = combined_signal  # Keep L1+L2 signal
-                    else:
-                        risk_filtered = combined_signal  # Use L3-adjusted signal
-
-                elif l3_output and not l3_context['is_fresh']:
-                    tactical_signal = self._generate_tactical_fallback_signal(symbol, df, indicators)
-                    risk_filtered = tactical_signal or combined_signal
-
-                else:
+                # Evaluar contexto L3 - COMPLETE L3 DISABLE LOGIC
+                if self.apagar_l3:
+                    # 🚫 L3 COMPLETELY DISABLED - Skip ALL L3 processing
+                    logger.info(f"🚫 L3 COMPLETELY DISABLED for {symbol} - Using L1+L2 only")
                     risk_filtered = combined_signal
+                else:
+                    # L3 is enabled - run normal L3 processing
+                    l3_context = self._check_l3_context_freshness(state, symbol, df)
+                    l3_context_cache = state.get("l3_context_cache", {})
+                    l3_output = l3_context_cache.get("last_output", {}) or state.get("l3_output", {})
+
+                    if l3_output and l3_context['is_fresh']:
+                        # 🎯 UPDATED L3 BLOCKING LOGIC: L1+L2 priority when conf > 0.650
+                        l1_l2_confidence = getattr(combined_signal, 'confidence', 0.5)
+                        l3_confidence = l3_output.get('sentiment_score', 0.5)  # L3 uses sentiment_score as confidence
+
+                        # 🛡️ L1+L2 PRIORITY: When L1+L2 confidence > 0.7, they take precedence over L3
+                        if l1_l2_confidence > 0.7:
+                            logger.info(f"🎯 L1+L2 PRIORITY: Keeping L1+L2 signal (conf={l1_l2_confidence:.3f} > 0.7) over L3")
+                            risk_filtered = combined_signal  # Keep L1+L2 signal, skip L3 filtering
+                        else:
+                            # 🛡️ ETH OVERRIDE RULE: If L2 > 0.8 and L3 only has 0.6, trust L2
+                            if symbol == 'ETHUSDT' and l1_l2_confidence > 0.8 and l3_confidence <= 0.6:
+                                logger.info(f"🚀 ETH OVERRIDE: L2 conf={l1_l2_confidence:.3f} > 0.8, L3 conf={l3_confidence:.3f} <= 0.6 - trusting L2")
+                                risk_filtered = combined_signal
+                            else:
+                                # 📊 VOTING SYSTEM: L1+L2+L3 need 2/3 agreement to execute
+                                # Convert confidences to votes (above 0.7 threshold = vote)
+                                l1_l2_vote = 1 if l1_l2_confidence > 0.7 else 0
+                                l3_vote = 1 if l3_confidence > 0.7 else 0
+
+                                # Determine signal directions for voting
+                                l1_l2_side = getattr(combined_signal, 'side', 'hold')
+                                l3_side = 'hold'  # L3 doesn't give direct buy/sell, only risk adjustments
+
+                                # For voting: if L1+L2 wants to trade (buy/sell) and L3 agrees (no blocking), that's 2/2 agreement
+                                # If L1+L2 wants to trade but L3 blocks, that's 1/2 (no agreement)
+                                total_votes = 2  # L1+L2 and L3
+                                agreement_votes = 0
+
+                                if l1_l2_side in ['buy', 'sell']:
+                                    agreement_votes += 1  # L1+L2 wants to trade
+
+                                # L3 agrees if it doesn't generate blocking risk signals
+                                risk_signals = await self.risk_overlay.generate_risk_signals(
+                                    market_data={symbol: df},
+                                    portfolio_data=state.get("portfolio", {}),
+                                    l3_context=l3_output
+                                )
+
+                                l3_blocks = any(getattr(s, 'side', '') in ['close_all', 'reduce'] for s in (risk_signals or []))
+                                if not l3_blocks:
+                                    agreement_votes += 1  # L3 agrees (no blocking)
+
+                                # Need 2/3 agreement (rounded up, so at least 2 out of 2 for now, but extensible)
+                                agreement_ratio = agreement_votes / total_votes
+                                has_agreement = agreement_ratio >= (2/3)
+
+                                if has_agreement:
+                                    logger.info(f"✅ VOTING AGREEMENT: {agreement_votes}/{total_votes} votes - executing signal")
+                                    # Apply minimal risk adjustments but keep signal direction
+                                    if risk_signals:
+                                        combined_signal = self._apply_risk_adjustment(combined_signal, risk_signals, l3_output)
+                                    risk_filtered = combined_signal
+                                else:
+                                    logger.info(f"❌ VOTING BLOCKED: Only {agreement_votes}/{total_votes} agreement (need 2/3) - blocking signal")
+                                    # Convert to HOLD due to lack of agreement
+                                    combined_signal.side = 'hold'
+                                    combined_signal.confidence = min(combined_signal.confidence, 0.5)
+                                    risk_filtered = combined_signal
+
+                        # HOTFIX: Apply L3 position-aware filtering
+                        risk_filtered = self._apply_l3_position_hotfix(risk_filtered, symbol, state)
+
+                    elif l3_output and not l3_context['is_fresh']:
+                        tactical_signal = self._generate_tactical_fallback_signal(symbol, df, indicators)
+                        risk_filtered = tactical_signal or combined_signal
+
+                    else:
+                        risk_filtered = combined_signal
 
                 # DEBUG: Log signal transformation
                 logger.info(f"🔄 SIGNAL TRANSFORMATION for {symbol}:")
                 logger.info(f"   L1+L2 Combined: {getattr(combined_signal, 'side', 'no_side')} conf={getattr(combined_signal, 'confidence', 0):.3f}")
                 logger.info(f"   L3 Filtered: {getattr(risk_filtered, 'side', 'no_side')} conf={getattr(risk_filtered, 'confidence', 0):.3f}")
+
+                # 🛡️ AÑADIR STOP-LOSS AUTOMÁTICO A LA SEÑAL
+                if risk_filtered.side in ['buy', 'sell']:
+                    # Obtener precio actual y volatilidad para calcular stop-loss
+                    current_price_sl = df['close'].iloc[-1] if not df.empty else 0.0
+
+                    # Use L3 volatility forecast only if L3 is enabled
+                    if self.apagar_l3:
+                        # L3 disabled - use default volatility
+                        volatility_forecast_sl = 0.03
+                    else:
+                        # L3 enabled - use L3 volatility forecast
+                        l3_context = state.get("l3_output", {})
+                        volatility_forecast_sl = l3_context.get("volatility_forecast", {}).get(symbol, 0.03)
+
+                    stop_loss_price = self._calculate_stop_loss_price(
+                        risk_filtered.side, current_price_sl, volatility_forecast_sl, risk_filtered.confidence
+                    )
+                    risk_filtered.stop_loss = stop_loss_price
 
                 # Componer señal final
                 tactical_signal = self.signal_composer.compose_signal(
@@ -486,6 +558,11 @@ class L2TacticProcessor:
     def _check_l3_context_freshness(self, state: Dict[str, Any], symbol: str, df: pd.DataFrame) -> Dict[str, Any]:
         """Verifica si L3 context está fresco o stale"""
         try:
+            # CRITICAL FIX: If L3 is disabled, always return not fresh
+            if self.apagar_l3:
+                logger.info(f"🔴 L3 DISABLED: Skipping L3 context check for {symbol}")
+                return {'is_fresh': False, 'reason': 'l3_disabled', 'regime': 'disabled', 'price_change_pct': 0.0}
+
             l3_context_cache = state.get("l3_context_cache", {})
             l3_data = l3_context_cache.get("last_output", {}) or state.get("l3_output", {})
             if not l3_data:
@@ -809,13 +886,13 @@ class L2TacticProcessor:
                 return finrl_signal
 
             # HIGH RISK: Reduce positions - be more conservative, but allow high-confidence L2 signals
-            if has_reduce and risk_appetite < 0.4:
-                # 🛠️ AJUSTE AVANZADO: Bypass L3 filtering para señales L2 con prob > 0.85
+            if has_reduce and risk_appetite < 0.5:  # Lowered from 0.4 to 0.5 for less restrictive
+                # 🛠️ AJUSTE AVANZADO: Bypass L3 filtering para señales L2 con prob > 0.75 (lowered from 0.85)
                 l2_confidence = getattr(finrl_signal, 'confidence', 0.5)
 
-                # Bypass completo para señales L2 muy fuertes (> 0.85)
-                if l2_confidence > 0.85:
-                    logger.info(f"🚀 L2 BYPASS: Maintaining {original_side} signal despite L3 risk reduction (L2 conf={l2_confidence:.3f} > 0.85)")
+                # Bypass completo para señales L2 muy fuertes (> 0.75, lowered from 0.85)
+                if l2_confidence > 0.75:
+                    logger.info(f"🚀 L2 BYPASS: Maintaining {original_side} signal despite L3 risk reduction (L2 conf={l2_confidence:.3f} > 0.75)")
                     # Reduce confidence slightly but KEEP SIGNAL DIRECTION
                     finrl_signal.confidence = max(0.65, finrl_signal.confidence * 0.95)  # Minimum 0.65 for strong signals
                     finrl_signal.strength *= 0.9
@@ -825,8 +902,8 @@ class L2TacticProcessor:
                         finrl_signal.features['l2_bypass'] = True
                         finrl_signal.features['original_l2_conf'] = l2_confidence
 
-                # Permitir señales L2 moderadamente fuertes (> 0.75)
-                elif l2_confidence > 0.75:
+                # Permitir señales L2 moderadamente fuertes (> 0.65, lowered from 0.75)
+                elif l2_confidence > 0.65:
                     logger.info(f"✅ HIGH CONFIDENCE L2: Allowing {original_side} signal despite risk reduction (L2 conf={l2_confidence:.3f})")
                     # Reduce confidence slightly but keep the signal direction
                     finrl_signal.confidence *= 0.9
@@ -1006,6 +1083,59 @@ class L2TacticProcessor:
         except Exception as e:
             logger.error(f"❌ Error in L3 position hotfix for {symbol}: {e}")
             return signal
+
+    def _calculate_stop_loss_price(self, signal_side: str, current_price: float, volatility_forecast: float, signal_confidence: float = 0.5) -> float:
+        """Calcular precio de stop-loss basado en volatilidad y dirección de la señal"""
+        try:
+            # Base stop-loss percentage (2% por defecto)
+            base_sl_pct = 0.02
+
+            # Ajustar basado en volatilidad del mercado
+            # Alta volatilidad = stop-loss más amplio
+            vol_multiplier = max(0.5, min(3.0, volatility_forecast * 50))  # 0.5x a 3.0x
+            adjusted_sl_pct = base_sl_pct * vol_multiplier
+
+            # Ajustar basado en confianza de la señal
+            # Más confianza = stop-loss más ajustado
+            confidence_multiplier = 1.5 - signal_confidence  # 1.0 para conf=0.5, 0.5 para conf=1.0
+            final_sl_pct = adjusted_sl_pct * confidence_multiplier
+
+            # Calcular precio final
+            if signal_side == "buy":
+                # Para compras: stop-loss por debajo del precio actual
+                stop_price = current_price * (1 - final_sl_pct)
+            elif signal_side == "sell":
+                # Para ventas: stop-loss por encima del precio actual
+                stop_price = current_price * (1 + final_sl_pct)
+            else:
+                # Fallback
+                stop_price = current_price * (1 - base_sl_pct)
+
+            logger.info(f"🛡️ STOP-LOSS calculado: {signal_side.upper()} @ {current_price:.2f} → SL @ {stop_price:.2f} ({final_sl_pct:.1%})")
+            return stop_price
+
+        except Exception as e:
+            logger.error(f"Error calculating stop-loss price: {e}")
+            # Fallback: 2% stop-loss
+            if signal_side == "buy":
+                return current_price * 0.98
+            else:
+                return current_price * 1.02
+
+    def calculate_take_profit(self, current_price: float, signal_type: str) -> float:
+        """Calcular precio de take-profit basado en la dirección de la señal"""
+        try:
+            if signal_type == "buy":
+                return current_price * (1 + self.TAKE_PROFIT_RATIO)
+            else:
+                return current_price * (1 - self.TAKE_PROFIT_RATIO)
+        except Exception as e:
+            logger.error(f"Error calculating take-profit price: {e}")
+            # Fallback: 2% take-profit
+            if signal_type == "buy":
+                return current_price * 1.02
+            else:
+                return current_price * 0.98
 
     def _check_l3_models_status(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Check if L3 regime-specific models are implemented and working"""

@@ -1259,6 +1259,21 @@ class PortfolioManager:
             "has_problems": abs(total_change) > 1000 or simulated_btc < 0 or simulated_eth < 0 or simulated_usdt < 0
         }
 
+    def update_portfolio_allocation(self):
+        """Actualiza la asignación de capital dinámicamente"""
+
+        total_portfolio = self.get_total_value()
+
+        # Límites por símbolo
+        max_per_symbol = total_portfolio * 0.3  # Máximo 30% por símbolo
+
+        # Capital disponible para nuevas órdenes
+        available_trading_capital = self.get_balance("USDT") * 0.8  # Usar 80% máximo
+
+        logger.info(f"💰 Portfolio Allocation | Total: ${total_portfolio:.2f} | Available: ${available_trading_capital:.2f}")
+
+        return available_trading_capital, max_per_symbol
+
     def log_status(self):
         """Registra el estado actual del portfolio"""
         total_value = self.get_total_value()

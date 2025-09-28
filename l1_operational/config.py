@@ -12,16 +12,20 @@ OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
 RISK_LIMITS = {
     "MAX_ORDER_SIZE_BTC": 0.05,      # ~$5,420 por orden (más agresivo)
     "MAX_ORDER_SIZE_USDT": 1500,     # Máximo 50% del capital por orden
-    "MIN_ORDER_SIZE_USDT": 25,       # Mínimo reducido para más flexibilidad
+    "MIN_ORDER_SIZE_USDT": 5,        # Mínimo muy reducido para máximo volumen de trading
     "MAX_ORDER_SIZE_ETH": 0.5,       # ~$2,185 por orden (más agresivo)
     "MAX_ORDER_SIZE_ADA": 100,       # Sin cambios
 }
-# Límites de riesgo por portafolio - OPTIMIZADOS
+# Límites de riesgo por portafolio - OPTIMIZADOS PARA ROTACIÓN
 PORTFOLIO_LIMITS = {
     "MAX_PORTFOLIO_EXPOSURE_BTC": 0.40,  # máximo 40% del portafolio en BTC
-    "MAX_PORTFOLIO_EXPOSURE_ETH": 0.30,  # máximo 30% del portafolio en ETH
+    "MAX_PORTFOLIO_EXPOSURE_ETH": 0.40,  # máximo 40% del portafolio en ETH
+    "MAX_POSITION_SIZE_USDT": 1200,      # máximo $1200 por posición individual (40% de $3000)
+    "MIN_USDT_RESERVE": 0.20,            # mínimo 20% siempre en USDT libre
+    "REBALANCE_THRESHOLD": 0.15,         # rebalancear si USDT < 15% del total
+    "ROTATION_AMOUNT": 0.25,             # vender 25% cuando se active rotación
     "MAX_DAILY_DRAWDOWN": 0.08,          # aumentado a 8% de drawdown diario
-    "MIN_ACCOUNT_BALANCE_USDT": 50,      # Reducido para más flexibilidad
+    "MIN_ACCOUNT_BALANCE_USDT": 500,     # mínimo $500 USDT libre para operaciones
     "MAX_LEVERAGE": 1.0,                 # sin apalancamiento
 }
 

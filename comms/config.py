@@ -24,6 +24,7 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"  # Default to real data
 SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT").split(',')
 MODE = os.getenv("BINANCE_MODE", "TESTNET")
+APAGAR_L3 = os.getenv("APAGAR_L3", "false").lower() == "true"  # Default to false to enable L3
 
 # Objeto config para módulos nuevos
 config = {
@@ -51,5 +52,38 @@ config = {
     "BINANCE_API_SECRET": BINANCE_API_SECRET,
     "USE_TESTNET": USE_TESTNET,
     "MODE": MODE,
-    "L2_CONFIG": {}
+    "L2_CONFIG": {},
+    "TRADING_CONFIG": {
+        "min_order_size": 10,  # Mínimo $10 por orden
+        "max_order_size": 100, # Máximo $100 por orden
+        "risk_per_trade": 0.02, # 2% riesgo por trade
+        "max_portfolio_risk": 0.1, # 10% riesgo total
+        "position_sizing": {
+            "high_confidence": 0.03,  # 3% para confianza > 0.8
+            "medium_confidence": 0.02, # 2% para confianza > 0.6
+            "low_confidence": 0.01,   # 1% para confianza <= 0.6
+        },
+        "MIN_ORDER_SIZE_USD": 10.0,
+        "MAX_ALLOCATION_PER_SYMBOL_PCT": 30.0,
+        "AVAILABLE_TRADING_CAPITAL_PCT": 80.0,
+        "CASH_RESERVE_PCT": 20.0,
+        "TRADING_FEE_RATE": 0.001,
+        "MAX_DAILY_TRADES": 10,
+        "RISK_LIMITS": {
+            "MAX_DRAWDOWN_PCT": 10.0,
+            "MAX_POSITION_SIZE_PCT": 50.0,
+            "MIN_CAPITAL_REQUIREMENT_USD": 100.0
+        },
+        "VALIDATION": {
+            "ENABLE_ORDER_SIZE_CHECK": True,
+            "ENABLE_CAPITAL_CHECK": True,
+            "ENABLE_POSITION_CHECK": True,
+            "STRICT_MODE": True
+        },
+        "ALLOCATION": {
+            "DYNAMIC_REBALANCING": True,
+            "CONCENTRATION_LIMIT_PCT": 30.0,
+            "MIN_DIVERSIFICATION_RATIO": 0.4
+        }
+    }
 }

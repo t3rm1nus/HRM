@@ -26,13 +26,18 @@ def calculate_risk_appetite(volatility: float, sentiment: float, regime: str) ->
     volatility: valor entre 0 y 1 (normalizado)
     sentiment: valor entre -1 (muy negativo) y 1 (muy positivo)
     regime: bull, bear, range, volatile
+
+    CALIBRATION: Less pessimistic - allow moderate risk in more scenarios
     """
-    if regime == "bear" or volatility > 0.7:
+    # Less restrictive bear market handling
+    if regime == "bear" and volatility > 0.8:  # Only very high vol blocks in bear
         return "low"
-    elif sentiment > 0.3 and volatility < 0.5 and regime == "bull":
+    elif sentiment > 0.2 and volatility < 0.6 and regime in ["bull", "range"]:  # Lower thresholds
         return "high"
-    else:
+    elif sentiment > -0.1 and volatility < 0.7:  # Allow moderate in neutral sentiment
         return "moderate"
+    else:
+        return "moderate"  # Default to moderate instead of low
 
 
 def risk_analysis():

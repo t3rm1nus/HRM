@@ -24,6 +24,7 @@ from core.logging import logger
 from core.config import get_config
 from core.incremental_signal_verifier import get_signal_verifier, start_signal_verification, stop_signal_verification
 from core.trading_metrics import get_trading_metrics
+from core.position_rotator import PositionRotator
 
 from l1_operational.data_feed import DataFeed
 from l2_tactic.signal_generator import L2TacticProcessor
@@ -33,10 +34,11 @@ from l1_operational.order_manager import OrderManager
 from l1_operational.binance_client import BinanceClient
 from l1_operational.realtime_loader import RealTimeDataLoader
 from l3_strategy.l3_processor import generate_l3_output, cleanup_models
-from l3_strategy.sentiment_inference import download_reddit, download_news, infer_sentiment
+from l3_strategy.regime_classifier import ejecutar_estrategia_por_regimen
+# from l3_strategy.sentiment_inference import download_reddit, download_news, infer_sentiment
 from l1_operational.bus_adapter import BusAdapterAsync
 
-from comms.config import config
+from comms.config import config, APAGAR_L3
 from l2_tactic.config import L2Config
 from comms.message_bus import MessageBus
 
@@ -80,7 +82,7 @@ async def main():
         # Initialize L2
         try:
             l2_config = L2Config()
-            l2_processor = L2TacticProcessor(l2_config, portfolio_manager=portfolio_manager)
+            l2_processor = L2TacticProcessor(l2_config, portfolio_manager=portfolio_manager, apagar_l3=APAGAR_L3)
             risk_manager = RiskControlManager(l2_config)
             logger.info("✅ L2 components initialized successfully")
         except Exception as e:
@@ -120,6 +122,10 @@ async def main():
         state["total_fees"] = portfolio_manager.total_fees
 
         # Initialize L3 (will be called after market data is loaded)
+
+        # 🔄 POSITION ROTATOR - SISTEMA DE ROTACIÓN AUTOMÁTICA
+        position_rotator = PositionRotator(portfolio_manager=portfolio_manager)
+        logger.info("🔄 PositionRotator initialized for automatic capital management")
 
         order_manager = OrderManager(binance_client=binance_client, market_data=state.get("market_data", {}))
         
@@ -165,71 +171,55 @@ async def main():
         async def update_sentiment_texts():
             """Update sentiment texts from Reddit and News API"""
             try:
-                logger.info("🔄 SENTIMENT: Iniciando actualización de datos de sentimiento...")
-
-                # Download Reddit data
-                logger.info("📱 SENTIMENT: Descargando datos de Reddit...")
-                reddit_df = await download_reddit(limit=500)  # Reduced limit for performance
-                reddit_texts = []
-                if not reddit_df.empty:
-                    reddit_texts = reddit_df['text'].dropna().tolist()[:100]  # Limit to 100 texts
-                    logger.info(f"📱 SENTIMENT: Reddit - {len(reddit_texts)} posts descargados y procesados")
-                else:
-                    logger.warning("⚠️ SENTIMENT: No se obtuvieron datos de Reddit")
-
-                # Download News data
-                logger.info("📰 SENTIMENT: Descargando datos de noticias...")
-                news_df = download_news()
-                news_texts = []
-                if not news_df.empty:
-                    news_texts = news_df['text'].dropna().tolist()[:50]  # Limit to 50 texts
-                    logger.info(f"📰 SENTIMENT: News - {len(news_texts)} artículos descargados y procesados")
-                else:
-                    logger.warning("⚠️ SENTIMENT: No se obtuvieron datos de noticias")
-
-                # Combine and limit total texts
-                all_texts = reddit_texts + news_texts
-                original_count = len(all_texts)
-
-                if len(all_texts) > 100:  # Limit total to 100 texts for performance
-                    all_texts = all_texts[:100]
-                    logger.info(f"✂️ SENTIMENT: Limitado de {original_count} a {len(all_texts)} textos para rendimiento")
-
-                # Filtrar textos vacíos
-                valid_texts = [t for t in all_texts if t and str(t).strip()]
-                if len(valid_texts) != len(all_texts):
-                    logger.info(f"🧹 SENTIMENT: Filtrados {len(all_texts) - len(valid_texts)} textos vacíos")
-
-                logger.info(f"💬 SENTIMENT: Análisis de sentimiento listo con {len(valid_texts)} textos válidos")
-                logger.info(f"   📊 Distribución: Reddit={len([t for t in valid_texts if t in reddit_texts[:100]])} | News={len([t for t in valid_texts if t in news_texts[:50]])}")
-
-                return valid_texts
-
+                logger.info("🔄 SENTIMENT: Análisis de sentimiento deshabilitado (falta módulo transformers)")
+                return []
             except Exception as e:
                 logger.error(f"❌ SENTIMENT: Error actualizando datos de sentimiento: {e}")
                 return []
 
         # Initialize L3 now that we have market data
-        try:
-            # Get initial sentiment data for L3
-            initial_sentiment_texts = await update_sentiment_texts()
-            sentiment_texts_cache = initial_sentiment_texts
-
-            l3_output = generate_l3_output(state, texts_for_sentiment=initial_sentiment_texts)  # Generate initial L3 output with market data and sentiment
-            state["l3_output"] = l3_output  # Store L3 output in state for L2 access
-
-            # CRITICAL FIX: Initial sync of L3 output with L3 context cache
+        if APAGAR_L3:
+            # L3 is disabled - skip initialization and set default state
+            logger.info("-------------------------------------------------------------------------------------------------------------")
+            logger.info("\x1b[31m🔴 L3 MODULE DISABLED - SKIPPING L3 INITIALIZATION - ONLY L1+L2 WILL OPERATE\x1b[0m")
+            logger.info("-------------------------------------------------------------------------------------------------------------")
+            sentiment_texts_cache = []
+            state["l3_output"] = {
+                'regime': 'disabled',
+                'signal': 'hold',
+                'confidence': 0.0,
+                'strategy_type': 'l3_disabled',
+                'timestamp': pd.Timestamp.utcnow().isoformat()
+            }
+            # Set up L3 context cache for L2 compatibility
             if 'l3_context_cache' not in state:
                 state['l3_context_cache'] = {}
-            if l3_output:
-                state['l3_context_cache']['last_output'] = l3_output.copy()
-                from l3_strategy.l3_processor import _calculate_market_data_hash
-                state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
-                logger.debug("✅ Initial L3 context cache synced")
+            state['l3_context_cache']['last_output'] = state["l3_output"].copy()
+        else:
+            # L3 is enabled - run normal initialization
+            logger.info("-------------------------------------------------------------------------------------------------------------")
+            logger.info("\x1b[32m🟢 L3 MODULE ENABLED - FULL SYSTEM OPERATING WITH L1+L2+L3\x1b[0m")
+            logger.info("-------------------------------------------------------------------------------------------------------------")
+            try:
+                # Get initial sentiment data for L3
+                initial_sentiment_texts = await update_sentiment_texts()
+                sentiment_texts_cache = initial_sentiment_texts
 
-            logger.info("✅ L3 initialized successfully with market data and sentiment analysis")
-        except Exception as e:
-            logger.error(f"❌ Error initializing L3: {e}", exc_info=True)
+                l3_output = generate_l3_output(state, texts_for_sentiment=initial_sentiment_texts)  # Generate initial L3 output with market data and sentiment
+                state["l3_output"] = l3_output  # Store L3 output in state for L2 access
+
+                # CRITICAL FIX: Initial sync of L3 output with L3 context cache
+                if 'l3_context_cache' not in state:
+                    state['l3_context_cache'] = {}
+                if l3_output:
+                    state['l3_context_cache']['last_output'] = l3_output.copy()
+                    from l3_strategy.l3_processor import _calculate_market_data_hash
+                    state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
+                    logger.debug("✅ Initial L3 context cache synced")
+
+                logger.info("✅ L3 initialized successfully with market data and sentiment analysis")
+            except Exception as e:
+                logger.error(f"❌ Error initializing L3: {e}", exc_info=True)
 
         # CRITICAL FIX: Ensure portfolio is properly initialized and logged
         logger.info("🔍 INITIAL PORTFOLIO STATE:")
@@ -245,6 +235,12 @@ async def main():
 
         # Main loop
         cycle_id = 0
+
+        # Cumulative counters for all cycles
+        total_signals_all_cycles = 0
+        total_orders_all_cycles = 0
+        total_rejected_all_cycles = 0
+
         while True:
             cycle_id += 1
             start_time = pd.Timestamp.utcnow()
@@ -342,36 +338,110 @@ async def main():
                 else:
                     raise RuntimeError(f"❌ Failed to get valid market data: {validation_msg}")
                 
-                # 2. Update L3 state and process signals
+                # 🛡️ 2. MONITOR STOP-LOSS ORDERS ACTIVOS
                 try:
-                    # Update sentiment data periodically (every 50 cycles ~8-9 minutes)
-                    if cycle_id - last_sentiment_update >= SENTIMENT_UPDATE_INTERVAL:
-                        logger.info(f"🔄 SENTIMENT: Actualización periódica iniciada (ciclo {cycle_id}, cada {SENTIMENT_UPDATE_INTERVAL} ciclos)")
-                        sentiment_texts_cache = await update_sentiment_texts()
-                        last_sentiment_update = cycle_id
-                        logger.info(f"💬 SENTIMENT: Cache actualizado con {len(sentiment_texts_cache)} textos para análisis L3")
+                    # Monitorear y ejecutar stop-loss que se activen
+                    executed_stop_losses = await order_manager.monitor_and_execute_stop_losses(state.get("market_data", {}))
 
-                    # Use cached sentiment texts for L3 processing
-                    current_sentiment_texts = sentiment_texts_cache if sentiment_texts_cache else []
-
-                    l3_output = generate_l3_output(state, texts_for_sentiment=current_sentiment_texts)  # Update L3 output with sentiment
-                    state["l3_output"] = l3_output  # Store updated L3 output in state
-
-                    # CRITICAL FIX: Sync L3 output with L3 context cache for L2 processor
-                    if 'l3_context_cache' not in state:
-                        state['l3_context_cache'] = {}
-
-                    # Always sync the latest L3 output with the cache that L2 reads
-                    if l3_output:
-                        state['l3_context_cache']['last_output'] = l3_output.copy()
-                        # Ensure cache has all required fields for L2 freshness check
-                        if 'market_data_hash' not in state['l3_context_cache']:
-                            from l3_strategy.l3_processor import _calculate_market_data_hash
-                            state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
-                        logger.debug("✅ L3 context cache synced with latest L3 output")
+                    if executed_stop_losses:
+                        # Actualizar portfolio con stop-loss ejecutados
+                        await portfolio_manager.update_from_orders_async(executed_stop_losses, state.get("market_data", {}))
+                        logger.info(f"🛡️ Ejecutados {len(executed_stop_losses)} stop-loss automáticos")
 
                 except Exception as e:
-                    logger.error(f"❌ L3 Error: {e}", exc_info=True)
+                    logger.error(f"❌ Error monitoreando stop-loss: {e}")
+
+                # 3. Update L3 state and process signals
+                if APAGAR_L3:
+                    # L3 is disabled - bypass all L3 processing
+                    logger.info("-------------------------------------------------------------------------------------------------------------")
+                    logger.info("\x1b[31m🔴 L3 MODULE DISABLED - ONLY L1+L2 WILL OPERATE\x1b[0m")
+                    logger.info("-------------------------------------------------------------------------------------------------------------")
+                    # Ensure L3 output is set to a default state for L2 compatibility
+                    if 'l3_context_cache' not in state:
+                        state['l3_context_cache'] = {}
+                    state['l3_context_cache']['last_output'] = {
+                        'regime': 'disabled',
+                        'signal': 'hold',
+                        'confidence': 0.0,
+                        'strategy_type': 'l3_disabled',
+                        'timestamp': pd.Timestamp.utcnow().isoformat()
+                    }
+                else:
+                    # L3 is enabled - run normal L3 processing
+                    logger.info("-------------------------------------------------------------------------------------------------------------")
+                    logger.info("\x1b[32m🟢 L3 MODULE ENABLED - FULL SYSTEM OPERATING WITH L1+L2+L3\x1b[0m")
+                    logger.info("-------------------------------------------------------------------------------------------------------------")
+                    try:
+                        # Update sentiment data periodically (every 50 cycles ~8-9 minutes)
+                        if cycle_id - last_sentiment_update >= SENTIMENT_UPDATE_INTERVAL:
+                            logger.info(f"🔄 SENTIMENT: Actualización periódica iniciada (ciclo {cycle_id}, cada {SENTIMENT_UPDATE_INTERVAL} ciclos)")
+                            sentiment_texts_cache = await update_sentiment_texts()
+                            last_sentiment_update = cycle_id
+                            logger.info(f"💬 SENTIMENT: Cache actualizado con {len(sentiment_texts_cache)} textos para análisis L3")
+
+                        # Use cached sentiment texts for L3 processing
+                        current_sentiment_texts = sentiment_texts_cache if sentiment_texts_cache else []
+
+                        # 🚀 INTEGRACIÓN DE ESTRATEGIAS POR RÉGIMEN DE MERCADO
+                        # Ejecutar estrategia específica según régimen detectado
+                        regimen_resultado = ejecutar_estrategia_por_regimen(state.get("market_data", {}))
+
+                        # Mantener compatibilidad con L3 existente para L2
+                        if regimen_resultado and 'regime' in regimen_resultado:
+                            # Crear L3 output compatible con el formato existente
+                            l3_output = {
+                                'regime': regimen_resultado['regime'],
+                                'signal': regimen_resultado.get('signal', 'hold'),
+                                'confidence': regimen_resultado.get('confidence', 0.5),
+                                'strategy_type': 'regime_adaptive',
+                                'market_data_hash': hash(str(state.get("market_data", {}))),
+                                'timestamp': pd.Timestamp.utcnow().isoformat()
+                            }
+
+                            # Añadir datos específicos del régimen
+                            if regimen_resultado['regime'] == 'range':
+                                l3_output.update({
+                                    'profit_target': regimen_resultado.get('profit_target', 0.008),
+                                    'stop_loss': regimen_resultado.get('stop_loss', 0.015),
+                                    'max_position_time': regimen_resultado.get('max_position_time', 6)
+                                })
+                            elif regimen_resultado['regime'] in ['bull', 'bear']:
+                                l3_output.update({
+                                    'profit_target': regimen_resultado.get('profit_target', 0.025),
+                                    'stop_loss': regimen_resultado.get('stop_loss', 0.012),
+                                    'max_position_time': regimen_resultado.get('max_position_time', 12)
+                                })
+
+                            state["l3_output"] = l3_output
+
+                            # CRITICAL FIX: Sync L3 output with L3 context cache for L2 processor
+                            if 'l3_context_cache' not in state:
+                                state['l3_context_cache'] = {}
+
+                            # Always sync the latest L3 output with the cache that L2 reads
+                            state['l3_context_cache']['last_output'] = l3_output.copy()
+                            # Ensure cache has all required fields for L2 freshness check
+                            if 'market_data_hash' not in state['l3_context_cache']:
+                                from l3_strategy.l3_processor import _calculate_market_data_hash
+                                state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
+                            logger.debug("✅ L3 context cache synced with regime-adaptive output")
+                        else:
+                            # Fallback to original L3 if regime detection fails
+                            logger.warning("⚠️ Regime detection failed, falling back to original L3")
+                            l3_output = generate_l3_output(state, texts_for_sentiment=current_sentiment_texts)
+                            state["l3_output"] = l3_output
+
+                            # Sync with cache
+                            if 'l3_context_cache' not in state:
+                                state['l3_context_cache'] = {}
+                            if l3_output:
+                                state['l3_context_cache']['last_output'] = l3_output.copy()
+                                from l3_strategy.l3_processor import _calculate_market_data_hash
+                                state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
+
+                    except Exception as e:
+                        logger.error(f"❌ L3 Error: {e}", exc_info=True)
                     
                 # Process L2 signals
                 try:
@@ -391,9 +461,33 @@ async def main():
                     logger.error(f"❌ L2 Error: {e}", exc_info=True)
                     valid_signals = []
 
-                # 3. Generate and execute orders
+                # 3. Generate and execute orders with validation
                 orders = await order_manager.generate_orders(state, valid_signals)
-                processed_orders = await order_manager.execute_orders(orders)
+
+                # Validate orders before execution using new validation method
+                validated_orders = []
+                for order in orders:
+                    if order.get("status") == "pending":  # Only validate pending orders
+                        symbol = order.get("symbol")
+                        quantity = order.get("quantity", 0.0)
+                        price = order.get("price", 0.0)
+                        portfolio = state.get("portfolio", {})
+
+                        # Use new validation method
+                        validation_result = order_manager.validate_order_size(symbol, quantity, price, portfolio)
+
+                        if validation_result["valid"]:
+                            validated_orders.append(order)
+                            logger.info(f"✅ Order validated: {symbol} {order.get('side')} {quantity:.4f} @ ${price:.2f}")
+                        else:
+                            logger.warning(f"❌ Order rejected: {validation_result['reason']}")
+                            order["status"] = "rejected"
+                            order["validation_error"] = validation_result["reason"]
+                            validated_orders.append(order)  # Still add to track rejections
+                    else:
+                        validated_orders.append(order)  # Add non-pending orders as-is
+
+                processed_orders = await order_manager.execute_orders(validated_orders)
                 
                 # 4. Update portfolio using PortfolioManager as single source of truth
                 await portfolio_manager.update_from_orders_async(processed_orders, state.get("market_data", {}))
@@ -438,6 +532,25 @@ async def main():
                 # Update trading metrics with executed orders and portfolio value
                 trading_metrics.update_from_orders(processed_orders, total_value)
 
+                # 🔄 POSITION ROTATION - TEMPORARILY DISABLED DUE TO PRICE BUG
+                # CRITICAL BUG: Position Rotator using stale prices causing 50%+ losses
+                # TODO: Fix price fetching in PositionRotator before re-enabling
+                logger.info("🔄 Position Rotation DISABLED - Price bug detected")
+                # try:
+                #     rotation_orders = await position_rotator.check_and_rotate_positions(state, state.get("market_data", {}))
+                #     if rotation_orders:
+                #         # Ejecutar órdenes de rotación
+                #         executed_rotations = await order_manager.execute_orders(rotation_orders)
+                #         # Actualizar portfolio con rotaciones ejecutadas
+                #         await portfolio_manager.update_from_orders_async(executed_rotations, state.get("market_data", {}))
+                #         # Re-sync state después de rotaciones
+                #         state["portfolio"] = portfolio_manager.get_portfolio_state()
+                #         state["total_value"] = portfolio_manager.get_total_value(state.get("market_data", {}))
+                #         state["usdt_balance"] = portfolio_manager.get_balance("USDT")
+                #         logger.info(f"🔄 Ejecutadas {len(executed_rotations)} órdenes de rotación automática")
+                # except Exception as rotation_error:
+                #     logger.error(f"❌ Error en position rotation: {rotation_error}")
+
                 # Save portfolio state periodically (every 5 cycles or when significant changes)
                 if cycle_id % 5 == 0:
                     portfolio_manager.save_to_json()
@@ -479,15 +592,31 @@ async def main():
                 # Log cycle stats
                 valid_orders = [o for o in processed_orders if o.get("status") != "rejected"]
                 await log_cycle_data(state, cycle_id, start_time)
-                
+
+                # Update cumulative counters
+                total_signals_all_cycles += len(valid_signals)
+                total_orders_all_cycles += len(valid_orders)
+                total_rejected_all_cycles += len(processed_orders) - len(valid_orders)
+
                 logger.info(
                     f"📊 Cycle {cycle_id} | "
                     f"Time: {(pd.Timestamp.utcnow() - start_time).total_seconds():.1f}s | "
-                    f"Signals: {len(valid_signals)} | " 
+                    f"Signals: {len(valid_signals)} | "
                     f"Orders: {len(valid_orders)} | "
                     f"Rejected: {len(processed_orders) - len(valid_orders)}"
                 )
-                
+
+                # Log cumulative totals every 5 cycles
+                if cycle_id % 5 == 0:
+                    logger.info(
+                        f"📈 CUMULATIVE TOTALS (Cycles 1-{cycle_id}) | "
+                        f"Total Signals: {total_signals_all_cycles} | "
+                        f"Total Orders: {total_orders_all_cycles} | "
+                        f"Total Rejected: {total_rejected_all_cycles} | "
+                        f"Avg Signals/Cycle: {total_signals_all_cycles/cycle_id:.1f} | "
+                        f"Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.1f}"
+                    )
+
                 await asyncio.sleep(10)
                 
             except Exception as e:

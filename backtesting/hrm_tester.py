@@ -6,9 +6,15 @@ import numpy as np
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from .backtesting_utils import TestMode, TestLevel, TestResult, L1Model
-from .report_generator import ReportGenerator
-from .getdata import BinanceDataCollector
+try:
+    from .backtesting_utils import TestMode, TestLevel, TestResult, L1Model
+    from .report_generator import ReportGenerator
+    from .getdata import BinanceDataCollector
+except ImportError:
+    # Fallback for direct execution
+    from backtesting_utils import TestMode, TestLevel, TestResult, L1Model
+    from report_generator import ReportGenerator
+    from getdata import BinanceDataCollector
 from core.portfolio_manager import update_portfolio_from_orders
 import asyncio
 from core.logging import logger

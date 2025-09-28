@@ -8,6 +8,9 @@ from .config import ConfigObject
 from l2_tactic.models import TacticalSignal
 
 class OrderManager:
+    # Minimum order size in USD - UPDATED FOR IMPROVED VALIDATION
+    MIN_ORDER_SIZE = 10.0  # $10 mínimo para órdenes válidas
+
     def __init__(self, binance_client=None, market_data=None):
         """Initialize OrderManager."""
         self.config = ConfigObject
@@ -23,6 +26,10 @@ class OrderManager:
         self.config.OPERATION_MODE = "TESTNET"
         self.execution_config["PAPER_MODE"] = True
         self.execution_config["USE_TESTNET"] = True
+
+        # 🛡️ STOP-LOSS SIMULATION SYSTEM
+        self.active_stop_losses = {}  # symbol -> list of stop orders
+        self.stop_loss_monitor_active = True
 
         logger.info(f"✅ OrderManager initialized - Mode: {ConfigObject.OPERATION_MODE}")
         logger.info(f"✅ Limits BTC: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_BTC']}, ETH: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_ETH']}")
@@ -92,11 +99,8 @@ class OrderManager:
                     risk_multiplier = 1.5 - risk_appetite * 0.5  # 1.0 for high risk, 1.5 for low risk
                     dynamic_min_order *= risk_multiplier
 
-                    # Ensure minimum doesn't go below $0.50 for BTC or $1.00 for others, max $25
-                    if signal.symbol == "BTCUSDT":
-                        dynamic_min_order = max(0.5, min(25.0, dynamic_min_order))
-                    else:
-                        dynamic_min_order = max(1.0, min(25.0, dynamic_min_order))
+                    # Ensure minimum doesn't go below MIN_ORDER_SIZE, max $25
+                    dynamic_min_order = max(self.MIN_ORDER_SIZE, min(25.0, dynamic_min_order))
 
                     logger.info(f"📊 Dynamic thresholds for {signal.symbol}: min_order=${dynamic_min_order:.2f}, vol={volatility_forecast:.4f}, risk={risk_appetite:.2f}")
 
@@ -109,12 +113,12 @@ class OrderManager:
                             continue
 
                         # Dynamic order sizing based on signal strength and market conditions
-                        base_order_pct = 0.05  # Base 5% of balance
+                        base_order_pct = 0.15  # Base 15% of balance (increased for better capital utilization)
                         strength_multiplier = getattr(signal, "strength", 0.5) * 2.0  # 0.5 to 2.0x
-                        vol_adjustment = max(0.5, 1.0 - volatility_forecast * 50)  # Reduce size in high vol
+                        vol_adjustment = max(0.7, 1.0 - volatility_forecast * 30)  # Reduce size in high vol (less aggressive reduction)
 
                         order_pct = base_order_pct * strength_multiplier * vol_adjustment
-                        order_value = min(usdt_balance * order_pct, 200.0)  # Cap at $200
+                        order_value = min(usdt_balance * order_pct, 500.0)  # Cap at $500 (increased)
                         quantity = order_value / current_price
 
                         if current_position + quantity > max_position:
@@ -225,6 +229,10 @@ class OrderManager:
                         order["status"] = "placed"  # No "filled" hasta que se active
                         order["order_id"] = f"sl_{order['symbol']}_{order['side']}_{order['stop_price']}"
                         logger.info(f"🛡️ STOP-LOSS simulado: {order['symbol']} {order['side']} {order['quantity']:.4f} @ stop={order['stop_price']:.2f}")
+
+                        # 🛡️ REGISTRAR STOP-LOSS PARA MONITOREO AUTOMÁTICO
+                        self.add_simulated_stop_loss(order["symbol"], order)
+
                     else:
                         # Market orders se ejecutan inmediatamente
                         order["status"] = "filled"
@@ -273,3 +281,169 @@ class OrderManager:
                 processed_orders.append(order)
 
         return processed_orders
+
+    # 🛡️ STOP-LOSS SIMULATION SYSTEM
+    async def monitor_and_execute_stop_losses(self, current_market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Monitor active stop-loss orders and execute when triggered."""
+        logger.info(f"🛡️ STOP-LOSS MONITOR | Estado: activo={self.stop_loss_monitor_active}, órdenes_activas={len(self.active_stop_losses)}")
+
+        if not self.stop_loss_monitor_active or not self.active_stop_losses:
+            logger.debug(f"🛡️ STOP-LOSS MONITOR | No hay órdenes activas para monitorear")
+            return []
+
+        executed_stops = []
+
+        for symbol, stop_orders in list(self.active_stop_losses.items()):
+            if not stop_orders:
+                continue
+
+            logger.debug(f"🛡️ STOP-LOSS MONITOR | Monitoreando {len(stop_orders)} órdenes para {symbol}")
+
+            # Get current price for this symbol
+            market_data = current_market_data.get(symbol)
+            if market_data is None:
+                logger.warning(f"🛡️ STOP-LOSS MONITOR | No hay datos de mercado para {symbol}")
+                continue
+
+            if isinstance(market_data, pd.DataFrame):
+                current_price = float(market_data["close"].iloc[-1])
+            elif isinstance(market_data, dict) and 'close' in market_data:
+                current_price = float(market_data['close'])
+            else:
+                logger.warning(f"🛡️ STOP-LOSS MONITOR | Formato de datos inválido para {symbol}")
+                continue
+
+            logger.debug(f"🛡️ STOP-LOSS MONITOR | {symbol} precio actual: ${current_price:.2f}")
+
+            # Check each stop-loss order
+            remaining_orders = []
+            for stop_order in stop_orders:
+                stop_price = stop_order["stop_price"]
+                side = stop_order["side"]
+
+                logger.debug(f"🛡️ STOP-LOSS MONITOR | Verificando orden: {symbol} {side} stop=${stop_price:.2f} vs precio=${current_price:.2f}")
+
+                # Check if stop-loss should trigger
+                triggered = False
+                if side == "SELL" and current_price <= stop_price:
+                    # Long position stop-loss triggered (price fell below stop)
+                    triggered = True
+                    logger.warning(f"🚨 STOP-LOSS TRIGGERED: {symbol} LONG position stopped at {current_price:.2f} (stop: {stop_price:.2f})")
+                elif side == "BUY" and current_price >= stop_price:
+                    # Short position stop-loss triggered (price rose above stop)
+                    triggered = True
+                    logger.warning(f"🚨 STOP-LOSS TRIGGERED: {symbol} SHORT position stopped at {current_price:.2f} (stop: {stop_price:.2f})")
+
+                if triggered:
+                    # Execute the stop-loss order
+                    stop_order["status"] = "filled"
+                    stop_order["filled_price"] = current_price
+                    stop_order["filled_quantity"] = stop_order["quantity"]
+                    stop_order["triggered_at"] = datetime.utcnow().isoformat()
+                    stop_order["trigger_price"] = current_price
+
+                    # Calculate commission
+                    order_value = abs(current_price * stop_order["quantity"])
+                    stop_order["commission"] = order_value * 0.001  # 0.1% fee
+
+                    executed_stops.append(stop_order)
+
+                    logger.info(f"🛡️ STOP-LOSS EXECUTADO: {symbol} {side} {stop_order['quantity']:.4f} @ {current_price:.2f} (Pérdida protegida)")
+
+                else:
+                    # Keep order active
+                    remaining_orders.append(stop_order)
+                    logger.debug(f"🛡️ STOP-LOSS MONITOR | Orden {symbol} {side} permanece activa (stop=${stop_price:.2f})")
+
+            # Update active orders for this symbol
+            if remaining_orders:
+                self.active_stop_losses[symbol] = remaining_orders
+                logger.debug(f"🛡️ STOP-LOSS MONITOR | {len(remaining_orders)} órdenes activas restantes para {symbol}")
+            else:
+                del self.active_stop_losses[symbol]
+                logger.info(f"🛡️ STOP-LOSS MONITOR | Todas las órdenes ejecutadas para {symbol}")
+
+        logger.info(f"🛡️ STOP-LOSS MONITOR | Ciclo completado: {len(executed_stops)} órdenes ejecutadas")
+        return executed_stops
+
+    def add_simulated_stop_loss(self, symbol: str, stop_order: Dict[str, Any]):
+        """Add a stop-loss order to the monitoring system."""
+        if symbol not in self.active_stop_losses:
+            self.active_stop_losses[symbol] = []
+
+        self.active_stop_losses[symbol].append(stop_order)
+        logger.info(f"🛡️ STOP-LOSS registrado para monitoreo: {symbol} {stop_order['side']} @ {stop_order['stop_price']:.2f}")
+
+    def get_active_stop_losses(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Get all currently active stop-loss orders."""
+        return self.active_stop_losses.copy()
+
+    def cancel_stop_loss(self, symbol: str, order_id: str) -> bool:
+        """Cancel a specific stop-loss order."""
+        if symbol not in self.active_stop_losses:
+            return False
+
+        for i, order in enumerate(self.active_stop_losses[symbol]):
+            if order.get("order_id") == order_id:
+                del self.active_stop_losses[symbol][i]
+                logger.info(f"🛡️ STOP-LOSS cancelado: {symbol} {order_id}")
+                return True
+
+        return False
+
+    def validate_order_size(self, symbol, quantity, current_price, portfolio=None):
+        """Valida que la orden cumpla con los requisitos mínimos"""
+
+        order_value = abs(quantity) * current_price
+        min_order = 10  # Mínimo $10 en lugar de $2
+
+        if order_value < min_order:
+            logger.warning(f"🛑 Order rejected: {symbol} value ${order_value:.2f} < ${min_order} minimum")
+            return {
+                "valid": False,
+                "reason": f"Order value ${order_value:.2f} below minimum ${min_order:.2f}",
+                "order_value": order_value,
+                "required_capital": min_order,
+                "available_capital": 0.0
+            }
+
+        # Verificar que tenemos suficiente capital para buy orders
+        if quantity > 0:  # Buy order
+            required_usdt = order_value * 1.002  # Incluir fees
+            available_usdt = portfolio.get('USDT', {}).get('free', 0.0) if portfolio else 0.0
+            if required_usdt > available_usdt:
+                logger.warning(f"🛑 Insufficient capital: {symbol} requires ${required_usdt:.2f}, available ${available_usdt:.2f}")
+                return {
+                    "valid": False,
+                    "reason": f"Insufficient capital: ${available_usdt:.2f} < ${required_usdt:.2f} required",
+                    "order_value": order_value,
+                    "required_capital": required_usdt,
+                    "available_capital": available_usdt
+                }
+        else:  # Sell order
+            # Check if we have sufficient position to sell
+            current_position = portfolio.get(symbol, {}).get("position", 0.0) if portfolio else 0.0
+            if current_position <= 0:
+                return {
+                    "valid": False,
+                    "reason": f"No position to sell for {symbol}",
+                    "order_value": order_value,
+                    "required_capital": 0.0,
+                    "available_capital": current_position
+                }
+            elif abs(quantity) > current_position:
+                return {
+                    "valid": False,
+                    "reason": f"Insufficient position: {current_position:.6f} < {abs(quantity):.6f}",
+                    "order_value": order_value,
+                    "required_capital": abs(quantity),
+                    "available_capital": current_position
+                }
+
+        return {
+            "valid": True,
+            "reason": "Order size and capital requirements met",
+            "order_value": order_value,
+            "required_capital": order_value * 1.002 if quantity > 0 else 0.0,
+            "available_capital": portfolio.get('USDT', {}).get('free', 0.0) if quantity > 0 else portfolio.get(symbol, {}).get("position", 0.0) if portfolio else 0.0
+        }

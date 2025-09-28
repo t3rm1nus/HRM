@@ -54,6 +54,8 @@ l2_tactic/
 | **Gemini** | 13 | `get_action()` → `predict()` | ✅ **FIXED** |
 | **Claude** | 971 | `predict()` | ✅ Operativo |
 | **Kimi** | Variable | `predict()` | ✅ Operativo |
+| **Grok** | Variable | `predict()` | ✅ Operativo |
+| **Gpt** | Variable | `predict()` | ✅ Operativo |
 
 #### 🔧 **Detección Automática de Métodos**
 ```python
@@ -73,6 +75,54 @@ def get_finrl_signal(finrl_processor, market_data):
 - **🛡️ Robustez:** Mejor manejo de errores y compatibilidad
 - **📊 Rendimiento:** Optimizaciones específicas por componente
 - **🔌 Compatibilidad:** Código existente sigue funcionando sin cambios
+
+#### 🛡️ **STOP-LOSS DINÁMICOS - PRODUCCIÓN ULTRA-SEGURO**
+**NUEVA FUNCIONALIDAD 2025:** L2 ahora calcula **stop-loss dinámicos** basados en volatilidad y confianza para cada señal generada.
+
+##### **Cálculo Inteligente de Stop-Loss**
+```python
+# Cada señal BUY/SELL incluye automáticamente stop-loss
+stop_loss_price = self._calculate_stop_loss_price(
+    risk_filtered.side, current_price, volatility_forecast, risk_filtered.confidence
+)
+risk_filtered.stop_loss = stop_loss_price
+```
+
+##### **Factores de Cálculo**
+- **📊 Volatilidad:** Basado en ATR (Average True Range) y volatilidad histórica
+- **🎯 Confianza:** Mayor confianza = stop-loss más amplio (menos restrictivo)
+- **📈 Precio actual:** Stop-loss se calcula desde el precio de entrada
+- **⏰ Timeframe:** Adaptado al timeframe de trading (1m, 5m, etc.)
+
+##### **Ejemplo de Cálculo**
+```
+Precio actual: 109,202.81 USDT
+Volatilidad: 3.0%
+Confianza: 65%
+Stop-loss: 106,418.14 USDT (2.5% protección)
+```
+
+##### **Ventajas del Sistema**
+- ✅ **Protección automática** para cada posición
+- ✅ **Dinámico** según condiciones de mercado
+- ✅ **Basado en datos** reales de volatilidad
+- ✅ **Integrado** con el sistema de órdenes L1
+- ✅ **Logging completo** de cálculos y activaciones
+
+#### 🤖 **SISTEMA DE AUTO-APRENDIZAJE INTEGRADO**
+**NUEVA FUNCIONALIDAD 2025:** L2 incluye integración completa con el **sistema de auto-aprendizaje** que mejora modelos automáticamente.
+
+##### **Auto-Reentrenamiento Automático**
+- **Triggers inteligentes:** Basado en performance, tiempo, régimen de mercado
+- **Validación cruzada continua:** 9 capas de protección anti-overfitting
+- **Ensemble evolution:** Modelos se mejoran y reemplazan automáticamente
+- **Concept drift detection:** Detección automática de cambios en el mercado
+
+##### **Beneficios para L2**
+- **📈 Rendimiento mejorado:** Modelos se optimizan solos
+- **🔄 Adaptabilidad:** Se ajusta automáticamente a nuevos regímenes
+- **🛡️ Estabilidad:** Protección total contra overfitting
+- **🤖 Autonomía:** Funciona 24/7 sin intervención manual
 
 ---
 

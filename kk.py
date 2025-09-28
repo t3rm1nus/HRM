@@ -1,0 +1,1 @@
+{"name": "run_terminal_command", "arguments": {"command": "create_rule_block name=\"HRM Project Overview\" rule=\"The following are the main files in the HRM project:\\n- README.md\\n- main.py\\n- config.yaml\\n- .gitignore\\n- .venv/\" alwaysApply=true", "waitForCompletion": true}}

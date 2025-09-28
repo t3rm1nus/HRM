@@ -516,7 +516,7 @@ class AutoRetrainingSystem:
 
         try:
             # Cargar modelos desde el sistema existente
-            from l3_strategy.regime_classifier import clasificar_regimen
+            from l3_strategy.regime_classifier import clasificar_regimen_mejorado
             from l1_operational.models import L1Model
 
             # Placeholder - en implementación real cargar modelos entrenados

@@ -72,6 +72,67 @@ def calculate_technical_indicators(market_data: dict) -> dict:
         df_ind['vol_std_20'] = df_ind['volume'].rolling(window=20, min_periods=20).std()
         df_ind['vol_zscore'] = (df_ind['volume'] - df_ind['vol_mean_20']) / (df_ind['vol_std_20'] + 1e-9)
 
+        # MOMENTUM INDICATORS - NEW ADDITION
+        # Rate of Change (ROC) - momentum over different periods
+        df_ind['roc_5'] = df_ind['close'].pct_change(periods=5) * 100
+        df_ind['roc_10'] = df_ind['close'].pct_change(periods=10) * 100
+        df_ind['roc_20'] = df_ind['close'].pct_change(periods=20) * 100
+
+        # Momentum (close - close_n_periods_ago)
+        df_ind['momentum_5'] = df_ind['close'] - df_ind['close'].shift(5)
+        df_ind['momentum_10'] = df_ind['close'] - df_ind['close'].shift(10)
+        df_ind['momentum_20'] = df_ind['close'] - df_ind['close'].shift(20)
+
+        # Williams %R - momentum oscillator
+        highest_high_14 = df_ind['high'].rolling(window=14, min_periods=14).max()
+        lowest_low_14 = df_ind['low'].rolling(window=14, min_periods=14).min()
+        df_ind['williams_r'] = -100 * (highest_high_14 - df_ind['close']) / (highest_high_14 - lowest_low_14 + 1e-9)
+
+        # Commodity Channel Index (CCI) - momentum and volatility
+        typical_price = (df_ind['high'] + df_ind['low'] + df_ind['close']) / 3
+        sma_tp_20 = typical_price.rolling(window=20, min_periods=20).mean()
+        mad_tp_20 = (typical_price - sma_tp_20).abs().rolling(window=20, min_periods=20).mean()
+        df_ind['cci'] = (typical_price - sma_tp_20) / (0.015 * mad_tp_20 + 1e-9)
+
+        # Stochastic Oscillator - momentum
+        lowest_low_14 = df_ind['low'].rolling(window=14, min_periods=14).min()
+        highest_high_14 = df_ind['high'].rolling(window=14, min_periods=14).max()
+        df_ind['stoch_k'] = 100 * (df_ind['close'] - lowest_low_14) / (highest_high_14 - lowest_low_14 + 1e-9)
+        df_ind['stoch_d'] = df_ind['stoch_k'].rolling(window=3, min_periods=3).mean()
+
+        # Average Directional Index (ADX) - trend strength
+        # Calculate True Range
+        df_ind['tr'] = np.maximum(
+            df_ind['high'] - df_ind['low'],
+            np.maximum(
+                (df_ind['high'] - df_ind['close'].shift(1)).abs(),
+                (df_ind['low'] - df_ind['close'].shift(1)).abs()
+            )
+        )
+
+        # Calculate Directional Movement
+        df_ind['dm_plus'] = np.where(
+            (df_ind['high'] - df_ind['high'].shift(1)) > (df_ind['low'].shift(1) - df_ind['low']),
+            np.maximum(df_ind['high'] - df_ind['high'].shift(1), 0),
+            0
+        )
+        df_ind['dm_minus'] = np.where(
+            (df_ind['low'].shift(1) - df_ind['low']) > (df_ind['high'] - df_ind['high'].shift(1)),
+            np.maximum(df_ind['low'].shift(1) - df_ind['low'], 0),
+            0
+        )
+
+        # Calculate Directional Indicators
+        atr_14 = df_ind['tr'].rolling(window=14, min_periods=14).mean()
+        di_plus = 100 * (df_ind['dm_plus'].rolling(window=14, min_periods=14).mean() / (atr_14 + 1e-9))
+        di_minus = 100 * (df_ind['dm_minus'].rolling(window=14, min_periods=14).mean() / (atr_14 + 1e-9))
+
+        # Calculate ADX
+        dx = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus + 1e-9)
+        df_ind['adx'] = dx.rolling(window=14, min_periods=14).mean()
+        df_ind['di_plus'] = di_plus
+        df_ind['di_minus'] = di_minus
+
         # Eliminar filas con NaN en indicadores clave (excepto sma_50)
         required_indicators = ['rsi', 'macd', 'macd_signal', 'bollinger_upper', 'bollinger_lower']
         df_ind = df_ind.dropna(subset=required_indicators)
@@ -128,7 +189,7 @@ def validate_dataframe_for_indicators(df: pd.DataFrame) -> bool:
 def debug_dataframe_types(df: pd.DataFrame, name: str = "DataFrame"):
     """
     Imprime información de depuración sobre tipos de datos y uso de memoria.
-    
+
     Args:
         df: DataFrame a inspeccionar
         name: Nombre para identificar el DataFrame en los logs
@@ -136,8 +197,42 @@ def debug_dataframe_types(df: pd.DataFrame, name: str = "DataFrame"):
     if df is None or df.empty:
         logger.info(f"{name} está vacío")
         return
-    
+
     logger.info(f"{name} info:")
     logger.info(df.info())
     logger.info(df.dtypes.value_counts())
     logger.info(f"{name} memoria: {df.memory_usage(deep=True).sum()/1024:.2f} KB")
+
+def calculate_range_indicators(df):
+    """
+    Calcula indicadores específicos para detectar y operar en mercados en rango.
+
+    Args:
+        df: DataFrame con columnas OHLCV
+
+    Returns:
+        DataFrame con indicadores de rango añadidos
+    """
+    try:
+        df_ind = df.copy()
+
+        # Rango de precios reciente (20 periodos)
+        df_ind['range_high_20'] = df_ind['high'].rolling(20).max()
+        df_ind['range_low_20'] = df_ind['low'].rolling(20).min()
+        df_ind['range_middle'] = (df_ind['range_high_20'] + df_ind['range_low_20']) / 2
+
+        # Fuerza del rango (ancho del rango relativo al precio medio)
+        df_ind['range_strength'] = (df_ind['range_high_20'] - df_ind['range_low_20']) / df_ind['range_middle']
+
+        # Indicador de consolidación (menor volatilidad = mayor consolidación)
+        df_ind['consolidation_ratio'] = df_ind['range_strength'].rolling(10).mean()
+
+        # Mean reversion signal (distancia del precio al rango medio)
+        df_ind['range_deviation'] = (df_ind['close'] - df_ind['range_middle']) / df_ind['range_middle']
+
+        logger.info("📊 Indicadores de rango calculados exitosamente")
+        return df_ind
+
+    except Exception as e:
+        logger.error(f"❌ Error calculando indicadores de rango: {e}")
+        return df

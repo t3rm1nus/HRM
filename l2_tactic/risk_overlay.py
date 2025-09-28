@@ -20,10 +20,10 @@ class RiskOverlay:
     
     def __init__(self, config=None):
         self.config = config
-        # Adjust thresholds for more active crypto trading
-        self.max_drawdown_limit = 0.08  # Increased from 1% to 8% for crypto volatility
-        self.max_expected_vol = 0.15    # Increased from 5% to 15% for crypto markets
-        self.correlation_limit = 0.9    # Slightly increased from 0.8 to 0.9
+        # Further relaxed thresholds for aggressive crypto trading
+        self.max_drawdown_limit = 0.12  # Increased from 8% to 12% for crypto volatility
+        self.max_expected_vol = 0.20    # Increased from 15% to 20% for crypto markets
+        self.correlation_limit = 0.95   # Increased from 0.9 to 0.95 for less restrictive correlation
         logger.info(f"🛡️ RiskOverlay ajustado - MaxDD: {self.max_drawdown_limit:.1%}, MaxVol: {self.max_expected_vol:.1%}")
         
     async def generate_risk_signals(self, market_data: Dict[str, Any], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:

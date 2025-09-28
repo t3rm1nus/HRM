@@ -65,9 +65,9 @@ class RiskConfig:
     cvar_confidence_level: float = 0.95
     
     # Portfolio Limits
-    max_single_asset_exposure: float = 0.70
+    max_single_asset_exposure: float = 0.75
     min_correlation_diversification: float = 0.30
-    max_portfolio_volatility: float = 0.30
+    max_portfolio_volatility: float = 0.35
     min_liquidity_requirement: float = 1000000  # USD daily volume
     max_slippage_tolerance: float = 0.002  # 20 bps
     
@@ -130,7 +130,7 @@ class OptimizationConfig:
     
     # Constraints
     min_weight: float = 0.0
-    max_weight: float = 0.70
+    max_weight: float = 0.75
     target_volatility: float = 0.25  # annual
     leverage_limit: float = 1.0  # no leverage
     

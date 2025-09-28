@@ -31,7 +31,7 @@ L1_Operational es el **núcleo operacional** del sistema HRM que maneja la **val
 | ✅ **Componente** | **Funcionalidad Real Implementada** |
 |------------------|-------------------------------------|
 | **OrderManager** | Procesa señales de L2, valida parámetros y simula ejecución de órdenes |
-| **AI Models** | ✅ **3 modelos IA funcionales** (LogReg, Random Forest, LightGBM) |
+| **AI Models** | ✅ **3 modelos IA funcionales** (LogReg, RF, LightGBM) |
 | **Trend AI** | Filtrado de señales con ensemble de modelos ML |
 | **DataFeed** | Obtiene datos OHLCV reales desde Binance Spot cada ciclo (10s) |
 | **Portfolio Management** | Actualiza balances automáticamente basado en órdenes "ejecutadas" |
@@ -40,6 +40,7 @@ L1_Operational es el **núcleo operacional** del sistema HRM que maneja la **val
 | **Error Handling** | Manejo robusto de errores con logging detallado |
 | **Persistent Logging** | Guarda métricas de órdenes y portfolio en CSV |
 | **Risk Guards** | Validaciones básicas de saldo y límites de trading |
+| **Stop-Loss System** | ✅ **SISTEMA STOP-LOSS HARDCORE** integrado y funcional |
 
 ---
 

@@ -112,6 +112,10 @@ class SignalComposer:
                     'indicators_count': len(indicators) if indicators else 0
                 }
             )
+
+            # 🛡️ PRESERVAR STOP-LOSS de la señal base
+            if hasattr(base_signal, 'stop_loss') and base_signal.stop_loss is not None:
+                composed_signal.stop_loss = base_signal.stop_loss
             
             logger.debug(f"✅ Señal compuesta para {symbol}: {composed_signal.side} (conf={confidence:.2f}, strength={strength:.2f})")
             return composed_signal
