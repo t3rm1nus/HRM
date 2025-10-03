@@ -1,0 +1,64 @@
+# HRM Backtesting Configuration - HISTORICAL TESTING SETTINGS
+# Apply with: HR_ENVIRONMENT=backtest python main.py
+# or pass 'backtest' to configuration_manager
+
+trading:
+  # Balance & Risk - Aggressive for backtest evaluation
+  initial_balance: 10000.0  # Higher initial balance for testing
+  max_portfolio_exposure_btc: 0.60  # Can be more aggressive in backtest
+  max_portfolio_exposure_eth: 0.60
+  max_position_size_usdt: 2000.0  # Larger positions possible
+  min_usdt_reserve: 100.0  # Minimal reserve needed
+
+  # Risk Management - Can be more flexible in backtest
+  risk_per_trade_percent: 0.030  # Higher risk for backtest (3%)
+  max_drawdown_limit: 0.15  # Allow deeper drawdowns for evaluation
+  stop_loss_default_percent: 0.040  # Test with wider stops
+
+  # Costs & Fees - Historical average
+  commission_rate: 0.0012  # Historical Binance fees
+  slippage_bps: 3  # Conservative slippage assumption
+  min_order_value_usdt: 1.0  # Small orders for backtest
+
+  # Trading Logic - Test all modes
+  hrm_path_mode: "PATH2"  # Test hybrid mode
+  max_contra_allocation_path2: 0.25  # More contra flexibility
+  signal_hold_limit: 50  # Allow signals to persist longer
+
+  # Auto-Learning - Disabled for backtest
+  auto_learning_enabled: false  # No learning during backtest
+  retrain_threshold_winrate: 0.50  # Lower threshold
+  max_models_in_ensemble: 12  # Larger ensemble for evaluation
+
+  # HARDCORE Safety - Relaxed for backtest
+  hardcore_mode: false  # No exchange sync needed
+  enable_stop_loss_real: false  # No real stops
+  sync_with_exchange: false  # No exchange connection
+  health_check_interval: 60  # Less frequent checks
+
+  # Sentiment Analysis - Cached for speed
+  sentiment_enabled: true
+  sentiment_update_interval_cycles: 100  # Less frequent for speed
+  sentiment_cache_hours: 24  # Extended cache
+
+environment:
+  # Mode settings
+  mode: "backtest"
+  persistence_enabled: false  # No state persistence needed
+  commissions_enabled: true   # Include costs in evaluation
+  slippage_enabled: true      # Include slippage in evaluation
+  websocket_enabled: false    # No real-time data
+
+  # Backtest flexibility
+  balance_multiplier: 3.33  # 3.33x simulated balance
+  risk_multiplier: 1.5     # 50% more aggressive
+  fee_multiplier: 1.2     # Historical fee adjustment
+
+  # Files & Cache
+  portfolio_state_file: "portfolio_state_backtest.json"
+  log_file: "logs/hrm_backtest.log"
+  cache_dir: "cache/backtest"
+
+  # Exchange - Mock for backtest
+  binance_testnet: true   # Use test endpoints
+  binance_api_key: "backtest_mock"  # No real API calls

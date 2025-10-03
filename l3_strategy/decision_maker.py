@@ -279,6 +279,32 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     return decision
 
 
+def get_regime_info(market_data: dict):
+    """
+    SOLUCIÓN INMEDIATA: Always calculate fresh regime info, bypass any caching.
+    Returns fresh L3 context without cache dependency.
+    """
+    try:
+        from .regime_classifier import ejecutar_estrategia_por_regimen
+
+        # Siempre calcular fresco - NUNCA usar cache
+        regime_info = ejecutar_estrategia_por_regimen(market_data)
+
+        logger.info(f"✅ Fresh L3 Regime Info: {regime_info['regime']} (signal: {regime_info.get('signal', 'hold')}, confidence: {regime_info.get('confidence', 0.0):.3f})")
+
+        return regime_info
+
+    except Exception as e:
+        logger.error(f"❌ Error in get_regime_info: {e}")
+        # Fallback to basic structure
+        return {
+            'regime': 'unknown',
+            'signal': 'hold',
+            'confidence': 0.0,
+            'allow_l2_signal': True
+        }
+
+
 def save_decision(data: dict, output_path: str):
     """Guarda la decisión estratégica en JSON"""
     with open(output_path, "w") as f:

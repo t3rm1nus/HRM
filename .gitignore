@@ -7,3 +7,26 @@ logs/
 .env
 node_modules/
 results/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# IDE artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.log

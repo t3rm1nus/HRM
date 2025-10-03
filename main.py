@@ -36,7 +36,6 @@ from l2_tactic.risk_controls.manager import RiskControlManager
 from l1_operational.order_manager import OrderManager
 from l1_operational.binance_client import BinanceClient
 from l1_operational.realtime_loader import RealTimeDataLoader
-from l3_strategy.l3_processor import generate_l3_output, cleanup_models
 from l3_strategy.regime_classifier import ejecutar_estrategia_por_regimen
 from l3_strategy.decision_maker import make_decision
 from l3_strategy.sentiment_inference import download_reddit, download_news, infer_sentiment
@@ -112,6 +111,55 @@ def validate_market_data(market_data: Dict) -> bool:
 # 🔄 AUTO-LEARNING SYSTEM INTEGRATION
 from integration_auto_learning import integrate_with_main_system
 
+def should_execute_with_l3_dominance(l2_signal, l3_info):
+    """
+    Decide if L2 signal should execute based on L3 dominance logic.
+
+    Args:
+        l2_signal: Dict with L2 signal info (action, symbol, confidence, etc.)
+        l3_info: Dict with L3 regime info (regime, signal, confidence, allow_l2)
+
+    Returns:
+        tuple: (should_execute: bool, reason: str)
+    """
+    # Extraer datos clave
+    l3_regime = l3_info.get('regime', 'unknown')
+    l3_signal = l3_info.get('signal', 'hold')
+    l3_confidence = l3_info.get('confidence', 0.0)
+    l3_allow_l2 = l3_info.get('allow_l2', True)
+
+    l2_action = l2_signal.get('action', 'hold')
+    l2_confidence = l2_signal.get('confidence', 0.5)
+
+    # LOG DIAGNÓSTICO TEMPORAL
+    logger.info("="*80)
+    logger.info("SIGNAL EXECUTION DECISION")
+    logger.info(f"L3 Info: {l3_info}")
+    logger.info(f"L2 Signals: {l2_signal}")
+    logger.info("="*80)
+
+    # L3 tiene data válida?
+    if l3_regime == 'ERROR' or l3_confidence <= 0.0:
+        logger.warning(f"⚠️ L3 data invalid (regime={l3_regime}, confidence={l3_confidence}), allowing L2")
+        return True, "L3 data invalid, permissive mode"
+
+    # L3 permite explícitamente L2?
+    if l3_allow_l2:
+        return True, f"L3 allows L2 signals (allow_l2={l3_allow_l2})"
+
+    # L3 con confianza alta en HOLD bloquea todo
+    if l3_signal.lower() == 'hold' and l3_confidence > 0.50:
+        reason = f"L3 HOLD with {l3_confidence:.2f} confidence blocks L2 {l2_action}"
+        logger.warning(f"🚫 {reason}")
+        return False, reason
+
+    # L3 tiene señal diferente pero con confianza media, permitir con restricción
+    if l3_confidence < 0.70:
+        return True, f"L3 low confidence ({l3_confidence:.2f}), allowing L2"
+
+    # Por defecto permitir si L3 no tiene confianza suficiente para dominar
+    return True, "Default permissive - L3 confidence insufficient for dominance"
+
 async def main():
     """Main HRM system function."""
     try:
@@ -162,6 +210,12 @@ async def main():
 
         # Initialize L2
         try:
+            # Quick fix: Disable synchronizer in PAPER mode for better performance
+            binance_mode = os.getenv("BINANCE_MODE", "TEST").upper()
+            if binance_mode != "LIVE":
+                logger.info("📝 PAPER/TEST MODE: Disabling BTC/ETH synchronizer")
+                os.environ['DISABLE_BTC_ETH_SYNC'] = 'true'
+
             l2_config = L2Config()
             l2_processor = L2TacticProcessor(l2_config, portfolio_manager=portfolio_manager, apagar_l3=APAGAR_L3)
             risk_manager = RiskControlManager(l2_config)
@@ -343,16 +397,15 @@ async def main():
                 'strategy_type': 'l3_disabled',
                 'timestamp': pd.Timestamp.utcnow().isoformat()
             }
-            # Set up L3 context cache for L2 compatibility
-            if 'l3_context_cache' not in state:
-                state['l3_context_cache'] = {}
-            state['l3_context_cache']['last_output'] = state["l3_output"].copy()
         else:
             # L3 is enabled - run normal initialization
             logger.info("-------------------------------------------------------------------------------------------------------------")
             logger.info("\x1b[32m🟢 L3 MODULE ENABLED - FULL SYSTEM OPERATING WITH L1+L2+L3\x1b[0m")
             logger.info("-------------------------------------------------------------------------------------------------------------")
             try:
+                # Import required function (moved from top-level for import consistency)
+                from l3_strategy.l3_processor import generate_l3_output
+
                 # Get initial sentiment data for L3
                 initial_sentiment_texts = await update_sentiment_texts()
                 sentiment_texts_cache = initial_sentiment_texts
@@ -360,52 +413,7 @@ async def main():
                 l3_output = generate_l3_output(state, texts_for_sentiment=initial_sentiment_texts)  # Generate initial L3 output with market data and sentiment
                 state["l3_output"] = l3_output  # Store L3 output in state for L2 access
 
-# CRITICAL FIX: Initial sync of L3 output with L3 context cache WITH HASH VALIDATION
-                if 'l3_context_cache' not in state:
-                    state['l3_context_cache'] = {}
-                if l3_output:
-                    # Calculate market data hash for cache validation
-                    from l3_strategy.l3_processor import _calculate_market_data_hash
-                    current_market_hash = _calculate_market_data_hash(state.get("market_data", {}))
-
-                    # Validate cache consistency before updating
-                    existing_hash = state['l3_context_cache'].get('market_data_hash')
-                    cache_is_valid = (existing_hash == current_market_hash or existing_hash is None)
-
-                    if not cache_is_valid:
-                        logger.warning("⚠️ L3 cache hash mismatch detected, validating cache consistency...")
-                        # Validate all cache fields
-                        cache_validation_passed = True
-                        required_cache_fields = ['last_output', 'market_data_hash', 'sentiment_score']
-
-                        for field in required_cache_fields:
-                            if field not in state['l3_context_cache']:
-                                logger.error(f"❌ Missing required cache field: {field}")
-                                cache_validation_passed = False
-
-                        if cache_validation_passed:
-                            # Cache is structurally valid but hash changed - update hash
-                            state['l3_context_cache']['market_data_hash'] = current_market_hash
-                            logger.info("✅ Validated L3 cache - updated market data hash")
-                        else:
-                            # Cache is corrupted - reset it
-                            logger.warning("🧹 Corrupted L3 cache detected - resetting cache")
-                            state['l3_context_cache'] = {
-                                'last_output': l3_output.copy(),
-                                'market_data_hash': current_market_hash,
-                                'sentiment_score': l3_output.get('sentiment_score', 0.5),
-                                'cache_validation_timestamp': pd.Timestamp.now().isoformat(),
-                                'cache_status': 'reset_due_to_validation_failure'
-                            }
-                    else:
-                        # Cache is valid - proceed with normal sync
-                        state['l3_context_cache']['last_output'] = l3_output.copy()
-                        state['l3_context_cache']['market_data_hash'] = current_market_hash
-                        state['l3_context_cache']['sentiment_score'] = l3_output.get('sentiment_score', 0.5)
-                        state['l3_context_cache']['cache_validation_timestamp'] = pd.Timestamp.now().isoformat()
-                        state['l3_context_cache']['cache_status'] = 'valid'
-
-                    logger.debug("✅ Initial L3 context cache synced with hash validation")
+                logger.debug("✅ L3 initialized successfully")
 
                 logger.info("✅ L3 initialized successfully with market data and sentiment analysis")
             except Exception as e:
@@ -547,6 +555,43 @@ async def main():
                     logger.error(f"❌ Error monitoreando stop-loss con validación: {e}")
 
                 # 3. Update L3 state and process signals
+                # ========================================================================================
+                # L3 REGIME INFO RETRIEVAL - ALWAYS FRESH, NO CACHE
+                # ========================================================================================
+
+                # 🔧 SOLUCIÓN INMEDIATA: Completamente sin cache - siempre calcular fresco
+                try:
+                    from l3_strategy.decision_maker import get_regime_info
+
+                    # Siempre obtener info fresca - NUNCA usar cache
+                    l3_info_fresh = get_regime_info(state.get("market_data", {}))
+
+                    # Preparar contexto para L2 con datos completamente frescos
+                    l3_regime_info = {
+                        'regime': l3_info_fresh.get('regime', 'unknown'),
+                        'subtype': l3_info_fresh.get('subtype', 'unknown'),
+                        'confidence': l3_info_fresh.get('confidence', 0.5),
+                        'signal': l3_info_fresh.get('signal', 'hold'),
+                        'allow_l2': l3_info_fresh.get('allow_l2_signal', True),
+                        'l3_output': l3_info_fresh
+                    }
+
+                except Exception as e:
+                    logger.warning(f"❌ Error obteniendo L3 regime info fresco: {e}")
+                    l3_regime_info = {
+                        'regime': 'unknown',
+                        'subtype': 'unknown',
+                        'confidence': 0.0,
+                        'signal': 'hold',
+                        'allow_l2': True
+                    }
+
+                # LOG VALIDATION
+                logger.info(f"✅ L3 Regime Info obtained: {l3_regime_info.get('regime', 'unknown')} (allow_l2: {l3_regime_info.get('allow_l2', True)})")
+
+                # VALIDAR que tiene datos (ahora siempre tiene datos válidos ya que usamos fallback)
+                # No es necesario validación adicional aquí ya que siempre retornamos un dict válido
+
                 # 🚨 SIGNAL HIERARCHY LOGIC: L3 HOLD signals with confidence > 40% block L2 BUY/SELL signals
                 l3_signal_blocks_l2 = False
                 l3_blocking_info = ""
@@ -646,50 +691,6 @@ async def main():
 
                             state["l3_output"] = l3_output
 
-                            # CRITICAL FIX: Sync L3 output with L3 context cache WITH HASH VALIDATION (Cycle sync)
-                            if 'l3_context_cache' not in state:
-                                state['l3_context_cache'] = {}
-
-                            # Calculate current market data hash for cache validation
-                            from l3_strategy.l3_processor import _calculate_market_data_hash
-                            current_market_hash = _calculate_market_data_hash(state.get("market_data", {}))
-
-                            # Validate cache consistency during cycle sync
-                            existing_hash = state['l3_context_cache'].get('market_data_hash')
-                            cache_is_valid = (existing_hash == current_market_hash or existing_hash is None)
-
-                            if not cache_is_valid:
-                                logger.warning("⚠️ L3 cache hash mismatch during cycle sync, validating cache consistency...")
-                                # Validate all cache fields
-                                cache_validation_passed = True
-                                required_cache_fields = ['last_output', 'market_data_hash', 'sentiment_score']
-
-                                for field in required_cache_fields:
-                                    if field not in state['l3_context_cache']:
-                                        logger.error(f"❌ Missing required cache field during sync: {field}")
-                                        cache_validation_passed = False
-
-                                if cache_validation_passed:
-                                    # Cache is structurally valid but hash changed - update hash
-                                    state['l3_context_cache']['market_data_hash'] = current_market_hash
-                                    logger.info("✅ Validated L3 cache during cycle - updated market data hash")
-                                else:
-                                    # Cache is corrupted - reset it
-                                    logger.warning("🧹 Corrupted L3 cache detected during cycle sync - resetting cache")
-                                    state['l3_context_cache'] = {
-                                        'last_output': l3_output.copy(),
-                                        'market_data_hash': current_market_hash,
-                                        'sentiment_score': sentiment_score,
-                                        'cache_validation_timestamp': pd.Timestamp.now().isoformat(),
-                                        'cache_status': 'reset_due_to_cycle_sync_validation_failure'
-                                    }
-                            else:
-                                # Cache is valid - proceed with normal cycle sync
-                                state['l3_context_cache']['last_output'] = l3_output.copy()
-                                state['l3_context_cache']['market_data_hash'] = current_market_hash
-                                state['l3_context_cache']['sentiment_score'] = sentiment_score
-                                state['l3_context_cache']['cache_validation_timestamp'] = pd.Timestamp.now().isoformat()
-                                state['l3_context_cache']['cache_status'] = 'valid_cycle_sync'
                             logger.info(f"🎯 REGIME PRIORITY L3: {regimen_resultado['regime'].upper()} regime driving portfolio allocation with {regimen_resultado.get('confidence', 0.5):.2f} confidence")
                         else:
                             # Fallback to original L3 if regime detection fails
@@ -700,16 +701,6 @@ async def main():
                                 l3_output['sentiment_score'] = sentiment_score
                             state["l3_output"] = l3_output
 
-                            # Sync with cache
-                            if 'l3_context_cache' not in state:
-                                state['l3_context_cache'] = {}
-                            if l3_output:
-                                state['l3_context_cache']['last_output'] = l3_output.copy()
-                                from l3_strategy.l3_processor import _calculate_market_data_hash
-                                state['l3_context_cache']['market_data_hash'] = _calculate_market_data_hash(state.get("market_data", {}))
-                                # Force update sentiment in cache metadata
-                                state['l3_context_cache']['sentiment_score'] = sentiment_score
-
                     except Exception as e:
                         logger.error(f"❌ L3 Error: {e}", exc_info=True)
 
@@ -718,6 +709,14 @@ async def main():
                     l3_output = state["l3_output"]
                     l3_signal = l3_output.get('signal', 'hold').lower()
                     l3_confidence = l3_output.get('confidence', 0.0)
+
+                    # ADD DIAGNOSTIC LOGGING - Trace where confidence is lost
+                    logger.info("="*80)
+                    logger.info("SIGNAL EXECUTION DECISION")
+                    logger.info(f"L3 Info: {l3_output}")
+                    logger.info(f"Initial L3 Decision: {l3_decision}")
+                    logger.info(f"L3 Signal: {l3_signal}, Confidence: {l3_confidence}")
+                    logger.info("="*80)
 
                     if l3_signal == 'hold' and l3_confidence > 0.50:
                         l3_signal_blocks_l2 = True
@@ -738,93 +737,14 @@ async def main():
                     logger.info(f"📊 Max allocation for setup trades: {l3_decision['strategic_guidelines']['max_single_asset_exposure']:.1%}")
 
                 # ========================================================================================
-                # L2 SIGNAL GENERATION WITH SETUP AWARENESS
+                # L2 SIGNAL GENERATION WITH L3 CONTEXT (SOLUCIÓN COMPLETA)
                 # ========================================================================================
-                l2_signals = []
 
-                for symbol in ["BTCUSDT", "ETHUSDT"]:
-                    # Get L2 signal (your existing L2 logic)
-                    # Note: Adapting to use the existing l2_processor instead of a standalone generate_l2_signal function
-                    try:
-                        l2_processor_signals = await l2_processor.process_signals(state)
-                        l2_processor_signals = [s for s in l2_processor_signals if isinstance(s, TacticalSignal)]
-                    except Exception as e:
-                        logger.warning(f"Error getting L2 signals for {symbol}: {e}")
-                        l2_processor_signals = []
-
-                    for signal in l2_processor_signals:
-                        if hasattr(signal, 'symbol') and signal.symbol == symbol:
-                            l2_signal = signal
-                            break
-                    else:
-                        # If no signal for this symbol, create a neutral signal
-                        l2_signal = type('Signal', (), {'action': 'hold', 'symbol': symbol, 'confidence': 0.5, 'direction': 'hold', 'signal_type': None})()
-
-                    # NEW: Setup-based signal override logic
-                    if setup_type == 'oversold' and l2_signal.action == 'BUY':
-                        # Allow BUY signal on oversold setup with reduced size
-                        l2_signal.confidence = min(l2_signal.confidence, 0.70)  # Cap confidence
-                        l2_signal.size_multiplier = 0.50  # Half size for setup trades
-                        l2_signal.setup_trade = True
-                        logger.info(f"✅ OVERSOLD SETUP: Allowing L2 BUY for {symbol} with reduced size")
-
-                        signal_dict = {
-                            'action': l2_signal.action,
-                            'symbol': symbol,
-                            'confidence': l2_signal.confidence,
-                            'direction': l2_signal.action.lower() if l2_signal.action else 'hold',
-                            'size_multiplier': getattr(l2_signal, 'size_multiplier', 1.0),
-                            'setup_trade': getattr(l2_signal, 'setup_trade', False)
-                        }
-                        l2_signals.append(signal_dict)
-
-                    elif setup_type == 'overbought' and l2_signal.action == 'SELL':
-                        # Allow SELL signal on overbought setup with reduced size
-                        l2_signal.confidence = min(l2_signal.confidence, 0.70)
-                        l2_signal.size_multiplier = 0.50
-                        l2_signal.setup_trade = True
-                        logger.info(f"✅ OVERBOUGHT SETUP: Allowing L2 SELL for {symbol} with reduced size")
-
-                        signal_dict = {
-                            'action': l2_signal.action,
-                            'symbol': symbol,
-                            'confidence': l2_signal.confidence,
-                            'direction': l2_signal.action.lower() if l2_signal.action else 'hold',
-                            'size_multiplier': getattr(l2_signal, 'size_multiplier', 1.0),
-                            'setup_trade': getattr(l2_signal, 'setup_trade', False)
-                        }
-                        l2_signals.append(signal_dict)
-
-                    elif l3_decision.get('confidence', 0) > 0.75 and l3_decision.get('primary_regime') != 'RANGE':
-                        # Strong non-range regime: allow L2 signals normally
-                        logger.info(f"✅ STRONG REGIME: Allowing L2 signal for {symbol}")
-
-                        signal_dict = {
-                            'action': l2_signal.action,
-                            'symbol': symbol,
-                            'confidence': l2_signal.confidence,
-                            'direction': l2_signal.action.lower() if l2_signal.action else 'hold',
-                            'size_multiplier': getattr(l2_signal, 'size_multiplier', 1.0),
-                            'setup_trade': getattr(l2_signal, 'setup_trade', False)
-                        }
-                        l2_signals.append(signal_dict)
-
-                    else:
-                        # Default: block L2 signal unless setup allows it
-                        if allow_l2_signals:
-                            logger.info(f"⚠️ SETUP OVERRIDE: Allowing L2 signal for {symbol} despite range regime")
-
-                            signal_dict = {
-                                'action': l2_signal.action,
-                                'symbol': symbol,
-                                'confidence': l2_signal.confidence,
-                                'direction': l2_signal.action.lower() if l2_signal.action else 'hold',
-                                'size_multiplier': getattr(l2_signal, 'size_multiplier', 1.0),
-                                'setup_trade': getattr(l2_signal, 'setup_trade', False)
-                            }
-                            l2_signals.append(signal_dict)
-                        else:
-                            logger.warning(f"🚫 L3 DOMINANCE: L3 blocks L2 {l2_signal.action} for {symbol} (confidence: {l3_decision.get('confidence', 0):.2f})")
+                # Pasar a L2
+                l2_signals = l2_processor.generate_signals(
+                    market_data=state.get("market_data", {}),
+                    l3_context=l3_regime_info  # Con validación
+                )
 
                 # Process L2 signals
                 try:
@@ -833,41 +753,51 @@ async def main():
                     valid_signals = l2_signals if l2_signals else []
                     l2_signals_before_filtering = len(valid_signals)
 
-                    # 🚨 APPLY L3 BLOCKING: Filter L2 signals if L3 HOLD with high confidence
-                    if l3_signal_blocks_l2 and valid_signals:
-                        # Filter out BUY/SELL signals when L3 blocks
+                    # 🚨 APPLY L3 DOMINANCE: Filter L2 signals based on L3 regime context (SOLUCIÓN COMPLETA)
+                    if valid_signals:
                         blocked_signals = 0
                         filtered_signals = []
 
                         for signal in valid_signals:
-                            signal_side = getattr(signal, 'direction', 'hold')
-                            if signal_side in ['buy', 'sell']:
-                                logger.warning(f"🚫 L3 BLOCKED: {signal.get('symbol', 'Unknown')} {signal_side.upper()} signal blocked by L3 HOLD ({l3_blocking_info})")
-                                blocked_signals += 1
+                            # Convert TacticalSignal object to dict for should_execute_with_l3_dominance
+                            signal_dict = {
+                                'action': getattr(signal, 'side', 'hold'),  # side might be 'buy', 'sell', 'hold'
+                                'symbol': getattr(signal, 'symbol', 'UNKNOWN'),
+                                'confidence': getattr(signal, 'confidence', 0.5)
+                            }
+
+                            # Decide ejecuta based on L3 dominance
+                            should_execute, reason = should_execute_with_l3_dominance(signal_dict, l3_regime_info)
+
+                            if should_execute:
+                                filtered_signals.append(signal)  # Keep the original TacticalSignal object
                             else:
-                                filtered_signals.append(signal)
+                                logger.warning(f"🚫 L3 DOMINANCE: {getattr(signal, 'symbol', 'Unknown')} {getattr(signal, 'side', 'hold').upper()} signal blocked - {reason}")
+                                blocked_signals += 1
 
                         valid_signals = filtered_signals
 
                         if blocked_signals > 0:
-                            logger.info(f"🚫 L3 DOMINANCE: Blocked {blocked_signals} L2 signals due to L3 HOLD with high confidence")
+                            logger.info(f"🚫 L3 DOMINANCE: Blocked {blocked_signals} L2 signals per regime analysis")
 
                     # Submit signals for incremental verification
                     for signal in valid_signals:
                         try:
-                            # Convert signal dict to TacticalSignal-like object for verification
-                            tactical_signal = TacticalSignal(
-                                symbol=signal.get('symbol', 'UNKNOWN'),
-                                strength=signal.get('confidence', 0.5),
-                                confidence=signal.get('confidence', 0.5),
-                                side=getattr(signal, 'direction', 'hold'),
+                            # Create verification copy from TacticalSignal object
+                            verification_signal = TacticalSignal(
+                                symbol=getattr(signal, 'symbol', 'UNKNOWN'),
+                                strength=getattr(signal, 'strength', 0.5),
+                                confidence=getattr(signal, 'confidence', 0.5),
+                                side=getattr(signal, 'side', 'hold'),  # Changed from 'direction' to 'side'
                                 signal_type='setup_aware',
                                 source='l2_processor',
-                                features={}
+                                timestamp=getattr(signal, 'timestamp', pd.Timestamp.now()),
+                                features=getattr(signal, 'features', {}),
+                                metadata=getattr(signal, 'metadata', {})
                             )
 
                             await signal_verifier.submit_signal_for_verification(
-                                tactical_signal, state.get("market_data", {})
+                                verification_signal, state.get("market_data", {})
                             )
                         except Exception as verify_error:
                             logger.warning(f"⚠️ Failed to submit signal for verification: {verify_error}")
@@ -886,7 +816,7 @@ async def main():
                     logger.warning(f"💰 USDT BALANCE TOO LOW: {current_usdt_balance:.2f} < {min_order_usdt_balance:.2f}, skipping buy orders")
 
                     # Filter out buy signals to prevent "fondos insuficientes" errors
-                    buy_signals_to_skip = [s for s in valid_signals if getattr(s, 'direction', None) == 'buy' or (hasattr(s, 'signal_type') and 'buy' in s.signal_type.lower())]
+                    buy_signals_to_skip = [s for s in valid_signals if getattr(s, 'side', None) == 'buy' or (hasattr(s, 'signal_type') and 'buy' in getattr(s, 'signal_type', '').lower())]
                     if buy_signals_to_skip:
                         logger.info(f"🚫 Skipping {len(buy_signals_to_skip)} buy signals due to low USDT balance")
                         valid_signals = [s for s in valid_signals if s not in buy_signals_to_skip]
@@ -1362,6 +1292,7 @@ async def main():
                             logger.error(f"Failed to refresh market data: {data_error}")
 
                         # Reinitialize with clean state and proper framework settings
+                        from l3_strategy.l3_processor import generate_l3_output
                         l3_output = generate_l3_output(state)
                         state["l3_output"] = l3_output  # Store L3 output in state
                         logger.info("🔄 L3 components reinitialized successfully")

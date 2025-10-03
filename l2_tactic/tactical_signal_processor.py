@@ -22,7 +22,7 @@ from .finrl_processor import FinRLProcessor
 from .finrl_wrapper import FinRLProcessorWrapper
 from .signal_validator import validate_signal_list, validate_tactical_signal, create_fallback_signal
 from .utils import safe_float
-from .btc_eth_synchronizer import btc_eth_synchronizer
+# from .btc_eth_synchronizer import btc_eth_synchronizer
 from .weight_calculator_integration import weight_calculator_integrator
 from .path_mode_generator import PathModeSignalGenerator
 
@@ -43,6 +43,14 @@ class L2TacticProcessor:
         self.multi_timeframe = MultiTimeframeTechnical(self.config)
         self.risk_overlay = RiskOverlay()
         self.signal_composer = SignalComposer(self.config.signals)
+
+        # Conditionally initialize BTC/ETH synchronizer (disabled in PAPER mode)
+        if not os.getenv('DISABLE_BTC_ETH_SYNC'):
+            from .btc_eth_synchronizer import btc_eth_synchronizer
+            self.synchronizer = btc_eth_synchronizer.apply_btc_eth_synchronization
+        else:
+            self.synchronizer = None
+            logger.info("⏭️ BTC/ETH Synchronizer disabled via config")
 
         # AI processor setup
         self._setup_finrl_processor()
@@ -109,14 +117,14 @@ class L2TacticProcessor:
                     'direction': 'hold'
                 })()
 
-                # Create mock L3 context from l3_output
+                # Create mock L3 context from l3_output with safe defaults
                 mock_l3_context = {
                     'path_mode': 'PATH2',
                     'regime': l3_output.get('regime', 'RANGE'),
-                    'subtype': l3_output.get('subtype'),
+                    'subtype': l3_output.get('subtype') or 'unknown',  # SAFE: Never None
                     'l3_signal': l3_output.get('signal', 'hold'),
-                    'l3_confidence': l3_output.get('confidence', 0.0),
-                    'setup_type': l3_output.get('setup_type'),
+                    'l3_confidence': l3_output.get('confidence', 0.50),
+                    'setup_type': l3_output.get('setup_type'),  # Can be None
                     'allow_l2_signals': l3_output.get('allow_l2_signals', False)
                 }
 
@@ -239,10 +247,14 @@ class L2TacticProcessor:
                     'metadata': getattr(sig, 'metadata', {})
                 })
 
-            # Apply BTC/ETH synchronization
-            synchronized = btc_eth_synchronizer.apply_btc_eth_synchronization(
-                signal_dicts, market_data, state
-            )
+            # Apply BTC/ETH synchronization (conditionally disabled for PAPER mode)
+            if os.getenv('DISABLE_BTC_ETH_SYNC'):
+                logger.info("⏭️ BTC/ETH Synchronizer disabled via environment variable")
+                synchronized = signal_dicts
+            else:
+                synchronized = btc_eth_synchronizer.apply_btc_eth_synchronization(
+                    signal_dicts, market_data, state
+                )
 
             # Apply weight calculator
             weighted = await weight_calculator_integrator.apply_weight_calculator_integration(
@@ -387,9 +399,345 @@ class L2TacticProcessor:
         return signal
 
     def _get_l3_output(self, state: Dict[str, Any]) -> Dict:
-        """Get L3 output from state."""
+        """Get L3 output from state - use current output if available, fallback to cache."""
+        # Try current L3 output first (for real-time accuracy)
+        current_l3_output = state.get("l3_output", {})
+        if current_l3_output and isinstance(current_l3_output, dict) and current_l3_output.get('regime'):
+            return current_l3_output
+
+        # Fallback to cache if current is not available or valid
         l3_context_cache = state.get("l3_context_cache", {})
         return l3_context_cache.get("last_output", {})
+
+    async def generate_signals_async(self, market_data: Dict[str, Any], l3_context: Dict[str, Any]) -> List[TacticalSignal]:
+        """
+        Generate L2 signals with L3 context integration (SOLUCIÓN COMPLETA).
+        Async version to be called from within the main loop.
+
+        Args:
+            market_data: Market data dictionary
+            l3_context: L3 regime information with validation
+
+        Returns:
+            List of TacticalSignal objects
+        """
+        signals = []
+
+        for symbol in ["BTCUSDT", "ETHUSDT"]:
+            try:
+                # Generate base L2 signal using traditional processing
+                mock_state = {
+                    "market_data": market_data,
+                    "market_data_simple": market_data,
+                    "l3_output": l3_context  # Pass L3 context to processing
+                }
+
+                # Call async method directly
+                symbol_signals = await self.process_signals(mock_state)
+
+                # Find signal for this specific symbol
+                signal_for_symbol = None
+                for sig in symbol_signals:
+                    if hasattr(sig, 'symbol') and sig.symbol == symbol:
+                        signal_for_symbol = sig
+                        break
+
+                # If no signal generated, create a neutral one
+                if not signal_for_symbol:
+                    signal_for_symbol = TacticalSignal(
+                        symbol=symbol,
+                        side='hold',
+                        strength=0.5,
+                        confidence=0.5,
+                        source='l2_processor',
+                        timestamp=pd.Timestamp.now(),
+                        features={},
+                        metadata={'l3_context_integrated': True}
+                    )
+
+                # Apply additional L3 context-based validation/filtering
+                validated_signal = self._apply_l3_context_validation(signal_for_symbol, l3_context)
+
+                if validated_signal:
+                    signals.append(validated_signal)
+                    logger.debug(f"✅ L2 signal generated for {symbol} with L3 context")
+                else:
+                    logger.debug(f"⚠️ L2 signal filtered out for {symbol} by L3 context validation")
+
+            except Exception as e:
+                logger.error(f"❌ Error generating L2 signal for {symbol}: {e}")
+                # Create fallback neutral signal
+                fallback_signal = TacticalSignal(
+                    symbol=symbol,
+                    side='hold',
+                    strength=0.4,
+                    confidence=0.4,
+                    source='l2_fallback',
+                    timestamp=pd.Timestamp.now(),
+                    features={},
+                    metadata={'error': str(e), 'l3_context_integrated': False}
+                )
+                signals.append(fallback_signal)
+
+        return signals
+
+    def generate_signals(self, market_data: Dict[str, Any], l3_context=None):
+        """Genera señales tácticas considerando contexto L3"""
+
+        # VALIDAR L3 context
+        if not l3_context:
+            logger.warning("⚠️ No L3 context provided, using default HOLD")
+            return self._generate_default_signals(market_data)
+
+        # EXTRAER señal L3
+        l3_signal = l3_context.get('signal', 'hold')
+        l3_confidence = l3_context.get('confidence', 0.0)
+        l3_regime = l3_context.get('regime', 'unknown')
+
+        logger.info(f"📊 L2 processing L3: {l3_signal} ({l3_confidence:.2f}) in {l3_regime}")
+
+        # SI L3 DICE BUY CON ALTA CONFIANZA → L2 DEBE GENERAR BUY
+        if l3_signal == 'buy' and l3_confidence >= 0.70:
+            logger.info("✅ L3 high-confidence BUY signal - L2 generating BUY signals")
+            return self._generate_buy_signals(market_data, l3_context)
+
+        # SI L3 DICE SELL CON ALTA CONFIANZA → L2 DEBE GENERAR SELL
+        elif l3_signal == 'sell' and l3_confidence >= 0.70:
+            logger.info("✅ L3 high-confidence SELL signal - L2 generating SELL signals")
+            return self._generate_sell_signals(market_data, l3_context)
+
+        # SI L3 PERMITE L2 → L2 PUEDE USAR SUS PROPIOS MODELOS
+        elif l3_context.get('allow_l2', False):
+            logger.info("🔓 L3 allows L2 autonomy - using L2 models")
+            return self._generate_autonomous_signals(market_data, l3_context)
+
+        # DEFAULT: HOLD
+        else:
+            logger.info("⏸️ L3 suggests HOLD - maintaining positions")
+            return self._generate_hold_signals(market_data)
+
+    def _apply_l3_context_validation(self, signal: TacticalSignal, l3_context: Dict[str, Any]) -> Optional[TacticalSignal]:
+        """
+        Apply additional L3 context-based validation to generated L2 signals.
+
+        Args:
+            signal: Generated TacticalSignal
+            l3_context: L3 regime information
+
+        Returns:
+            Validated signal or None if filtered out
+        """
+        # Extract L3 context with safe defaults
+        l3_regime = l3_context.get('regime', 'unknown')
+        l3_confidence = l3_context.get('confidence', 0.0)
+        l3_allow_l2 = l3_context.get('allow_l2', True)
+
+        # If L3 explicitly doesn't allow L2 signals, filter based on confidence
+        if not l3_allow_l2 and l3_confidence > 0.60:
+            signal_side = getattr(signal, 'side', 'hold')
+            if signal_side in ['buy', 'sell']:
+                logger.info(f"🚫 L3 context validation: filtering {signal_side} signal for {signal.symbol} (L3 dominance)")
+                return None
+
+        # Add L3 context metadata to signal for debugging/tracking
+        if hasattr(signal, 'metadata'):
+            signal.metadata.update({
+                'l3_regime': l3_regime,
+                'l3_confidence': l3_confidence,
+                'l3_allow_l2': l3_allow_l2,
+                'l3_context_validated': True
+            })
+
+        return signal
+
+    # Helper methods for L3 context-based signal generation
+    def _generate_default_signals(self, market_data):
+        """Genera señales HOLD por defecto cuando no hay L3 context"""
+        from datetime import datetime
+
+        signals = []
+        for symbol in ['BTCUSDT', 'ETHUSDT']:
+            signal = TacticalSignal(
+                symbol=symbol,
+                side='hold',
+                strength=0.5,
+                confidence=0.0,
+                source='l2_default',
+                timestamp=pd.Timestamp.now(),
+                features={},
+                metadata={'reason': 'No L3 context provided'}
+            )
+            signals.append(signal)
+
+        return signals
+
+    def _generate_buy_signals(self, market_data, l3_context):
+        """Genera señales BUY basadas en directiva L3"""
+        from datetime import datetime
+
+        signals = []
+
+        for symbol in ['BTCUSDT', 'ETHUSDT']:
+            signal = TacticalSignal(
+                symbol=symbol,
+                side='buy',
+                strength=min(1.0, l3_context['confidence'] + 0.3),  # Boost strength for L3 signals
+                confidence=l3_context['confidence'],  # Use L3 confidence directly
+                source='l2_following_l3',
+                timestamp=pd.Timestamp.now(),
+                features={},
+                metadata={
+                    'reason': f"L3 {l3_context['regime']} {l3_context.get('subtype', '')} setup",
+                    'l3_regime': l3_context['regime'],
+                    'l3_confidence': l3_context['confidence'],
+                    'l3_signal': 'buy'
+                }
+            )
+            signals.append(signal)
+
+        return signals
+
+    def _generate_sell_signals(self, market_data, l3_context):
+        """Genera señales SELL basadas en directiva L3"""
+        from datetime import datetime
+
+        signals = []
+
+        for symbol in ['BTCUSDT', 'ETHUSDT']:
+            signal = TacticalSignal(
+                symbol=symbol,
+                side='sell',
+                strength=min(1.0, l3_context['confidence'] + 0.3),  # Boost strength for L3 signals
+                confidence=l3_context['confidence'],  # Use L3 confidence directly
+                source='l2_following_l3',
+                timestamp=pd.Timestamp.now(),
+                features={},
+                metadata={
+                    'reason': f"L3 {l3_context['regime']} {l3_context.get('subtype', '')} setup",
+                    'l3_regime': l3_context['regime'],
+                    'l3_confidence': l3_context['confidence'],
+                    'l3_signal': 'sell'
+                }
+            )
+            signals.append(signal)
+
+        return signals
+
+    def _generate_autonomous_signals(self, market_data, l3_context):
+        """Genera señales usando modelos L2 propios cuando L3 permite autonomía"""
+        logger.info("🔄 Using L2 autonomous processing with L3 context awareness")
+
+        # Try to use FinRL models for autonomous generation
+        try:
+            signals = []
+            for symbol in ['BTCUSDT', 'ETHUSDT']:
+                # Get market state for this symbol
+                symbol_data = market_data.get(symbol, {})
+
+                # Use FinRL wrapper if available
+                if self.finrl_wrapper:
+                    # Create a mock state for FinRL processing
+                    mock_state = {
+                        "market_data": market_data,
+                        "market_data_simple": market_data,
+                        "l3_output": l3_context
+                    }
+
+                    # Calculate indicators if data is available
+                    indicators = {}
+                    if isinstance(symbol_data, dict) and 'historical_data' in symbol_data:
+                        df = symbol_data['historical_data']
+                        if isinstance(df, pd.DataFrame) and len(df) >= 50:
+                            indicators = self.multi_timeframe.calculate_technical_indicators(df)
+
+                    # Generate signal using FinRL
+                    ai_signal = asyncio.run(self._get_finrl_signal(mock_state, symbol, indicators))
+
+                    if ai_signal:
+                        # Ensure signal follows L3 context
+                        signal_side = getattr(ai_signal, 'side', 'hold')
+                        signal_confidence = getattr(ai_signal, 'confidence', 0.5)
+
+                        # Create updated signal with L3 awareness
+                        signal = TacticalSignal(
+                            symbol=symbol,
+                            side=signal_side,
+                            strength=getattr(ai_signal, 'strength', 0.5),
+                            confidence=signal_confidence,
+                            source='l2_autonomous_ai',
+                            timestamp=pd.Timestamp.now(),
+                            features=getattr(ai_signal, 'features', {}),
+                            metadata={
+                                'reason': 'L2 autonomous processing with L3 awareness',
+                                'l3_regime': l3_context.get('regime', 'unknown'),
+                                'l3_confidence': l3_context.get('confidence', 0.0),
+                                'l3_signal': l3_context.get('signal', 'hold'),
+                                'l2_model_confidence': signal_confidence
+                            }
+                        )
+                        signals.append(signal)
+                    else:
+                        # Fallback to hold if no AI signal
+                        signal = TacticalSignal(
+                            symbol=symbol,
+                            side='hold',
+                            strength=0.5,
+                            confidence=0.5,
+                            source='l2_autonomous_fallback',
+                            timestamp=pd.Timestamp.now(),
+                            features={},
+                            metadata={
+                                'reason': 'L2 autonomous - no AI signal generated',
+                                'l3_regime': l3_context.get('regime', 'unknown'),
+                                'l3_allow_l2': True
+                            }
+                        )
+                        signals.append(signal)
+                else:
+                    # No AI available, use basic hold signals
+                    logger.warning("⚠️ L2 FinRL wrapper not available for autonomous processing")
+                    signal = TacticalSignal(
+                        symbol=symbol,
+                        side='hold',
+                        strength=0.5,
+                        confidence=0.5,
+                        source='l2_autonomous_no_ai',
+                        timestamp=pd.Timestamp.now(),
+                        features={},
+                        metadata={
+                            'reason': 'L2 autonomous - no AI processor available',
+                            'l3_regime': l3_context.get('regime', 'unknown'),
+                            'l3_allow_l2': True
+                        }
+                    )
+                    signals.append(signal)
+
+            return signals
+
+        except Exception as e:
+            logger.error(f"❌ Error in L2 autonomous signal generation: {e}")
+            # Fallback to hold signals
+            return self._generate_hold_signals(market_data)
+
+    def _generate_hold_signals(self, market_data):
+        """Genera señales HOLD cuando L3 sugiere mantenimiento de posiciones"""
+        from datetime import datetime
+
+        signals = []
+        for symbol in ['BTCUSDT', 'ETHUSDT']:
+            signal = TacticalSignal(
+                symbol=symbol,
+                side='hold',
+                strength=0.5,
+                confidence=0.5,
+                source='l2_hold_l3_suggestion',
+                timestamp=pd.Timestamp.now(),
+                features={},
+                metadata={'reason': 'L3 suggests maintaining positions'}
+            )
+            signals.append(signal)
+
+        return signals
 
     # Model switching and helper methods
     def switch_model(self, model_key: str) -> bool:

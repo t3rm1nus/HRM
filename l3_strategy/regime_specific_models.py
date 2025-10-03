@@ -400,11 +400,28 @@ class RangeMarketModel:
 
             logger.info(f"📊 RANGE TECHNICALS: BTC BB={btc_bb_pos:.2f}, RSI={btc_rsi:.1f} | ETH BB={eth_bb_pos:.2f}, RSI={eth_rsi:.1f}")
 
-            # Range regime: CAUTIOUS allocations with mean-reversion logic
-            # Small positions favoring oversold assets (RSI < 40)
-            btc_allocation = 0.05 if btc_rsi < 40 else 0.02  # Slightly favor BTC if oversold
-            eth_allocation = 0.04 if eth_rsi < 40 else 0.02  # Smaller ETH allocation
-            cash_allocation = 0.89  # High cash preservation
+            # Range regime: ADJUSTED allocations for better operations
+            # Increase allocations for high-confidence range regimes
+            confidence = regime_context.get('confidence', 0.5)
+            subtype = regime_context.get('subtype', '')
+
+            # Base allocations - less conservative than before
+            if confidence >= 0.80 and subtype == 'TIGHT_RANGE':
+                # High confidence TIGHT_RANGE: More aggressive allocations
+                btc_allocation = 0.20  # Increased from 0.05 to 0.20
+                eth_allocation = 0.15  # Increased from 0.04 to 0.15
+                cash_allocation = 0.65  # Reduced from 0.89 to 0.65
+            else:
+                # Standard range: moderate allocations
+                btc_allocation = 0.10 if btc_rsi < 40 else 0.05  # Favor oversold BTC
+                eth_allocation = 0.08 if eth_rsi < 40 else 0.04  # Favor oversold ETH
+                cash_allocation = 0.82  # Moderate cash preservation
+
+            # Override for oversold conditions regardless of confidence
+            if btc_rsi < 35 or eth_rsi < 35:
+                btc_allocation = max(btc_allocation, 0.15)  # Ensure minimum allocation for oversold
+                eth_allocation = max(eth_allocation, 0.12)  # Ensure minimum allocation for oversold
+                cash_allocation = 1.0 - btc_allocation - eth_allocation
 
             asset_allocation = {
                 'BTCUSDT': btc_allocation,

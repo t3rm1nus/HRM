@@ -1,298 +1,357 @@
-# -*- coding: utf-8 -*-
 """
-Unified Configuration Management System - HRM Trading System
+HRM Configuration Manager - Single Source of Truth for All Parameters
 
-Centralizes all configuration access patterns across the system to eliminate
-inconsistent direct imports and function calls. Provides a single, consistent
-interface for configuration management.
+Implements complete configuration centralization with environment-specific settings,
+parameter validation, and dynamic loading.
 """
 
 import os
 import json
-from typing import Dict, Any, Optional, Union, Set
+import yaml
+from pathlib import Path
+from typing import Dict, Any, Optional, Union
+from dataclasses import dataclass, field, asdict
 from core.logging import logger
-from core.config import EnvironmentConfig, get_config as legacy_get_config
 
+# Path to configurations
+CONFIG_DIR = Path(__file__).parent.parent / "configs"
+CONFIG_DIR.mkdir(exist_ok=True)
 
-class ConfigurationManager:
+@dataclass
+class TradingConfig:
+    """Core trading configuration"""
+    symbols: list = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    timeframes: list = field(default_factory=lambda: ["1m", "5m", "1h"])
+
+    # Balance & Position Management
+    initial_balance: float = 3000.0
+    max_portfolio_exposure_btc: float = 0.40
+    max_portfolio_exposure_eth: float = 0.40
+    max_position_size_usdt: float = 1200.0
+    min_usdt_reserve: float = 500.0
+
+    # Risk Management
+    risk_per_trade_percent: float = 0.02
+    max_drawdown_limit: float = 0.12
+    stop_loss_default_percent: float = 0.03
+    take_profit_default_percent: float = 0.05
+
+    # Trading Costs & Fees
+    commission_rate: float = 0.001  # 0.1%
+    slippage_bps: float = 2  # 2 basis points
+    min_order_value_usdt: float = 5.0
+
+    # Trading Logic
+    hrm_path_mode: str = "PATH2"
+    max_contra_allocation_path2: float = 0.20
+    signal_hold_limit: int = 30
+    cycle_duration_seconds: int = 10
+
+    # Auto-Learning
+    auto_learning_enabled: bool = True
+    retrain_threshold_winrate: float = 0.52
+    max_models_in_ensemble: int = 10
+
+    # HARDCORE Safety
+    hardcore_mode: bool = True
+    enable_stop_loss_real: bool = True
+    sync_with_exchange: bool = True
+    health_check_interval: int = 30
+
+    # Sentiment Analysis
+    sentiment_enabled: bool = True
+    sentiment_update_interval_cycles: int = 50
+    sentiment_cache_hours: int = 6
+
+    # Model Parameters
+    l1_models_threshold: float = 0.6
+    l2_confidence_min: float = 0.3
+    l3_regime_sensitivity: float = 0.001
+
+@dataclass
+class EnvironmentConfig:
+    """Environment-specific configuration"""
+    mode: str = "simulated"
+    persistence_enabled: bool = True
+    commissions_enabled: bool = True
+    slippage_enabled: bool = True
+    websocket_enabled: bool = True
+
+    # Environment Overrides
+    balance_multiplier: float = 1.0
+    risk_multiplier: float = 1.0
+    fee_multiplier: float = 1.0
+
+    # File Paths
+    portfolio_state_file: str = ""
+    log_file: str = ""
+    cache_dir: str = "cache"
+
+    # API & Exchange
+    binance_api_key: str = ""
+    binance_api_secret: str = ""
+    binance_testnet: bool = True
+
+@dataclass
+class HRMConfig:
+    """Complete HRM configuration container"""
+    trading: TradingConfig = field(default_factory=TradingConfig)
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+
+    def __post_init__(self):
+        """Apply environment-specific adjustments"""
+        self._apply_environment_adjustments()
+
+    def _apply_environment_adjustments(self):
+        """Apply multipliers and adjustments based on environment"""
+        env = self.environment
+
+        if env.mode != "simulated":
+            self.trading.initial_balance *= env.balance_multiplier
+            self.trading.risk_per_trade_percent *= env.risk_multiplier
+            self.trading.commission_rate *= env.fee_multiplier
+
+        # Set default file paths
+        if not env.portfolio_state_file:
+            env.portfolio_state_file = f"portfolio_state_{env.mode}.json"
+
+        if not env.log_file:
+            env.log_file = f"logs/hrm_{env.mode}.log"
+
+class HRMConfigurationManager:
     """
-    Unified configuration management system for HRM trading system.
-    Provides consistent access to all configuration values and settings.
+    HRM Configuration Manager - Single Source of Truth
+
+    Features:
+    - Environment-specific configurations (dev/prod/live/backtest)
+    - Dynamic parameter loading from YAML/JSON
+    - Parameter validation and type safety
+    - Environment variable overrides
+    - Configuration persistence
     """
 
-    # HRM Path Mode Configuration
-    HRM_PATH_MODE = "PATH2"  # opciones: PATH1, PATH2, PATH3 (PATH2 = HYBRID INTELLIGENT - BALANCED MULTI-SIGNAL)
-    MAX_CONTRA_ALLOCATION_PATH2 = 0.2  # 20% limit for contra-allocation in PATH2
+    def __init__(self, environment: str = "simulated"):
+        self.environment = environment
+        self.config = None
+        self._load_configuration()
 
-    # Signal source constants for PATH mode validation
-    PATH3_SIGNAL_SOURCE = "path3_full_l3_dominance"  # Required signal source for PATH3 orders
+    def _load_configuration(self):
+        """Load and merge configuration"""
+        self.config = HRMConfig()
 
-    def __init__(self):
-        """Initialize configuration manager with all environment configs."""
-        self._env_configs: Dict[str, EnvironmentConfig] = {}
-        self._cache: Dict[str, Any] = {}
-        self._common_defaults = {
-            # Trading parameters
-            "SYMBOLS": ["BTCUSDT", "ETHUSDT"],
-            "TIMEFRAME": "1m",
-            "MAX_POSITION_SIZE": 0.05,
-            "MIN_ORDER_VALUE": 1.0,
-            "RISK_PER_TRADE": 0.02,
+        # Apply environment settings first
+        self._apply_environment_profile()
 
-            # Feature flags
-            "ENABLE_COMMISSIONS": True,
-            "ENABLE_SLIPPAGE": True,
-            "ENABLE_PERSISTENCE": True,
-            "ENABLE_LOGGING": True,
+        # Load from file if exists
+        self._load_from_file()
 
-            # Trading costs
-            "COMMISSION_RATE": 0.001,  # 0.1%
-            "SLIPPAGE_BPS": 2,  # 2 basis points
+        # Apply environment variable overrides
+        self._apply_env_overrides()
 
-            # File paths
-            "LOG_FILE": "logs/hrm.log",
-            "STATE_FILE": "portfolio_state.json",
+        # Validate configuration
+        self._validate_config()
+
+        logger.info(f"✅ HRM Configuration loaded for environment: {self.environment}")
+        logger.info(f"   Trading symbols: {self.config.trading.symbols}")
+        logger.info(f"   Initial balance: {self.config.trading.initial_balance} USDT")
+        logger.info(f"   Risk per trade: {self.config.trading.risk_per_trade_percent:.1%}")
+
+    def _apply_environment_profile(self):
+        """Apply environment-specific profiles"""
+        env = self.config.environment
+
+        if self.environment == "live":
+            env.persistence_enabled = True
+            env.commissions_enabled = True
+            env.slippage_enabled = True
+            env.binance_testnet = False
+            env.balance_multiplier = 1.0/3.0  # Conservative
+            env.risk_multiplier = 0.8  # Conservative
+
+        elif self.environment == "testnet":
+            env.persistence_enabled = True
+            env.commissions_enabled = True
+            env.slippage_enabled = True
+            env.binance_testnet = True
+            env.balance_multiplier = 1.0/3.0
+            env.fee_multiplier = 1.5  # Higher testnet fees
+
+        elif self.environment == "dev":
+            env.persistence_enabled = False
+            env.binance_testnet = True
+            env.risk_multiplier = 0.1  # Ultra conservative
+            env.mode = "dev"
+
+        elif self.environment == "backtest":
+            env.persistence_enabled = False
+            env.commissions_enabled = True
+            env.slippage_enabled = True
+            env.binance_testnet = True
+            env.risk_multiplier = 2.0  # Can be more aggressive
+            env.fee_multiplier = 1.2  # Historical fees
+            env.mode = "backtest"
+
+        # Simulated is the default, already set
+
+    def _load_from_file(self):
+        """Load configuration from YAML/JSON files"""
+        config_file = CONFIG_DIR / f"config_{self.environment}.yaml"
+        json_config_file = CONFIG_DIR / f"config_{self.environment}.json"
+
+        config_data = None
+
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                config_data = yaml.safe_load(f)
+        elif json_config_file.exists():
+            with open(json_config_file, 'r') as f:
+                config_data = json.load(f)
+
+        if config_data:
+            self._apply_config_data(config_data)
+            logger.info(f"📂 Configuration loaded from {config_file if config_file.exists() else json_config_file}")
+
+    def _apply_config_data(self, data: Dict[str, Any]):
+        """Apply configuration data to config object"""
+        if "trading" in data:
+            for key, value in data["trading"].items():
+                if hasattr(self.config.trading, key):
+                    setattr(self.config.trading, key, value)
+
+        if "environment" in data:
+            for key, value in data["environment"].items():
+                if hasattr(self.config.environment, key):
+                    setattr(self.config.environment, key, value)
+
+    def _apply_env_overrides(self):
+        """Apply environment variable overrides"""
+        # Trading config overrides
+        overrides = {
+            'INITIAL_BALANCE': ('trading.initial_balance', float),
+            'RISK_PER_TRADE': ('trading.risk_per_trade_percent', float),
+            'COMMISSION_RATE': ('trading.commission_rate', float),
+            'SLIPPAGE_BPS': ('trading.slippage_bps', int),
+            'HRM_PATH_MODE': ('trading.hrm_path_mode', str),
+            'AUTO_LEARNING_ENABLED': ('trading.auto_learning_enabled', lambda x: x.lower() in ('true', '1', 'yes')),
+            'HARDCORE_MODE': ('trading.hardcore_mode', lambda x: x.lower() in ('true', '1', 'yes')),
+            'SENTIMENT_ENABLED': ('trading.sentiment_enabled', lambda x: x.lower() in ('true', '1', 'yes')),
         }
 
-    @staticmethod
-    def get(mode: str = "live", key: Optional[str] = None, default: Any = None) -> Any:
-        """
-        Get configuration value(s) with unified interface.
+        for env_var, (config_path, converter) in overrides.items():
+            if value := os.getenv(env_var):
+                try:
+                    attr_path = config_path.split('.')
+                    obj = self.config
+                    for attr in attr_path[:-1]:
+                        obj = getattr(obj, attr)
+                    setattr(obj, attr_path[-1], converter(value))
+                    logger.info(f"🔄 Override applied: {env_var} = {value}")
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f"Invalid override {env_var}={value}: {e}")
 
-        Args:
-            mode: Environment mode ("live", "testnet", "backtest", "simulated")
-            key: Specific configuration key (None returns full config dict)
-            default: Default value if key not found
+        # API credentials
+        if api_key := os.getenv("BINANCE_API_KEY"):
+            self.config.environment.binance_api_key = api_key
+        if api_secret := os.getenv("BINANCE_API_SECRET"):
+            self.config.environment.binance_api_secret = api_secret
 
-        Returns:
-            Configuration value or full config dict if key is None
-        """
-        manager = ConfigurationManager._get_instance()
+    def _validate_config(self) -> bool:
+        """Validate configuration parameters"""
+        errors = []
 
-        # Handle specific config keys first (constants and common values)
-        if key is not None:
-            config_value = manager._get_special_config(key, mode, default)
-            if config_value is not None:
-                return config_value
+        # Trading config validation
+        t = self.config.trading
 
-        # Use legacy config system for environment-specific config
-        env_config = manager._get_env_config(mode)
+        if t.initial_balance <= 0:
+            errors.append("Initial balance must be positive")
 
-        if key is None:
-            # Return full configuration dict
-            full_config = {
-                # Add constants
-                "HRM_PATH_MODE": manager.HRM_PATH_MODE,
-                "MAX_CONTRA_ALLOCATION_PATH2": manager.MAX_CONTRA_ALLOCATION_PATH2,
-                "PATH3_SIGNAL_SOURCE": manager.PATH3_SIGNAL_SOURCE,
-            }
-            # Add environment config
-            full_config.update(env_config.config)
-            return full_config
-        else:
-            return env_config.get(key, default)
+        if not (0 < t.risk_per_trade_percent <= 0.1):
+            errors.append("Risk per trade must be between 0% and 10%")
 
-    @staticmethod
-    def set(key: str, value: Any, mode: str = "live") -> bool:
-        """
-        Set configuration value.
+        if not (0 < t.commission_rate <= 0.01):
+            errors.append("Commission rate must be reasonable (0-1%)")
 
-        Args:
-            key: Configuration key
-            value: Value to set
-            mode: Environment mode
+        if t.hrm_path_mode not in ["PATH1", "PATH2", "PATH3"]:
+            errors.append("HRM path mode must be PATH1, PATH2, or PATH3")
 
-        Returns:
-            Success status
-        """
-        manager = ConfigurationManager._get_instance()
+        if len(t.symbols) == 0:
+            errors.append("At least one trading symbol required")
 
-        # Handle special config keys that are constants
-        if key in ["HRM_PATH_MODE", "MAX_CONTRA_ALLOCATION_PATH2", "PATH3_SIGNAL_SOURCE"]:
-            return False  # These are read-only constants
+        if errors:
+            for error in errors:
+                logger.error(f"❌ Configuration error: {error}")
+            raise ValueError(f"Configuration validation failed: {', '.join(errors)}")
 
-        # Use environment config for dynamic values
+        logger.info("✅ Configuration validation passed")
+        return True
+
+    def get(self, key: str, default=None):
+        """Get configuration value by dotted path (e.g., 'trading.initial_balance')"""
+        keys = key.split('.')
+        obj = self.config
         try:
-            env_config = manager._get_env_config(mode)
-            env_config.set(key, value)
-            manager._cache_clear()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set config {key}: {e}")
-            return False
+            for k in keys:
+                obj = getattr(obj, k)
+            return obj
+        except AttributeError:
+            return default
 
-    @staticmethod
-    def save_config(mode: str = "live", filepath: Optional[str] = None) -> bool:
-        """
-        Save configuration to file.
+    def set(self, key: str, value: Any):
+        """Set configuration value by dotted path"""
+        keys = key.split('.')
+        obj = self.config
+        for k in keys[:-1]:
+            if not hasattr(obj, k):
+                setattr(obj, k, type('TempObj', (), {})())
+            obj = getattr(obj, k)
+        setattr(obj, keys[-1], value)
+        logger.info(f"🔧 Config set: {key} = {value}")
 
-        Args:
-            mode: Environment mode
-            filepath: Optional custom filepath
+    def save_config(self, filepath: Optional[str] = None):
+        """Save current configuration to file"""
+        if not filepath:
+            filepath = CONFIG_DIR / f"config_{self.environment}.yaml"
 
-        Returns:
-            Success status
-        """
-        try:
-            manager = ConfigurationManager._get_instance()
-            env_config = manager._get_env_config(mode)
+        config_dict = asdict(self.config)
 
-            if filepath is None:
-                filepath = f"config_{mode}.json"
+        with open(filepath, 'w') as f:
+            yaml.dump(config_dict, f, default_flow_style=False, indent=2)
 
-            env_config.save_to_file(filepath)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save config for mode {mode}: {e}")
-            return False
+        logger.info(f"💾 Configuration saved to {filepath}")
 
-    @staticmethod
-    def load_config(mode: str = "live", filepath: Optional[str] = None) -> bool:
-        """
-        Load configuration from file.
+    def __repr__(self) -> str:
+        return f"HRMConfigurationManager(environment='{self.environment}')"
 
-        Args:
-            mode: Environment mode
-            filepath: Optional custom filepath
+# Global configuration instance
+_config_manager = None
 
-        Returns:
-            Success status
-        """
-        try:
-            manager = ConfigurationManager._get_instance()
-            env_config = manager._get_env_config(mode)
+def get_config_manager(env: str = "simulated") -> HRMConfigurationManager:
+    """Get global configuration manager instance"""
+    global _config_manager
+    if _config_manager is None or _config_manager.environment != env:
+        _config_manager = HRMConfigurationManager(env)
+    return _config_manager
 
-            if filepath is None:
-                filepath = f"config_{mode}.json"
+def get_config_value(key: str, default=None, env: str = "simulated"):
+    """Get configuration value by key"""
+    return get_config_manager(env).get(key, default)
 
-            env_config.load_from_file(filepath)
-            manager._cache_clear()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load config for mode {mode}: {e}")
-            return False
+def set_config_value(key: str, value: Any, env: str = "simulated"):
+    """Set configuration value by key"""
+    get_config_manager(env).set(key, value)
 
-    @staticmethod
-    def validate_config(mode: str = "live") -> bool:
-        """
-        Validate configuration for specified mode.
+# Convenience constants
+DEFAULT_CONFIG = HRMConfig()
 
-        Args:
-            mode: Environment mode
-
-        Returns:
-            Validation status
-        """
-        try:
-            manager = ConfigurationManager._get_instance()
-            env_config = manager._get_env_config(mode)
-            return env_config.validate()
-        except Exception as e:
-            logger.error(f"Config validation failed for mode {mode}: {e}")
-            return False
-
-    @staticmethod
-    def get_trading_costs(mode: str = "live") -> Dict[str, float]:
-        """
-        Get trading cost configuration.
-
-        Args:
-            mode: Environment mode
-
-        Returns:
-            Trading costs dict
-        """
-        manager = ConfigurationManager._get_instance()
-        env_config = manager._get_env_config(mode)
-        return env_config.get_trading_costs()
-
-    @staticmethod
-    def is_production() -> bool:
-        """Check if currently in production mode."""
-        config = ConfigurationManager.get("live", "ENABLE_LOGGING", True)
-        return os.getenv("BINANCE_MODE", "TEST").upper() == "LIVE"
-
-    @staticmethod
-    def is_testing() -> bool:
-        """Check if currently in testing mode."""
-        config = ConfigurationManager.get("live", "ENABLE_LOGGING", True)
-        mode = os.getenv("BINANCE_MODE", "TEST").upper()
-        return mode in ["TEST", "TESTNET"]
-
-    @staticmethod
-    def is_backtesting() -> bool:
-        """Check if currently in backtesting mode."""
-        return False  # Would need more context to determine
-
-    @staticmethod
-    def get_all_constants() -> Dict[str, Any]:
-        """Get all configuration constants."""
-        manager = ConfigurationManager._get_instance()
-        return {
-            "HRM_PATH_MODE": manager.HRM_PATH_MODE,
-            "MAX_CONTRA_ALLOCATION_PATH2": manager.MAX_CONTRA_ALLOCATION_PATH2,
-            "PATH3_SIGNAL_SOURCE": manager.PATH3_SIGNAL_SOURCE,
-        }
-
-    @staticmethod
-    def get_environment_modes() -> Set[str]:
-        """Get all supported environment modes."""
-        return {"live", "testnet", "backtest", "simulated"}
-
-    def _get_special_config(self, key: str, mode: str, default: Any) -> Any:
-        """Get special configuration keys (constants)."""
-        constants = {
-            "HRM_PATH_MODE": self.HRM_PATH_MODE,
-            "MAX_CONTRA_ALLOCATION_PATH2": self.MAX_CONTRA_ALLOCATION_PATH2,
-            "PATH3_SIGNAL_SOURCE": self.PATH3_SIGNAL_SOURCE,
-        }
-
-        if key in constants:
-            return constants[key]
-
-        return None
-
-    def _get_env_config(self, mode: str) -> EnvironmentConfig:
-        """Get or create environment configuration instance."""
-        if mode not in self._env_configs:
-            self._env_configs[mode] = legacy_get_config(mode)
-        return self._env_configs[mode]
-
-    def _cache_clear(self):
-        """Clear configuration cache."""
-        self._cache.clear()
-
-    @staticmethod
-    def _get_instance() -> 'ConfigurationManager':
-        """Get singleton instance of ConfigurationManager."""
-        if not hasattr(ConfigurationManager, '_instance'):
-            ConfigurationManager._instance = ConfigurationManager()
-        return ConfigurationManager._instance
-
-
-# Backward compatibility aliases and wrapper functions
-def get_config(mode: str = "live") -> EnvironmentConfig:
-    """Backward compatibility wrapper for legacy get_config calls."""
-    return legacy_get_config(mode)
-
-# Global configuration access - use ConfigurationManager
-def get_config_value(key: str, default=None, mode: str = "live"):
-    """Get configuration value with unified interface."""
-    return ConfigurationManager.get(mode, key, default)
-
-def set_config_value(key: str, value: Any, mode: str = "live"):
-    """Set configuration value with unified interface."""
-    return ConfigurationManager.set(key, value, mode)
-
-# Expose constants for direct import compatibility (while discouraging it)
-__all__ = [
-    'ConfigurationManager',
-    'get_config',          # Legacy wrapper
-    'get_config_value',    # Unified interface
-    'set_config_value',    # Unified interface
-]
-
-# Direct constants for backward compatibility (discouraged but functional)
-HRM_PATH_MODE = ConfigurationManager.HRM_PATH_MODE
-MAX_CONTRA_ALLOCATION_PATH2 = ConfigurationManager.MAX_CONTRA_ALLOCATION_PATH2
-PATH3_SIGNAL_SOURCE = ConfigurationManager.PATH3_SIGNAL_SOURCE
+# Example usage:
+#
+# # Get trading config
+# from core.configuration_manager import get_config_manager
+# config = get_config_manager('live')
+# balance = config.get('trading.initial_balance')
+#
+# # Get specific value
+# symbols = get_config_value('trading.symbols', ['BTCUSDT'])
+#
+# # Set value
+# set_config_value('trading.risk_per_trade_percent', 0.025)

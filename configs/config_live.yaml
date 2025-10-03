@@ -1,0 +1,61 @@
+# HRM Live Trading Configuration - PRODUCTION SETTINGS
+# Apply with: HR_ENVIRONMENT=live python main.py
+# or pass 'live' to configuration_manager
+
+trading:
+  # Balance & Risk - Conservative for live trading
+  initial_balance: 1000.0  # Conservative starting balance
+  max_portfolio_exposure_btc: 0.40
+  max_portfolio_exposure_eth: 0.40
+  max_position_size_usdt: 600.0  # Half of testnet for safety
+  min_usdt_reserve: 300.0  # More conservative reserve
+
+  # Risk Management - Stricter for live trading
+  risk_per_trade_percent: 0.015  # More conservative (1.5% vs 2%)
+  max_drawdown_limit: 0.10  # Trigger stop-out at 10%
+  stop_loss_default_percent: 0.025  # Tighter stops
+
+  # Costs & Fees - Real market conditions
+  commission_rate: 0.001  # Binance spot trading fees
+  slippage_bps: 3  # Higher slippage in live markets
+  min_order_value_usdt: 10.0  # Round numbers for execution
+
+  # Trading Logic - Safe path for live trading
+  hrm_path_mode: "PATH3"  # Full L3 dominance - maximum safety
+  max_contra_allocation_path2: 0.15  # Reduced contra-trading
+  signal_hold_limit: 20  # More responsive signal expiry
+
+  # Auto-Learning - More conservative
+  retrain_threshold_winrate: 0.55  # Higher threshold for live
+  max_models_in_ensemble: 8  # Smaller ensemble
+
+  # HARDCORE Safety - All protections enabled
+  hardcore_mode: true
+  enable_stop_loss_real: true
+  sync_with_exchange: true
+  health_check_interval: 15  # More frequent checks
+
+  # Sentiment Analysis - Conservative cache
+  sentiment_update_interval_cycles: 30  # More frequent updates
+  sentiment_cache_hours: 4  # Shorter cache for live
+
+environment:
+  # Mode settings
+  mode: "live"
+  persistence_enabled: true
+  commissions_enabled: true
+  slippage_enabled: true
+  websocket_enabled: true
+
+  # Production restrictions
+  balance_multiplier: 0.33  # 1/3 of simulated balance
+  risk_multiplier: 0.75  # 25% more conservative
+  fee_multiplier: 1.0  # Real fees
+
+  # Files & Cache
+  portfolio_state_file: "portfolio_state_live.json"
+  log_file: "logs/hrm_live.log"
+  cache_dir: "cache/live"
+
+  # Exchange - PRODUCTION
+  binance_testnet: false  # REAL TRADING - USE WITH CARE!

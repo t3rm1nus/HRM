@@ -32,10 +32,9 @@ class PathModeSignalGenerator:
         l3_signal = l3_context.get('l3_signal', 'hold')
         l3_conf = l3_context.get('l3_confidence', 0.0)
 
-        # Extract setup information from L3 decision
-        l3_decision = l3_context.get('l3_decision', {})
-        setup_type = l3_decision.get('setup_type')
-        allow_l2_signals = l3_decision.get('allow_l2_signals', False)
+        # Extract setup information from L3 context
+        setup_type = l3_context.get('setup_type')
+        allow_l2_signals = l3_context.get('allow_l2_signals', False)
 
         self.logger.info(f"🎯 {path_mode} SIGNAL GENERATION: {symbol}")
         self.logger.info(f"   L1/L2: {l1_l2_signal} | L3: {l3_signal} ({l3_conf:.2f}) | Regime: {regime}")
@@ -120,7 +119,7 @@ class PathModeSignalGenerator:
                 'reason': f'path2_strong_{regime.lower()}_regime'
             }
 
-        # RANGE REGIME: Strict control unless setup allows
+        # RANGE REGIME: Generate range-specific signals instead of blocking
         if regime.lower() == 'range':
             if allow_l2_signals:
                 self.logger.info(f"   ⚠️ SETUP OVERRIDE: Allowing L2 signal for {symbol} despite range regime")
@@ -134,16 +133,8 @@ class PathModeSignalGenerator:
                     'reason': f'path2_range_setup_override'
                 }
             else:
-                self.logger.info(f"   🚫 RANGE REGIME: Blocking L2 {l1_l2_signal} for {symbol}")
-                return {
-                    'symbol': symbol,
-                    'action': 'HOLD',
-                    'confidence': l3_conf,
-                    'size_multiplier': 0.0,
-                    'path_mode': 'PATH2',
-                    'range_blocked': True,
-                    'reason': f'path2_range_regime_block'
-                }
+                self.logger.info(f"   🔄 RANGE REGIME: Generating range-specific signal for {symbol}")
+                return self._generate_range_signal(symbol, l3_context)
 
         # DEFAULT: Conservative approach
         self.logger.info(f"   📊 PATH2 CONSERVATIVE: L3 priority over L2")
@@ -156,6 +147,65 @@ class PathModeSignalGenerator:
             'l3_priority': True,
             'reason': f'path2_conservative_l3_priority'
         }
+
+    def _generate_range_signal(self, symbol: str, l3_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate range-specific signal for RANGE regime when L2 signals are blocked
+        with complete protection against None values
+
+        Args:
+            symbol: Trading symbol
+            l3_context: L3 context with regime information
+
+        Returns:
+            Dictionary with range-specific signal
+        """
+        # === VALIDACIÓN Y EXTRACCIÓN SEGURA DE DATOS ===
+        if not l3_context:
+            logger.warning(f"⚠️ L3 context is None for {symbol}, using safe defaults")
+            l3_context = {}
+
+        l3_conf = float(l3_context.get('l3_confidence', 0.50))
+        subtype = str(l3_context.get('subtype', 'normal_range')).lower()  # SAFE: Convert to string then lower
+        regime = str(l3_context.get('regime', 'range')).lower()  # SAFE: Convert to string then lower
+        setup_type = l3_context.get('setup_type')
+
+        # === CONSTRUCCIÓN DE SEÑAL POR DEFECTO ===
+        signal = {
+            'symbol': symbol,
+            'action': 'HOLD',
+            'confidence': l3_conf,
+            'size_multiplier': 0.0,  # Conservative sizing for range
+            'path_mode': 'PATH2',
+            'range_specific': True,
+            'range_subtype': subtype,
+            'regime': regime,
+            'setup_type': str(setup_type).lower() if setup_type else None,
+            'reason': f'range_{subtype}_hold_signal'
+        }
+
+        # === MANEJO ESPECÍFICO POR SUBTIPO CON SEGURIDAD ===
+        if subtype == 'tight_range':
+            # Tight range is more predictable - slightly more aggressive
+            signal['confidence'] = min(l3_conf + 0.1, 0.85)  # Boost confidence slightly
+            signal['size_multiplier'] = 0.0  # Still conservative but logging position
+            signal['reason'] = 'tight_range_ready_hold'
+
+        elif subtype == 'normal_range':
+            # Normal range - standard hold
+            signal['confidence'] = l3_conf
+            signal['size_multiplier'] = 0.0
+            signal['reason'] = 'normal_range_standard_hold'
+
+        elif subtype == 'wide_range':
+            # Wide range - might allow some action with very small size
+            signal['confidence'] = l3_conf
+            signal['size_multiplier'] = 0.0
+            signal['reason'] = 'wide_range_cautious_hold'
+
+        logger.info(f"   📊 RANGE SIGNAL GENERATED: {signal['action']} ({signal['confidence']:.2f}) for {signal['symbol']} - {signal['reason']}")
+
+        return signal
 
     def _process_path3_signal(self, symbol: str, l1_l2_signal: str, l3_context: Dict[str, Any]) -> Dict[str, Any]:
         """PATH3: Full L3 Dominance - L3 signals only"""

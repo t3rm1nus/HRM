@@ -495,29 +495,33 @@ class MarketRegimeClassifier:
             return {}
 
     def _log_regime_classification(self, result: Dict, symbol: str):
-        """Log regime classification results with setup detection"""
+        """Log regime classification results with setup detection in MAGENTA color"""
         try:
             regime = result['primary_regime']
             subtype = result['subtype']
             confidence = result['confidence']
             metadata = result['metadata']
 
-            logger.info(f"=" * 80)
-            logger.info(f"{symbol} REGIME CLASSIFICATION")
-            logger.info(f"Timeframe: {metadata['timeframe_minutes']}min | Window: {metadata['calculation_window']} candles ({self.target_hours}h)")
-            logger.info(f"Price Change: {metadata['price_change_pct']:+.2%}")
-            logger.info(f"-" * 80)
-            logger.info(f"PRIMARY: {regime} | Subtype: {subtype} | Confidence: {confidence:.2%}")
-            
+            # ANSI color codes for MAGENTA/PINK
+            MAGENTA = '\033[95m'  # Bright magenta
+            RESET = '\033[0m'
+
+            logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
+            logger.info(f"{MAGENTA}{symbol} REGIME CLASSIFICATION{RESET}")
+            logger.info(f"{MAGENTA}Timeframe: {metadata['timeframe_minutes']}min | Window: {metadata['calculation_window']} candles ({self.target_hours}h){RESET}")
+            logger.info(f"{MAGENTA}Price Change: {metadata['price_change_pct']:+.2%}{RESET}")
+            logger.info(f"{MAGENTA}{'-' * 80}{RESET}")
+            logger.info(f"{MAGENTA}PRIMARY: {regime} | Subtype: {subtype} | Confidence: {confidence:.2%}{RESET}")
+
             # Highlight setup detection
             if subtype in ['OVERSOLD_SETUP', 'OVERBOUGHT_SETUP']:
-                logger.info(f"🎯 TRADING SETUP DETECTED: {subtype} - Mean reversion opportunity")
-            
-            logger.info(f"Scores: T:{result['regime_scores']['TRENDING']:.2f} R:{result['regime_scores']['RANGE']:.2f} V:{result['regime_scores']['VOLATILE']:.2f} B:{result['regime_scores']['BREAKOUT']:.2f}")
-            
+                logger.info(f"{MAGENTA}🎯 TRADING SETUP DETECTED: {subtype} - Mean reversion opportunity{RESET}")
+
+            logger.info(f"{MAGENTA}Scores: T:{result['regime_scores']['TRENDING']:.2f} R:{result['regime_scores']['RANGE']:.2f} V:{result['regime_scores']['VOLATILE']:.2f} B:{result['regime_scores']['BREAKOUT']:.2f}{RESET}")
+
             metrics = result['metrics']
-            logger.info(f"Metrics: RSI:{metrics.get('rsi', 50):.1f} ADX:{metrics.get('adx', 20):.1f} BBw:{metrics.get('bb_width', 0):.2%} Vol:{metrics.get('volatility', 0):.4f}")
-            logger.info(f"=" * 80)
+            logger.info(f"{MAGENTA}Metrics: RSI:{metrics.get('rsi', 50):.1f} ADX:{metrics.get('adx', 20):.1f} BBw:{metrics.get('bb_width', 0):.2%} Vol:{metrics.get('volatility', 0):.4f}{RESET}")
+            logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
 
         except Exception as e:
             logger.error(f"Error logging regime classification: {e}")
