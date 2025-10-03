@@ -299,6 +299,66 @@ class BinanceClient:
             logger.error(f"❌ Error obteniendo órdenes abiertas: {e}")
             return []
 
+    async def place_limit_order(self, symbol: str, side: str, quantity: float,
+                               price: float, stop_price: Optional[float] = None,
+                               order_type: str = "LIMIT") -> Dict[str, Any]:
+        """
+        Coloca una orden LIMIT en Binance.
+        CRÍTICO para órdenes de profit-taking en modo producción.
+        """
+        try:
+            if self.config.get('USE_TESTNET', True):
+                logger.warning("🧪 MODO TESTNET: Limit orders simulados (no se envían a exchange)")
+                return {
+                    'id': f'simulated_limit_{symbol}_{side}_{price:.6f}',
+                    'status': 'simulated',
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity,
+                    'price': price,
+                    'stop_price': stop_price,
+                    'order_type': order_type
+                }
+
+            # Validar parámetros
+            if quantity <= 0:
+                raise ValueError(f"Cantidad inválida: {quantity}")
+            if price <= 0:
+                raise ValueError(f"Precio inválido: {price}")
+
+            # Preparar orden
+            if stop_price:
+                # STOP_LOSS_LIMIT order
+                order_params = {
+                    'symbol': symbol,
+                    'type': 'STOP_LOSS_LIMIT',
+                    'side': side.upper(),
+                    'amount': quantity,
+                    'price': price,
+                    'params': {
+                        'stopPrice': stop_price
+                    }
+                }
+            else:
+                # Regular LIMIT order
+                order_params = {
+                    'symbol': symbol,
+                    'type': 'LIMIT',
+                    'side': side.upper(),
+                    'amount': quantity,
+                    'price': price
+                }
+
+            # Colocar orden
+            order = await self.exchange.create_order(**order_params)
+
+            logger.info(f"💰 LIMIT ORDER colocado: {symbol} {side} {quantity} @ limit={price}")
+            return order
+
+        except Exception as e:
+            logger.error(f"❌ Error colocando limit order {symbol}: {e}")
+            raise
+
     async def close(self):
         """
         Cierra la conexión.

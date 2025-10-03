@@ -1,0 +1,155 @@
+[
+  {
+    "scenario": "Strong Bull Market - High Confidence",
+    "sizing_result": {
+      "base_size": 2000.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.9124999999999999,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 1.0,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.88,
+      "market_regime_multiplier": 1.2,
+      "concentration_multiplier": 0.5,
+      "final_size": 1349.0399999999997,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 971.3087999999998,
+      "position_risk_score": 0.25235599999999997
+    }
+  },
+  {
+    "scenario": "Bear Market - Weak Signal",
+    "sizing_result": {
+      "base_size": 1500.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.5449999999999999,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 0.625,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.61,
+      "market_regime_multiplier": 0.6,
+      "concentration_multiplier": 1.0,
+      "final_size": 261.80437499999994,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High VaR: 8.00%",
+        "Weak technical strength"
+      ],
+      "risk_adjusted_return": 27.48945937499999,
+      "position_risk_score": 0.302360875
+    }
+  },
+  {
+    "scenario": "Volatile Market - Moderate Signal",
+    "sizing_result": {
+      "base_size": 1000.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.7375,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 0.8333333333333334,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.73,
+      "market_regime_multiplier": 0.5,
+      "concentration_multiplier": 0.5,
+      "final_size": 157.02604166666669,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 51.818593750000005,
+      "position_risk_score": 0.24710781250000002
+    }
+  },
+  {
+    "scenario": "Portfolio Drawdown Scenario",
+    "sizing_result": {
+      "base_size": 1200.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.7549999999999999,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 1.0,
+      "drawdown_multiplier": 0.3,
+      "technical_multiplier": 0.79,
+      "market_regime_multiplier": 1.0,
+      "concentration_multiplier": 0.5,
+      "final_size": 150.30539999999996,
+      "applied_limits": [],
+      "risk_warnings": [
+        "Portfolio drawdown: 41.3%",
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 68.38895699999999,
+      "position_risk_score": 0.33757634999999997
+    }
+  },
+  {
+    "scenario": "High Concentration Warning",
+    "sizing_result": {
+      "base_size": 800.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.8425,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 1.0,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.8200000000000001,
+      "market_regime_multiplier": 1.0,
+      "concentration_multiplier": 0.5,
+      "final_size": 386.87600000000003,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 216.65056,
+      "position_risk_score": 0.1950785
+    }
+  },
+  {
+    "scenario": "Aggressive Mode Comparison",
+    "normal_result": {
+      "base_size": 1500.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.8074999999999999,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 1.0,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.79,
+      "market_regime_multiplier": 1.2,
+      "concentration_multiplier": 0.5,
+      "final_size": 803.7855,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 391.84543125,
+      "position_risk_score": 0.21075709999999998
+    },
+    "aggressive_result": {
+      "base_size": 1500.0,
+      "risk_appetite_multiplier": 1.4,
+      "signal_strength_multiplier": 0.8074999999999999,
+      "volatility_multiplier": 1.0,
+      "correlation_multiplier": 1.0,
+      "var_multiplier": 1.0,
+      "drawdown_multiplier": 1.0,
+      "technical_multiplier": 0.79,
+      "market_regime_multiplier": 1.2,
+      "concentration_multiplier": 0.5,
+      "final_size": 803.7855,
+      "applied_limits": [],
+      "risk_warnings": [
+        "High concentration: 100.0%"
+      ],
+      "risk_adjusted_return": 391.84543125,
+      "position_risk_score": 0.21075709999999998
+    }
+  }
+]

@@ -20,7 +20,7 @@ from .models import (
     StrategicDecision,
     L2State,
 )
-from .signal_generator import L2TacticProcessor as SignalGenerator  # Changed to match main.py
+from .tactical_signal_processor import L2TacticProcessor as SignalGenerator  # Changed to match main.py
 from .position_sizer import PositionSizerManager
 from .risk_controls import RiskControlManager, RiskAlert
 from .config import L2Config

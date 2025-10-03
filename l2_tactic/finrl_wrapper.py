@@ -40,51 +40,64 @@ class FinRLProcessorWrapper:
 
     def _prepare_obs(self, market_data: dict, symbol: str, indicators: dict = None):
         """
-        Ajusta las observaciones según el modelo:
-        - Gemini: shape (1, 13) - legacy single-asset
-        - DeepSeek/Claude/Kimi: shape (1, 971) - risk-aware multiasset
-        - Grok: shape variable según modelo
-        - Otros: shape según expected_dims
+        Build observations based on expected dimensions rather than hardcoded model names.
+        Uses expected_dims to determine observation building strategy and proper reshaping.
         """
         try:
-            if self.model_name == "gemini":
-                # Gemini legacy single-asset - 13 features
-                obs = ObservationBuilders.build_gemini_obs(market_data, symbol, indicators)
+            if self.expected_dims == 13:
+                # Legacy 13-dimensional observation (Gemini and similar legacy models)
+                obs = ObservationBuilders.build_legacy_observation(market_data, symbol, indicators)
                 if obs is None:
-                    raise ValueError("No se pudo construir observación Gemini")
-                logger.debug(f"[DEBUG] Modelo: {self.model_name}, shape obs: {obs.shape}")
+                    raise ValueError("Failed to build legacy 13-dimensional observation")
+                logger.debug(f"[DEBUG] Model: {self.model_name}, dims: {self.expected_dims}, shape: {obs.shape}")
                 return obs.reshape(1, 13)
 
-            elif self.model_name in ["deepseek", "claude", "kimi"]:
-                # DeepSeek / Claude / Kimi - risk-aware multiasset
+            elif self.expected_dims == 85:
+                # HRM native 85-dimensional observation (DeepSeek native)
+                obs = ObservationBuilders.build_hrm_native_obs(market_data, symbol, indicators)
+                if obs is None:
+                    raise ValueError(f"Failed to build HRM native {self.expected_dims}-dimensional observation")
+                logger.debug(f"[DEBUG] Model: {self.model_name}, dims: {self.expected_dims}, shape: {obs.shape}")
+                return obs.reshape(1, 85)
+
+            elif self.expected_dims == 971:
+                # Risk-aware multiasset observation (DeepSeek/Claude/Kimi)
                 obs = ObservationBuilders.build_multiasset_obs(market_data, symbol, indicators)
                 if obs is None:
-                    raise ValueError(f"No se pudo construir observación {self.model_name}")
-                logger.debug(f"[DEBUG] Modelo: {self.model_name}, shape obs: {obs.shape}")
+                    raise ValueError(f"Failed to build multiasset {self.expected_dims}-dimensional observation")
+                logger.debug(f"[DEBUG] Model: {self.model_name}, dims: {self.expected_dims}, shape: {obs.shape}")
                 return obs.reshape(1, 971)
 
+            elif self.expected_dims == 257:
+                # Multiasset observation (standard FinRL)
+                obs = ObservationBuilders.build_generic_obs(market_data, symbol, indicators, 257)
+                if obs is None:
+                    raise ValueError(f"Failed to build 257-dimensional observation")
+                logger.debug(f"[DEBUG] Model: {self.model_name}, dims: {self.expected_dims}, shape: {obs.shape}")
+                return obs.reshape(1, 257)
+
             elif self.model_name == "grok":
-                # Grok - manejo especial con array 1D o escalar
+                # Grok - special handling with 1D array or scalar
                 obs = market_data.get("grok_features")
                 if obs is None:
-                    # Fallback: construir features desde market_data
+                    # Fallback: build features from market_data
                     obs = ObservationBuilders.build_grok_obs(market_data, symbol, indicators)
                     if obs is None:
-                        raise ValueError("Faltan 'grok_features' en market_data y no se pudo construir")
+                        raise ValueError("Missing 'grok_features' in market_data and failed to build fallback")
 
-                # Grok espera un array 1D o escalar - aplanar si es necesario
+                # Grok expects 1D array or scalar - flatten if necessary
                 if hasattr(obs, 'shape') and len(obs.shape) > 1:
                     obs = obs.flatten()
 
-                logger.debug(f"[DEBUG] Modelo: {self.model_name}, shape obs: {obs.shape if hasattr(obs, 'shape') else 'scalar'}")
+                logger.debug(f"[DEBUG] Grok model: shape {obs.shape if hasattr(obs, 'shape') else 'scalar'}")
                 return obs
 
             else:
-                # Modelo genérico - usar dimensiones esperadas
+                # Generic observation for custom dimensions
                 obs = ObservationBuilders.build_generic_obs(market_data, symbol, indicators, self.expected_dims)
                 if obs is None:
-                    raise ValueError(f"No se pudo construir observación genérica para {self.expected_dims} dims")
-                logger.debug(f"[DEBUG] Modelo: {self.model_name}, shape obs: {obs.shape}")
+                    raise ValueError(f"Failed to build {self.expected_dims}-dimensional observation")
+                logger.debug(f"[DEBUG] Generic model: {self.model_name}, dims: {self.expected_dims}, shape: {obs.shape}")
                 return obs.reshape(1, self.expected_dims)
 
         except Exception as e:

@@ -92,14 +92,18 @@ def log_event(
     module: str = __name__,
     cycle_id: Optional[str] = None,
     symbol: Optional[str] = None,
-    extra: Optional[Dict[str, Any]] = None
+    extra: Optional[Dict[str, Any]] = None,
+    exc_info: Optional[bool] = None
 ):
     """
     Registra un evento en consola, JSON, CSV y SQLite.
     """
     try:
         # --- loguru console ---
-        logger.log(level.upper(), msg)
+        if exc_info and sys.exc_info()[0] is not None:
+            logger.opt(depth=6, exception=True).log(level.upper(), msg)
+        else:
+            logger.log(level.upper(), msg)
 
         # --- JSON append ---
         json_entry = {
@@ -171,6 +175,61 @@ def error(msg, **kwargs):
 
 def critical(msg, **kwargs):
     log_event("CRITICAL", msg, **kwargs)
+
+# ------------------------- Estandarizado de trading actions log
+# -------------------------
+def log_trading_action(symbol: str, strategy: str, regime: str = None,
+                      action: str = None, confidence: float = None,
+                      reason: str = None, **kwargs):
+    """
+    Log trading action in standardized format:
+
+    🎯 [BTC] TREND-FOLLOWING:
+       Regime: BULL
+       Action: BUY (conf=0.78)
+       Reason: Price above MA50+MA200 + strong strength score
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+        strategy: Strategy name (e.g., 'TREND-FOLLOWING', 'MEAN-REVERSION')
+        regime: Market regime (e.g., 'BULL', 'BEAR', 'RANGE')
+        action: Trading action (e.g., 'BUY', 'SELL', 'HOLD')
+        confidence: Confidence score (0.0 to 1.0)
+        reason: Detailed reason for the action
+        **kwargs: Additional logging parameters
+    """
+    try:
+        # Extract short symbol name (remove USDT if present)
+        short_symbol = symbol.replace("USDT", "") if isinstance(symbol, str) else str(symbol)
+
+        # Build the formatted message
+        message_parts = [f"🎯 [{short_symbol}] {strategy.upper()}:"]
+        if regime:
+            message_parts.append(f"   Regime: {regime.upper()}")
+        if action:
+            conf_str = f" (conf={confidence:.2f})" if confidence is not None else ""
+            message_parts.append(f"   Action: {action.upper()}{conf_str}")
+        if reason:
+            message_parts.append(f"   Reason: {reason}")
+
+        formatted_message = "\n".join(message_parts)
+
+        # Log using the centralized logger
+        log_event("INFO", formatted_message, symbol=symbol, extra={
+            'trading_action': {
+                'symbol': symbol,
+                'strategy': strategy,
+                'regime': regime,
+                'action': action,
+                'confidence': confidence,
+                'reason': reason
+            },
+            **kwargs
+        })
+
+    except Exception as e:
+        # Fallback to regular logging if something goes wrong
+        log_event("ERROR", f"Failed to log trading action: {e}")
 
 # -------------------------
 # Cycle Data Logging

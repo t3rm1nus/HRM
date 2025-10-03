@@ -6,7 +6,7 @@ Contiene todos los límites de riesgo y parámetros de ejecución.
 import os
 
 # Modo de operación
-OPERATION_MODE = "PAPER"  # "paper", "live", "development", "testing"
+OPERATION_MODE = "LIVE"  # "paper", "live", "development", "testing"
 
 # Límites de riesgo por operación - OPTIMIZADOS PARA 3K USDT
 RISK_LIMITS = {
@@ -23,10 +23,21 @@ PORTFOLIO_LIMITS = {
     "MAX_POSITION_SIZE_USDT": 1200,      # máximo $1200 por posición individual (40% de $3000)
     "MIN_USDT_RESERVE": 0.20,            # mínimo 20% siempre en USDT libre
     "REBALANCE_THRESHOLD": 0.15,         # rebalancear si USDT < 15% del total
+    "REBALANCE_TRIGGER_THRESHOLD": 5,    # trigger rebalance si >= N stop-losses
+    "REBALANCE_INTERVAL": 60,            # intervalo mínimo entre rebalances (segundos)
+    "REBALANCE_MIN_AMOUNT": 500,         # monto mínimo para rebalance ($)
     "ROTATION_AMOUNT": 0.25,             # vender 25% cuando se active rotación
     "MAX_DAILY_DRAWDOWN": 0.08,          # aumentado a 8% de drawdown diario
     "MIN_ACCOUNT_BALANCE_USDT": 500,     # mínimo $500 USDT libre para operaciones
     "MAX_LEVERAGE": 1.0,                 # sin apalancamiento
+    # PATH3 Auto-Rebalance Safety Features
+    "ENABLE_AUTO_REBALANCE": True,       # circuit breaker para deshabilitar auto-rebalance
+    "REBALANCE_CHECKSUM_VERIFICATION": True,  # verificar checksums para auditoría forense
+    "REBALANCE_DRY_RUN_ENABLED": False,  # habilitar modo simulación para testing
+    "REBALANCE_FEES_BUFFER": 1.01,       # buffer 1.01x para slippage/fees en sells
+    "REBALANCE_COOLDOWN_EXTENDED": 300,  # cooldown extendido 5min para recuperarse
+    "REBALANCE_MIN_ORDER_CHECK": True,   # verificar balance USDT para buys
+    "REBALANCE_FORCE_INTERVAL": 100,     # force rebalancing every 100 cycles
 }
 
 # Configuración de ejecución
@@ -35,7 +46,7 @@ EXECUTION_CONFIG = {
     "MAX_SLIPPAGE_BPS": 50,            # máximo 0.5% de slippage
     "ORDER_TIMEOUT_SECONDS": 30,       # timeout para órdenes
     "RETRY_ATTEMPTS": 3,               # intentos de reintento
-    "PAPER_MODE": True,                # modo paper por defecto
+    "PAPER_MODE": False,               # LIVE trading mode
 }
 
 # Configuración de alertas

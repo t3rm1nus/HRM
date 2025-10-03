@@ -50,15 +50,26 @@ class ObservationBuilders:
             return None
 
     @staticmethod
-    def build_legacy_observation(state: Dict[str, Any], symbol: str, indicators: Dict[str, Any]) -> Optional[np.ndarray]:
+    def build_legacy_observation(state_or_market_data: Dict[str, Any], symbol: str, indicators: Dict[str, Any]) -> Optional[np.ndarray]:
         """
         Build legacy 13-dimensional observation for Gemini and other 13-feature models.
+
+        Args:
+            state_or_market_data: Either a full state dict (containing 'market_data'/'mercado') or direct market_data dict
+            symbol: Trading symbol
+            indicators: Technical indicators dict
         """
         try:
-            # Get market data from state
-            market_data = state.get("market_data", state.get("mercado", {}))
+            # Handle both parameter formats: state dict or direct market_data dict
+            if isinstance(state_or_market_data, dict) and ('market_data' in state_or_market_data or 'mercado' in state_or_market_data):
+                # Full state dict format
+                market_data = state_or_market_data.get("market_data", state_or_market_data.get("mercado", {}))
+            else:
+                # Direct market_data dict format
+                market_data = state_or_market_data
+
             if not market_data:
-                logger.error("❌ No market data available in state")
+                logger.error("❌ No market data available")
                 return None
 
             # Get data for the specific symbol
@@ -116,60 +127,13 @@ class ObservationBuilders:
 
     @staticmethod
     def build_gemini_obs(market_data: dict, symbol: str, indicators: dict = None):
-        """Construye observación legacy de 13 features para Gemini"""
-        try:
-            # Get market data for symbol
-            symbol_data = market_data.get(symbol)
-            if symbol_data is None:
-                logger.error(f"❌ No market data for {symbol}")
-                return None
-
-            # Extract last row
-            if isinstance(symbol_data, pd.DataFrame):
-                last_row = symbol_data.iloc[-1]
-            else:
-                last_row = symbol_data
-
-            # Build 13 features expected by Gemini
-            feature_names = [
-                'open', 'high', 'low', 'close', 'volume',
-                'sma_20', 'sma_50', 'rsi',
-                'bollinger_upper', 'bollinger_lower',
-                'ema_12', 'ema_26', 'macd'
-            ]
-
-            obs_values = []
-            for f in feature_names:
-                try:
-                    # Try indicators first
-                    if indicators and f in indicators:
-                        indicator_series = indicators[f]
-                        if hasattr(indicator_series, 'iloc'):
-                            value = safe_float(indicator_series.iloc[-1])
-                        else:
-                            value = safe_float(indicator_series)
-                    # Then try market data
-                    elif hasattr(last_row, 'get'):
-                        value = safe_float(last_row.get(f, 0.0))
-                    elif isinstance(last_row, pd.Series) and f in last_row.index:
-                        value = safe_float(last_row[f])
-                    else:
-                        value = 0.0
-
-                    obs_values.append(value if np.isfinite(value) else 0.0)
-                except Exception:
-                    obs_values.append(0.0)
-
-            if len(obs_values) != 13:
-                logger.error(f"❌ Gemini feature dimension mismatch: got {len(obs_values)}, expected 13")
-                return None
-
-            logger.debug(f"✅ Built Gemini observation: {len(obs_values)} features")
-            return np.array(obs_values, dtype=np.float32)
-
-        except Exception as e:
-            logger.error(f"❌ Error building Gemini observation: {e}")
-            return None
+        """
+        Deprecated: Use build_legacy_observation instead.
+        Builds legacy 13-dimensional observation for Gemini models.
+        This function exists for backward compatibility.
+        """
+        logger.warning("⚠️ build_gemini_obs is deprecated. Use build_legacy_observation instead.")
+        return ObservationBuilders.build_legacy_observation(market_data, symbol, indicators or {})
 
     @staticmethod
     def build_grok_obs(market_data: dict, symbol: str, indicators: dict = None):

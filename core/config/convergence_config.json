@@ -1,0 +1,7 @@
+{
+  "trend_following_mode": true,
+  "use_mean_reversion": false,
+  "ma_short": 50,
+  "ma_long": 200,
+  "min_trend_confidence": 0.65
+}

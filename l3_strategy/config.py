@@ -30,7 +30,7 @@ class ModelConfig:
     regime_model_path: str = "models/L3/regime_detector.pkl"
     regime_model_type: str = "random_forest"
     regime_retrain_frequency: int = 168  # hours (1 week)
-    regime_confidence_threshold: float = 0.70
+    regime_confidence_threshold: float = 0.45
     
     # Sentiment Analysis
     sentiment_model_path: str = "models/L3/sentiment_analyzer.pkl" 
@@ -157,7 +157,7 @@ class ExecutionConfig:
     
     # Operating Modes
     operating_mode: str = "automatic"  # "semi_automatic", "simulation"
-    confidence_threshold: float = 0.70  # minimum confidence for decisions
+    confidence_threshold: float = 0.45  # minimum confidence for decisions
     
     # Output Configuration
     output_format: str = "json"

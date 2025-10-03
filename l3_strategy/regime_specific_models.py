@@ -364,62 +364,47 @@ class BearMarketModel:
 
 class RangeMarketModel:
     """
-    Range/Sideways Market L3 Model - Mean-Reversion Strategy
+    Range/Sideways Market L3 Model - CAUTIOUS Operations
+
+    SOLUTION 1: Allow cautious operations in range regime instead of blocking all
     Characteristics:
-    - Moderate risk appetite
-    - Mean-reversion trades
-    - Volatility harvesting
-    - Bollinger Band strategies
-    - Frequent rebalancing
+    - Small position sizes with high caution
+    - Mean-reversion with strict risk controls
+    - Conservative volatility targeting
+    - Frequent rebalancing to capture small moves
+    - Portfolio-aware position limits
     """
 
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}
         self.name = "RangeMarketModel"
-        self.mean_reversion_threshold = self.config.get('mean_reversion_threshold', 0.02)
-        self.volatility_bandwidth = self.config.get('volatility_bandwidth', 0.15)
 
     def generate_strategy(self, market_data: Dict[str, pd.DataFrame],
                          regime_context: Dict[str, Any]) -> RegimeStrategy:
         """
-        Generate range market strategy focused on mean-reversion and volatility
+        SOLUTION 1: Generate CAUTIOUS operations strategy for range regime
+        Allows small positions with strict risk controls instead of blocking all operations
         """
         try:
-            logger.info("📊 Range Market Model: Generating mean-reversion strategy")
+            logger.info("📊 Range Market Model: Generating CAUTIOUS operations strategy")
 
-            # Extract market metrics
+            # Extract market data for technical analysis
             btc_data = market_data.get('BTCUSDT')
             eth_data = market_data.get('ETHUSDT')
 
-            if btc_data is None or btc_data.empty:
-                logger.warning("Range Market Model: Insufficient BTC data")
-                return self._get_default_range_strategy()
+            # Calculate technical indicators for cautious position sizing
+            btc_bb_pos = self._calculate_bb_position(btc_data) if btc_data is not None else 0.5
+            eth_bb_pos = self._calculate_bb_position(eth_data) if eth_data is not None else 0.5
+            btc_rsi = self._calculate_rsi(btc_data) if btc_data is not None else 50.0
+            eth_rsi = self._calculate_rsi(eth_data) if eth_data is not None else 50.0
 
-            # Calculate Bollinger Bands and mean reversion signals
-            btc_bb_position = self._calculate_bb_position(btc_data)
-            eth_bb_position = self._calculate_bb_position(eth_data) if eth_data is not None else 0.5
+            logger.info(f"📊 RANGE TECHNICALS: BTC BB={btc_bb_pos:.2f}, RSI={btc_rsi:.1f} | ETH BB={eth_bb_pos:.2f}, RSI={eth_rsi:.1f}")
 
-            # Calculate RSI for mean reversion timing
-            btc_rsi = self._calculate_rsi(btc_data)
-            eth_rsi = self._calculate_rsi(eth_data) if eth_data is not None else 50
-
-            # Range market: Balanced allocation with focus on mean reversion
-            # Allocate more to assets near Bollinger Band extremes
-            btc_extreme_score = abs(btc_bb_position - 0.5) * 2  # 0 to 1 scale
-            eth_extreme_score = abs(eth_bb_position - 0.5) * 2
-
-            total_extreme = btc_extreme_score + eth_extreme_score
-            if total_extreme > 0:
-                btc_weight = btc_extreme_score / total_extreme
-                eth_weight = eth_extreme_score / total_extreme
-            else:
-                btc_weight = 0.5
-                eth_weight = 0.5
-
-            equity_allocation = 0.7  # Moderate equity exposure
-            btc_allocation = equity_allocation * btc_weight
-            eth_allocation = equity_allocation * eth_weight
-            cash_allocation = 1.0 - equity_allocation
+            # Range regime: CAUTIOUS allocations with mean-reversion logic
+            # Small positions favoring oversold assets (RSI < 40)
+            btc_allocation = 0.05 if btc_rsi < 40 else 0.02  # Slightly favor BTC if oversold
+            eth_allocation = 0.04 if eth_rsi < 40 else 0.02  # Smaller ETH allocation
+            cash_allocation = 0.89  # High cash preservation
 
             asset_allocation = {
                 'BTCUSDT': btc_allocation,
@@ -427,42 +412,44 @@ class RangeMarketModel:
                 'CASH': cash_allocation
             }
 
-            # 🛠️ AJUSTE: Más agresivo en mercados range (permitir más posiciones)
-            risk_appetite = 0.7  # Increased from 0.5 to 0.7 for more aggressive trading
+            # Conservative risk appetite - very low for range markets
+            risk_appetite = 0.15  # Slightly higher than before but still very conservative
 
-            # Position sizing based on distance from mean
+            # Small position sizing with strict limits
             position_sizing = {
                 'BTCUSDT': {
-                    'max_position': 0.4,
-                    'min_position': 0.1,
-                    'vol_target': 0.12,
-                    'bb_multiplier': btc_extreme_score + 0.5  # Higher allocation when more extreme
+                    'max_position': 0.08,  # Maximum 8% position (very small)
+                    'min_position': 0.0,   # No minimum required
+                    'vol_target': 0.05,    # Low volatility target
+                    'range_cautious_mode': True,  # Flag for range strategy
+                    'signal_strength_required': 0.7  # High confidence required
                 },
                 'ETHUSDT': {
-                    'max_position': 0.35,
-                    'min_position': 0.08,
-                    'vol_target': 0.14,
-                    'bb_multiplier': eth_extreme_score + 0.5
+                    'max_position': 0.06,  # Maximum 6% position (even smaller)
+                    'min_position': 0.0,   # No minimum required
+                    'vol_target': 0.04,    # Even lower volatility target
+                    'range_cautious_mode': True,  # Flag for range strategy
+                    'signal_strength_required': 0.75  # Very high confidence required
                 }
             }
 
-            # Moderate stop losses for range trading
+            # Tight stop losses for range trading (quick exits)
             stop_loss_policy = {
-                'type': 'bollinger_based',
-                'outer_band_stop': True,  # Stop at outer Bollinger Band
-                'time_stop': '5d',        # Exit after 5 days
-                'max_holding_period': '10d'
+                'type': 'range_cautious_stops',
+                'initial_stop': 0.015,  # 1.5% initial stop (tight)
+                'max_drawdown': 0.03,   # Max 3% drawdown
+                'time_stop': '2d',      # Exit after 2 days regardless
+                'volatility_adjusted': True
             }
 
-            # Mean reversion take profits
+            # Quick take profits for range trading (small gains)
             take_profit_policy = {
-                'type': 'mean_reversion',
+                'type': 'range_quick_profits',
                 'targets': [
-                    {'price_level': 'bb_middle', 'position_size': 0.50},  # Take 50% at middle band
-                    {'price_level': 'bb_opposite', 'position_size': 1.00}  # Take rest at opposite band
+                    {'price_level': 1.025, 'position_size': 1.00}  # Take all off at 2.5% gain
                 ],
-                'rsi_based_exit': True,  # Exit when RSI reaches neutral levels
-                'time_based_exit': '7d'
+                'time_based_exit': '1d',  # Exit after 1 day regardless
+                'range_mode': True  # Special flag for range behavior
             }
 
             strategy = RegimeStrategy(
@@ -472,28 +459,62 @@ class RangeMarketModel:
                 position_sizing=position_sizing,
                 stop_loss_policy=stop_loss_policy,
                 take_profit_policy=take_profit_policy,
-                rebalancing_frequency='daily',  # Frequent rebalancing in range markets
-                volatility_target=0.12,  # Moderate vol target
+                rebalancing_frequency='daily',  # Check daily in case regime changes
+                volatility_target=0.06,  # Low volatility target for cautious operations
                 correlation_limits={
-                    'max_correlation': 0.6,  # Moderate correlation limits
-                    'min_diversification': 0.5
+                    'max_correlation': 0.7,  # Moderate correlation limits
+                    'min_diversification': 0.5,  # Some diversification required
+                    'range_cautious_mode': True  # Flag for range cautious mode
                 },
                 metadata={
-                    'btc_bb_position': btc_bb_position,
-                    'eth_bb_position': eth_bb_position,
+                    'strategy_type': 'range_cautious_operations',
+                    'btc_allocation': btc_allocation,
+                    'eth_allocation': eth_allocation,
+                    'cash_allocation': cash_allocation,
                     'btc_rsi': btc_rsi,
                     'eth_rsi': eth_rsi,
-                    'strategy_type': 'mean_reversion_volatility',
-                    'model_version': '1.0'
+                    'btc_bb_position': btc_bb_pos,
+                    'eth_bb_position': eth_bb_pos,
+                    'solution_1_implemented': True,
+                    'model_version': '4.0',
+                    'range_cautious_operations': 'enabled'
                 }
             )
 
-            logger.info(f"📊 Range Market Strategy: Risk={risk_appetite:.2f}, BTC={btc_allocation:.2f}, ETH={eth_allocation:.2f}")
+            logger.info(f"📊 Range CAUTIOUS Strategy: Risk={risk_appetite:.2f}, BTC={btc_allocation:.2f}, ETH={eth_allocation:.2f}, Cash={cash_allocation:.2f}")
             return strategy
 
         except Exception as e:
             logger.error(f"Range Market Model error: {e}")
             return self._get_default_range_strategy()
+
+    def _calculate_signal_strength(self, bb_position: float, rsi: float, volatility: float) -> float:
+        """Calculate comprehensive signal strength for position sizing"""
+        try:
+            # BB position strength (0-1, higher when near bands)
+            bb_strength = 1 - abs(bb_position - 0.5) * 1.8  # Peaks at band edges
+
+            # RSI strength (0-1, higher when oversold/overbought)
+            if rsi < 30 or rsi > 70:
+                rsi_strength = 1.0
+            elif rsi < 40 or rsi > 60:
+                rsi_strength = 0.7
+            else:
+                rsi_strength = 0.3
+
+            # Volatility adjustment (prefer moderate volatility)
+            if volatility < 0.03:
+                vol_multiplier = 0.5  # Too low volatility = weaker signals
+            elif volatility < 0.08:
+                vol_multiplier = 1.0  # Optimal volatility
+            else:
+                vol_multiplier = 0.7  # High volatility = mixed signals
+
+            signal_strength = (bb_strength * 0.5 + rsi_strength * 0.3) * vol_multiplier
+            return min(1.0, max(0.0, signal_strength))
+
+        except Exception:
+            return 0.3  # Default moderate strength
 
     def _calculate_bb_position(self, data: pd.DataFrame) -> float:
         """Calculate position within Bollinger Bands (0=lower, 0.5=middle, 1=upper)"""
@@ -546,6 +567,20 @@ class RangeMarketModel:
 
         except Exception:
             return 50.0
+
+    def _calculate_volatility(self, data: pd.DataFrame) -> float:
+        """Calculate volatility for asset in range markets"""
+        try:
+            if data is None or data.empty or 'close' not in data.columns:
+                return 0.08
+
+            returns = data['close'].pct_change().dropna().tail(20)
+            if len(returns) < 5:
+                return 0.08
+
+            return returns.std()
+        except Exception:
+            return 0.08
 
     def _get_default_range_strategy(self) -> RegimeStrategy:
         """Return default range market strategy"""
@@ -1008,11 +1043,14 @@ class RegimeSpecificL3Processor:
                       regime_context: Dict[str, Any]) -> str:
         """
         Detect current market regime using multiple signals including volatility and crisis detection
+        Prioritizes regime from context if provided (from rule-based classifier in main.py)
         """
         try:
-            # Get regime from context if available (prioritize external detection)
+            # FIRST PRIORITY: Get regime from context if available (from rule-based classifier)
             if regime_context and 'regime' in regime_context:
-                return regime_context['regime']
+                context_regime = regime_context['regime']
+                logger.info(f"🎯 Using regime from context: {context_regime} (rule-based detection)")
+                return context_regime
 
             # Enhanced regime detection using market data
             btc_data = market_data.get('BTCUSDT')

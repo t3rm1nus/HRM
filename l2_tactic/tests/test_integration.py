@@ -1,6 +1,6 @@
 # l2_tactic/tests/test_integration.py
 import pytest
-from l2_tactic.signal_generator import L2TacticProcessor
+from l2_tactic.tactical_signal_processor import L2TacticProcessor
 from l2_tactic.models import TacticalSignal, MarketFeatures, PositionSize
 from l2_tactic.config import L2Config
 

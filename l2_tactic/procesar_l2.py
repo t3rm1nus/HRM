@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 from typing import Dict, Any
 from .config import L2Config
-from .signal_generator import L2TacticProcessor
+from .tactical_signal_processor import L2TacticProcessor
 from l1_operational.realtime_loader import RealTimeDataLoader
 from core.logging import logger
 logger.info("l2_tactic")

@@ -154,7 +154,7 @@ class HRMStrategyTester:
                 
             # Importar componentes L2
             if os.path.exists('l2_tactic'):
-                from l2_tactic.signal_generator import L2TacticProcessor
+from l2_tactic.tactical_signal_processor import L2TacticProcessor
                 from l2_tactic.position_sizer import PositionSizerManager
                 self.l2_components = {
                     'signal_generator': L2TacticProcessor,

@@ -20,7 +20,7 @@ import asyncio
 from core.logging import logger
 
 # Importar componentes reales del sistema HRM
-from l2_tactic.signal_generator import L2TacticProcessor
+from l2_tactic.tactical_signal_processor import L2TacticProcessor
 from l2_tactic.config import L2Config
 from l1_operational.order_manager import OrderManager
 from l1_operational.binance_client import BinanceClient

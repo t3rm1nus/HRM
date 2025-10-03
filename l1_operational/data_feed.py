@@ -62,7 +62,7 @@ class DataFeed:
             except Exception as e:
                 logger.error(f"❌ Error cerrando DataFeed: {e}")
                 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 50) -> pd.DataFrame:
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 1000) -> pd.DataFrame:
         """
         Obtiene datos OHLCV para un símbolo.
         """

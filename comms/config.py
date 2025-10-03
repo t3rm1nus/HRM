@@ -18,13 +18,17 @@ TECHNICAL_THRESHOLD = safe_float(os.getenv("TECHNICAL_THRESHOLD", 0.1))
 FINRL_THRESHOLD = safe_float(os.getenv("FINRL_THRESHOLD", 0.2))
 MEAN_REVERSION_THRESHOLD = safe_float(os.getenv("MEAN_REVERSION_THRESHOLD", 0.3))
 MIN_SIGNAL_STRENGTH = safe_float(os.getenv("MIN_SIGNAL_STRENGTH", 0.4))
-ENABLED_GENERATORS = os.getenv("ENABLED_GENERATORS", "technical,finrl,mean_reversion").split(',')
+ENABLED_GENERATORS = os.getenv("ENABLED_GENERATORS", "technical,finrl").split(',')  # Removed mean_reversion for pure trend-following
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"  # Default to real data
 SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT").split(',')
 MODE = os.getenv("BINANCE_MODE", "TESTNET")
-APAGAR_L3 = os.getenv("APAGAR_L3", "false").lower() == "true"  # Default to false to enable L3
+APAGAR_L3 = False  # TEST A COMPLETADO: L3 habilitado para señales más fuertes
+
+# L2-L3 Integration Configuration
+L3_VETO_ENABLED = True  # Main.py enforces L3 veto power
+L2_L3_INTEGRATION = True  # L2 respects L3 context preemptively
 
 # Objeto config para módulos nuevos
 config = {

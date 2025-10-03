@@ -22,7 +22,7 @@ class RealTimeDataLoader:
         """Cierra apropiadamente las conexiones"""
         if not self._closed:
             try:
-                if hasattr(self.binance_client, 'close') and self.binance_client:
+                if self.binance_client and hasattr(self.binance_client, 'close'):
                     await self.binance_client.close()
                 self._closed = True
                 logger.info("✅ RealTimeDataLoader cerrado correctamente")
@@ -75,13 +75,3 @@ class RealTimeDataLoader:
         except Exception as e:
             logger.error(f"❌ Error en get_realtime_data: {e}", exc_info=True)
             return {}
-
-    async def close(self):
-        """
-        Cierra conexiones abiertas.
-        """
-        try:
-            await self.binance_client.close()
-            logger.info("✅ RealTimeDataLoader cerrado")
-        except Exception as e:
-            logger.error(f"❌ Error cerrando RealTimeDataLoader: {e}", exc_info=True)

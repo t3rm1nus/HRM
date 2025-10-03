@@ -852,7 +852,7 @@ class PortfolioManager:
             return safe_float(self.portfolio.get(symbol, {}).get('position', 0.0))
 
     def get_total_value(self, market_data: Optional[Dict[str, Any]] = None) -> float:
-        """Calcula el valor total del portfolio"""
+        """Calculate total portfolio value"""
         if market_data is None:
             return safe_float(self.portfolio.get('total', 0.0))
 
@@ -865,21 +865,28 @@ class PortfolioManager:
                 if isinstance(symbol_data, dict) and 'close' in symbol_data:
                     price = safe_float(symbol_data['close'])
                     total_value += balance * price
-                elif isinstance(symbol_data, (pd.Series, pd.DataFrame)) and 'close' in symbol_data.index:
-                    # Handle pandas Series/DataFrame
-                    price = safe_float(symbol_data['close'])
-                    total_value += balance * price
-                elif isinstance(symbol_data, (pd.Series, pd.DataFrame)) and len(symbol_data) > 0:
-                    # Try to get the last close price from DataFrame
+                elif isinstance(symbol_data, pd.DataFrame) and 'close' in symbol_data.columns:
+                    # Handle pandas DataFrame - use latest close
                     try:
-                        if isinstance(symbol_data, pd.DataFrame):
-                            price = safe_float(symbol_data['close'].iloc[-1])
-                        else:  # Series
-                            price = safe_float(symbol_data.iloc[-1])
+                        price = safe_float(symbol_data['close'].iloc[-1])
                         total_value += balance * price
                     except (KeyError, IndexError):
-                        # Skip if we can't get the price
-                        pass
+                        logger.debug(f"No close price available for {symbol} DataFrame")
+                elif isinstance(symbol_data, pd.Series) and len(symbol_data) > 0:
+                    # Handle pandas Series - use latest value
+                    price = safe_float(symbol_data.iloc[-1])
+                    total_value += balance * price
+                elif isinstance(symbol_data, (pd.Series, pd.DataFrame)) and len(symbol_data) > 0:
+                    # Fallback for other formats
+                    try:
+                        if isinstance(symbol_data, pd.DataFrame):
+                            price = safe_float(symbol_data.iloc[-1].get('close', symbol_data.iloc[-1].get('price', 0)))
+                        else:  # Series
+                            price = safe_float(symbol_data.iloc[-1])
+                        if price > 0:
+                            total_value += balance * price
+                    except:
+                        logger.debug(f"Could not extract price for {symbol}")
 
         return total_value
 

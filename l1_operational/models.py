@@ -11,7 +11,86 @@ from core.logging import logger
 from core.technical_indicators import calculate_technical_indicators
 
 # ============================================================================
-# L1 MODELS - Operational Signals Layer
+# SIGNAL GENERATION FUNCTIONS
+# ============================================================================
+
+def generate_momentum_signals(indicators):
+    """Generate momentum signals based on MACD and momentum indicators"""
+    signals = []
+
+    # Positive MACD crossover + positive momentum
+    if indicators['macd_diff'] > 0 and indicators['momentum_5p'] > 0:
+        signals.append({
+            "action": "buy",
+            "confidence": min(0.6 + (indicators['macd_diff'] / 10), 0.85),
+            "source": "l1_momentum"
+        })
+
+    # Negative MACD crossover + negative momentum
+    elif indicators['macd_diff'] < -2 and indicators['momentum_5p'] < -0.01:
+        signals.append({
+            "action": "sell",
+            "confidence": 0.65,
+            "source": "l1_momentum"
+        })
+
+    else:
+        signals.append({"action": "hold", "confidence": 0.5})
+
+    return signals
+
+def generate_technical_signals(indicators):
+    """Generate technical signals based on RSI"""
+    signals = []
+
+    # Oversold - potential BUY
+    if indicators['rsi'] < 35:
+        signals.append({
+            "action": "buy",
+            "confidence": 0.7,
+            "source": "l1_technical"
+        })
+
+    # Overbought - potential SELL
+    elif indicators['rsi'] > 70:
+        signals.append({
+            "action": "sell",
+            "confidence": 0.7,
+            "source": "l1_technical"
+        })
+
+    return signals  # Can return empty list if neutral
+
+def generate_volume_signals(indicators, market_data):
+    """Generate volume signals based on volume spikes"""
+    signals = []
+
+    current_volume = market_data['volume'].iloc[-1]
+    avg_volume = market_data['volume'].iloc[-20:].mean()
+
+    # Volume spike + price increase
+    if current_volume > avg_volume * 1.5 and indicators['momentum_5p'] > 0:
+        signals.append({
+            "action": "buy",
+            "confidence": 0.65,
+            "source": "l1_volume"
+        })
+
+    # Volume spike + price decrease
+    elif current_volume > avg_volume * 1.5 and indicators['momentum_5p'] < -0.01:
+        signals.append({
+            "action": "sell",
+            "confidence": 0.65,
+            "source": "l1_volume"
+        })
+
+    else:
+        signals.append({"action": "hold", "confidence": 0.7})
+
+    return signals
+
+# ============================================================================
+# NUEVAS CLASES AGREGADAS (para compatibilidad con imports)
 # ============================================================================
 
 class L1SignalType(Enum):
@@ -661,7 +740,7 @@ class SignalType(Enum):
     HOLD = "HOLD"
     CLOSE = "CLOSE"
 
-    # Compatibilidad con tu sistema actual
+    # Compatibilidad con nuestro sistema actual
     buy = "buy"
     sell = "sell"
 
@@ -688,7 +767,7 @@ class ExecutionStatus(Enum):
     EXECUTION_ERROR = "EXECUTION_ERROR"
 
 # ============================================================================
-# TUS CLASES EXISTENTES (mantenidas tal como están)
+# CLASES EXISTENTES (mantenidas tal como están)
 # ============================================================================
 
 @dataclass

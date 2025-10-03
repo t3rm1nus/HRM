@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "enabled": true,
+  "rollout_phase": "conservative_enabled",
+  "safety_mode": "conservative",
+  "features": {
+    "convergence_multiplier": {
+      "enabled": true,
+      "max_multiplier": 1.3,
+      "min_multiplier": 0.5
+    },
+    "technical_strength_scoring": {
+      "enabled": true,
+      "validation_enabled": true,
+      "bonus_enabled": false
+    },
+    "circuit_breakers": {
+      "enabled": false,
+      "max_position_size_usd": 100000,
+      "min_technical_strength": 0.1,
+      "reject_on_error": true
+    }
+  },
+  "rollout_schedule": {
+    "phase_1": {
+      "name": "monitoring_only",
+      "enabled": true,
+      "description": "Log calculations but don't apply them"
+    },
+    "phase_2": {
+      "name": "conservative_enabled",
+      "enabled": true,
+      "description": "Enable with conservative limits"
+    },
+    "phase_3": {
+      "name": "moderate_enabled",
+      "enabled": true,
+      "description": "Enable with moderate limits"
+    },
+    "phase_4": {
+      "name": "full_enabled",
+      "enabled": true,
+      "description": "Full feature enablement"
+    }
+  },
+  "risk_limits": {
+    "max_portfolio_allocation": 0.6,
+    "min_position_size_usd": 10.0,
+    "max_position_size_usd": 25000.0,
+    "emergency_stop_threshold": 0.05
+  },
+  "logging": {
+    "detailed_logging": true,
+    "alert_on_rejections": true,
+    "performance_tracking": true
+  },
+  "last_updated": "2025-09-28T23:23:30.320308",
+  "created": "2025-09-28T23:22:57.549495"
+}

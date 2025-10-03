@@ -4,6 +4,13 @@ import json
 from typing import Dict, Any
 from core.logging import logger
 
+# HRM Path Mode Configuration
+HRM_PATH_MODE = "PATH2"  # opciones: PATH1, PATH2, PATH3 (PATH2 = HYBRID INTELLIGENT - BALANCED MULTI-SIGNAL)
+MAX_CONTRA_ALLOCATION_PATH2 = 0.2  # 20% limit for contra-allocation in PATH2
+
+# Signal source constants for PATH mode validation
+PATH3_SIGNAL_SOURCE = "path3_full_l3_dominance"  # Required signal source for PATH3 orders
+
 class EnvironmentConfig:
     """
     Configuration management for different HRM environments:

@@ -198,10 +198,280 @@ def debug_dataframe_types(df: pd.DataFrame, name: str = "DataFrame"):
         logger.info(f"{name} está vacío")
         return
 
-    logger.info(f"{name} info:")
-    logger.info(df.info())
-    logger.info(df.dtypes.value_counts())
+    logger.debug(f"{name} info: {len(df)} rows, {len(df.columns)} columns")
+    logger.debug(f"{name} dtypes: {df.dtypes.value_counts().to_dict()}")
     logger.info(f"{name} memoria: {df.memory_usage(deep=True).sum()/1024:.2f} KB")
+
+def calculate_technical_strength_score(indicators_df: pd.DataFrame, symbol: str = "") -> float:
+    """
+    Calculate technical strength score combining RSI, MACD, volume, and trend indicators.
+
+    Args:
+        indicators_df: DataFrame with technical indicators
+        symbol: Symbol name for logging
+
+    Returns:
+        Technical strength score (0.0 to 1.0)
+    """
+    try:
+        if indicators_df is None or indicators_df.empty:
+            logger.warning(f"⚠️ No indicators data for technical strength calculation{symbol}")
+            return 0.5  # Neutral score
+
+        # Get latest values
+        latest = indicators_df.iloc[-1]
+
+        # RSI Component (0-1 scale, higher when RSI is in favorable ranges)
+        rsi = latest.get('rsi', 50.0)
+        if rsi <= 30:
+            rsi_score = 0.8  # Oversold - bullish signal
+        elif rsi <= 45:
+            rsi_score = 0.6  # Moderately oversold
+        elif rsi <= 55:
+            rsi_score = 0.5  # Neutral
+        elif rsi <= 70:
+            rsi_score = 0.6  # Moderately overbought
+        else:
+            rsi_score = 0.2  # Overbought - bearish signal
+
+        # MACD Component (0-1 scale based on signal strength)
+        macd = latest.get('macd', 0.0)
+        macd_signal = latest.get('macd_signal', 0.0)
+        macd_diff = macd - macd_signal
+
+        # Normalize MACD difference (assuming typical range of -50 to +50)
+        macd_normalized = max(-1.0, min(1.0, macd_diff / 50.0))
+        macd_score = 0.5 + (macd_normalized * 0.5)  # Convert to 0-1 scale
+
+        # Volume Component (0-1 scale based on volume strength)
+        vol_zscore = latest.get('vol_zscore', 0.0)
+        # Higher volume (positive z-score) indicates stronger conviction
+        volume_score = max(0.0, min(1.0, 0.5 + (vol_zscore * 0.3)))
+
+        # Trend Strength Component using ADX
+        adx = latest.get('adx', 25.0)
+        # ADX > 25 indicates trending market, higher ADX = stronger trend
+        trend_score = max(0.0, min(1.0, adx / 50.0))
+
+        # Momentum Component using ROC and Williams %R
+        roc_5 = latest.get('roc_5', 0.0)
+        williams_r = latest.get('williams_r', -50.0)
+
+        # Combine momentum indicators
+        momentum_score = 0.5
+        if roc_5 > 2.0 and williams_r < -20:
+            momentum_score = 0.8  # Strong bullish momentum
+        elif roc_5 > 1.0 and williams_r < -30:
+            momentum_score = 0.7  # Moderate bullish momentum
+        elif roc_5 < -2.0 and williams_r > -80:
+            momentum_score = 0.2  # Strong bearish momentum
+        elif roc_5 < -1.0 and williams_r > -70:
+            momentum_score = 0.3  # Moderate bearish momentum
+
+        # Weighted combination of all components
+        weights = {
+            'rsi': 0.25,
+            'macd': 0.25,
+            'volume': 0.20,
+            'trend': 0.15,
+            'momentum': 0.15
+        }
+
+        strength_score = (
+            rsi_score * weights['rsi'] +
+            macd_score * weights['macd'] +
+            volume_score * weights['volume'] +
+            trend_score * weights['trend'] +
+            momentum_score * weights['momentum']
+        )
+
+        # Ensure score is within bounds
+        strength_score = max(0.0, min(1.0, strength_score))
+
+        logger.debug(f"🎯 Technical Strength Score for {symbol}: {strength_score:.3f}")
+        logger.debug(f"   Components - RSI: {rsi_score:.3f}, MACD: {macd_score:.3f}, Volume: {volume_score:.3f}, Trend: {trend_score:.3f}, Momentum: {momentum_score:.3f}")
+
+        return strength_score
+
+    except Exception as e:
+        logger.error(f"❌ Error calculating technical strength score{symbol}: {e}")
+        return 0.5  # Return neutral score on error
+
+
+def calculate_convergence_multiplier(l1_l2_agreement: float, l1_confidence: float = 0.5, l2_confidence: float = 0.5) -> float:
+    """
+    Calculate convergence multiplier based on L1+L2 agreement levels.
+
+    Args:
+        l1_l2_agreement: Agreement level between L1 and L2 signals (0.0 to 1.0)
+        l1_confidence: L1 signal confidence (0.0 to 1.0)
+        l2_confidence: L2 signal confidence (0.0 to 1.0)
+
+    Returns:
+        Convergence multiplier for position sizing (0.5 to 2.0)
+    """
+    try:
+        # Base multiplier from agreement level
+        if l1_l2_agreement >= 0.9:
+            base_multiplier = 2.0  # Perfect agreement - maximum sizing
+        elif l1_l2_agreement >= 0.8:
+            base_multiplier = 1.8  # Strong agreement
+        elif l1_l2_agreement >= 0.7:
+            base_multiplier = 1.5  # Good agreement
+        elif l1_l2_agreement >= 0.6:
+            base_multiplier = 1.2  # Moderate agreement
+        elif l1_l2_agreement >= 0.5:
+            base_multiplier = 1.0  # Neutral agreement
+        elif l1_l2_agreement >= 0.4:
+            base_multiplier = 0.8  # Weak agreement
+        elif l1_l2_agreement >= 0.3:
+            base_multiplier = 0.7  # Poor agreement
+        else:
+            base_multiplier = 0.5  # Very poor agreement - minimum sizing
+
+        # Adjust based on confidence levels
+        avg_confidence = (l1_confidence + l2_confidence) / 2.0
+
+        # Confidence bonus/penalty
+        if avg_confidence >= 0.8:
+            confidence_adjustment = 1.2  # High confidence bonus
+        elif avg_confidence >= 0.7:
+            confidence_adjustment = 1.1  # Moderate confidence bonus
+        elif avg_confidence >= 0.6:
+            confidence_adjustment = 1.0  # Neutral
+        elif avg_confidence >= 0.5:
+            confidence_adjustment = 0.9  # Low confidence penalty
+        else:
+            confidence_adjustment = 0.8  # Very low confidence penalty
+
+        final_multiplier = base_multiplier * confidence_adjustment
+
+        # Ensure reasonable bounds
+        final_multiplier = max(0.3, min(2.5, final_multiplier))
+
+        logger.debug(f"🔄 Convergence Multiplier: agreement={l1_l2_agreement:.3f}, avg_conf={avg_confidence:.3f} → multiplier={final_multiplier:.3f}")
+
+        return final_multiplier
+
+    except Exception as e:
+        logger.error(f"❌ Error calculating convergence multiplier: {e}")
+        return 1.0  # Return neutral multiplier on error
+
+
+def validate_technical_strength_for_position_size(strength_score: float, position_size_usd: float, symbol: str = "") -> bool:
+    """
+    Validate if technical strength meets minimum requirements for large positions.
+    Includes circuit breaker logic for extreme conditions.
+
+    Args:
+        strength_score: Technical strength score (0.0 to 1.0)
+        position_size_usd: Position size in USD
+        symbol: Symbol name for logging
+
+    Returns:
+        True if position size is allowed, False if rejected
+    """
+    try:
+        # Input validation with circuit breakers
+        if not isinstance(strength_score, (int, float)) or not (0.0 <= strength_score <= 1.0):
+            logger.error(f"🚨 CIRCUIT BREAKER: Invalid strength score {strength_score} for {symbol}")
+            return False
+
+        if not isinstance(position_size_usd, (int, float)) or position_size_usd < 0:
+            logger.error(f"🚨 CIRCUIT BREAKER: Invalid position size {position_size_usd} for {symbol}")
+            return False
+
+        # Emergency circuit breaker: Reject all positions if strength is extremely low
+        if strength_score < 0.1:
+            logger.error(f"🚨 EMERGENCY CIRCUIT BREAKER: Extremely weak technical strength ({strength_score:.3f}) for {symbol} - rejecting all positions")
+            return False
+
+        # Emergency circuit breaker: Reject extremely large positions regardless of strength
+        if position_size_usd > 100000:  # $100K+ positions are too risky
+            logger.error(f"🚨 EMERGENCY CIRCUIT BREAKER: Position size ${position_size_usd:.0f} too large for {symbol} - rejecting")
+            return False
+
+        # Define minimum strength requirements based on position size
+        if position_size_usd >= 10000:  # Large positions ($10K+)
+            min_strength = 0.7
+            size_category = "LARGE"
+        elif position_size_usd >= 5000:  # Medium positions ($5K+)
+            min_strength = 0.6
+            size_category = "MEDIUM"
+        elif position_size_usd >= 1000:  # Small positions ($1K+)
+            min_strength = 0.5
+            size_category = "SMALL"
+        else:  # Micro positions
+            min_strength = 0.3  # Lower requirement for very small positions
+            size_category = "MICRO"
+
+        # Check if strength meets requirements
+        if strength_score >= min_strength:
+            logger.debug(f"✅ Technical strength validation PASSED for {symbol} {size_category} position (${position_size_usd:.0f}): strength={strength_score:.3f} >= {min_strength:.3f}")
+            return True
+        else:
+            logger.warning(f"❌ Technical strength validation FAILED for {symbol} {size_category} position (${position_size_usd:.0f}): strength={strength_score:.3f} < {min_strength:.3f}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Error validating technical strength{symbol}: {e}")
+        # Circuit breaker: On error, only allow micro positions to prevent system failure
+        if position_size_usd < 1000:
+            logger.warning(f"⚠️ Allowing micro position due to validation error: ${position_size_usd:.0f}")
+            return True
+        else:
+            logger.error(f"🚨 CIRCUIT BREAKER: Rejecting position due to validation error: ${position_size_usd:.0f}")
+            return False
+
+
+def get_convergence_safety_mode() -> str:
+    """
+    Determine the safety mode for convergence calculations based on system state.
+
+    Returns:
+        Safety mode: 'conservative', 'moderate', 'aggressive', or 'emergency'
+    """
+    try:
+        # Check for emergency conditions (could be expanded with more system health checks)
+        # For now, default to moderate safety
+        return 'moderate'
+    except Exception as e:
+        logger.error(f"Error determining convergence safety mode: {e}")
+        return 'conservative'  # Safe default
+
+
+def apply_convergence_safety_limits(multiplier: float, safety_mode: str = None) -> float:
+    """
+    Apply safety limits to convergence multipliers based on system safety mode.
+
+    Args:
+        multiplier: Raw convergence multiplier
+        safety_mode: Safety mode ('conservative', 'moderate', 'aggressive', 'emergency')
+
+    Returns:
+        Limited multiplier within safe bounds
+    """
+    if safety_mode is None:
+        safety_mode = get_convergence_safety_mode()
+
+    # Define safety limits for each mode
+    safety_limits = {
+        'emergency': {'min': 0.5, 'max': 1.0},    # Very conservative during emergencies
+        'conservative': {'min': 0.6, 'max': 1.5},  # Conservative limits
+        'moderate': {'min': 0.5, 'max': 2.0},     # Standard operational limits
+        'aggressive': {'min': 0.3, 'max': 2.5}    # Aggressive limits for testing
+    }
+
+    limits = safety_limits.get(safety_mode, safety_limits['moderate'])
+
+    # Apply limits
+    limited_multiplier = max(limits['min'], min(limits['max'], multiplier))
+
+    if limited_multiplier != multiplier:
+        logger.info(f"🛡️ CONVERGENCE SAFETY LIMIT applied: {multiplier:.2f} → {limited_multiplier:.2f} (mode: {safety_mode})")
+
+    return limited_multiplier
+
 
 def calculate_range_indicators(df):
     """

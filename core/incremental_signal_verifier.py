@@ -3,7 +3,7 @@ import asyncio
 import time
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Callable
 from dataclasses import dataclass
 from core.logging import logger
 from l2_tactic.models import TacticalSignal
@@ -44,6 +44,7 @@ class IncrementalSignalVerifier:
         self.verification_history = []  # List of SignalVerificationResult
         self.market_data_cache = {}  # symbol -> recent data
         self.is_running = False
+        self.event_callbacks = {}  # event_name -> callback function
 
         logger.info("✅ IncrementalSignalVerifier initialized")
         logger.info(f"   Verification window: {self.config.verification_window_minutes}min")
@@ -335,6 +336,61 @@ class IncrementalSignalVerifier:
     async def update_market_data(self, symbol: str, data: Dict[str, Any]):
         """Update market data cache for verification"""
         self.market_data_cache[symbol] = data
+
+    def register_event_callback(self, event_name: str, callback: Callable):
+        """
+        Register a callback function for a specific event.
+
+        Args:
+            event_name: Name of the event (e.g., 'stop_loss_batch_count')
+            callback: Function to call when event is emitted
+        """
+        self.event_callbacks[event_name] = callback
+        logger.info(f"📡 Registered callback for event: {event_name}")
+
+    def emit_event(self, event_name: str, data: Dict[str, Any] = None):
+        """
+        Emit an event to registered callbacks.
+
+        Args:
+            event_name: Name of the event
+            data: Data to pass to the callback
+        """
+        if event_name in self.event_callbacks:
+            try:
+                callback = self.event_callbacks[event_name]
+                if asyncio.iscoroutinefunction(callback):
+                    # If callback is async, create task
+                    asyncio.create_task(callback(data))
+                else:
+                    # If callback is sync, call directly
+                    callback(data)
+                logger.info(f"📡 Event emitted: {event_name} with data: {data}")
+            except Exception as e:
+                logger.error(f"❌ Error emitting event {event_name}: {e}")
+        else:
+            logger.debug(f"⚠️ No callback registered for event: {event_name}")
+
+    async def emit_stop_loss_batch_count(self, batch_count: int, state: Dict[str, Any] = None):
+        """
+        Emit stop_loss_batch_count event when a batch of stop-loss orders is completed.
+
+        Args:
+            batch_count: Number of stop-loss orders in the batch
+            state: Current system state (optional)
+        """
+        event_data = {
+            'batch_count': batch_count,
+            'timestamp': datetime.now().isoformat(),
+            'state': state or {}
+        }
+
+        # Update state with the batch count
+        if state:
+            state['stop_loss_batch_count'] = batch_count
+
+        self.emit_event('stop_loss_batch_count', event_data)
+        logger.info(f"🚨 Emitted stop_loss_batch_count event: {batch_count} orders")
 
 # Global verifier instance
 _verifier_instance = None

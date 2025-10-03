@@ -1,28 +1,5 @@
 {
-  "portfolio": {
-    "BTCUSDT": {
-      "position": 0.01000,
-      "free": 0.01000
-    },
-    "ETHUSDT": {
-      "position": 0.20000,
-      "free": 0.20000
-    },
-    "USDT": {
-      "free": 1100.0
-    },
-    "total": 2998.0,
-    "peak_value": 3000.0,
-    "total_fees": 1.0
-  },
-  "peak_value": 3000.0,
-  "total_fees": 1.0,
-  "mode": "live",
-  "initial_balance": 3000.0,
-  "symbols": [
-    "BTCUSDT",
-    "ETHUSDT"
-  ],
-  "timestamp": "2025-09-26T23:40:00.000000",
-  "version": "1.0"
+  "timestamp": "2025-10-03T21:50:05.514523",
+  "active_stop_losses": {},
+  "active_profit_orders": {}
 }

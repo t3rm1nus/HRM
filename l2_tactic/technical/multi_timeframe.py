@@ -132,35 +132,9 @@ class MultiTimeframeTechnical:
                             f"sma_20={sma_20:.2f}, sma_50={sma_50:.2f}, ema_12={ema_12:.2f}, "
                             f"ema_26={ema_26:.2f}, close={close:.2f}")
 
-                # Señales RSI
-                if rsi > self.rsi_overbought:
-                    signals.append(TacticalSignal(
-                        symbol=symbol,
-                        signal_type="technical_rsi_overbought",
-                        strength=-0.7,
-                        confidence=0.7,
-                        side="sell",
-                        source="technical",
-                        features={"rsi": rsi},
-                        timestamp=pd.Timestamp.now(),
-                        metadata={"indicator": "rsi"}
-                    ))
-                    logger.info(f"📈 Señal técnica para {symbol}: sell (RSI overbought, rsi={rsi:.2f})")
-                elif rsi < self.rsi_oversold:
-                    signals.append(TacticalSignal(
-                        symbol=symbol,
-                        signal_type="technical_rsi_oversold",
-                        strength=0.7,
-                        confidence=0.7,
-                        side="buy",
-                        source="technical",
-                        features={"rsi": rsi},
-                        timestamp=pd.Timestamp.now(),
-                        metadata={"indicator": "rsi"}
-                    ))
-                    logger.info(f"📈 Señal técnica para {symbol}: buy (RSI oversold, rsi={rsi:.2f})")
-                else:
-                    logger.debug(f"[DEBUG] {symbol} - No señal RSI: rsi={rsi:.2f}")
+                # Señales RSI - DISABLED: Mean-reversion signals disabled for pure trend-following system
+                # RSI signals removed to eliminate mean-reversion triggers
+                logger.debug(f"[DEBUG] {symbol} - RSI signals disabled: rsi={rsi:.2f} (thresholds: {self.rsi_oversold}-{self.rsi_overbought})")
 
                 # Señales MACD
                 if macd > macd_signal and macd > 0:
@@ -270,40 +244,14 @@ class MultiTimeframeTechnical:
     
     def _analyze_rsi(self, symbol: str, indicators: Dict[str, Any]) -> Optional[TacticalSignal]:
         """
-        Análisis RSI
+        Análisis RSI - DISABLED: Mean-reversion signals disabled for pure trend-following system
         """
         try:
-            rsi = indicators.get('rsi')
-            if rsi is None:
-                return None
-            
-            if rsi < self.rsi_oversold:
-                return TacticalSignal(
-                    symbol=symbol,
-                    signal_type='rsi_oversold',
-                    strength=min((self.rsi_oversold - rsi) / 15, 1.0),
-                    confidence=0.7,
-                    side='buy',
-                    source="technical",
-                    features={'rsi': rsi, 'condition': 'oversold'},
-                    timestamp=pd.Timestamp.now(),
-                    metadata={'indicator': 'RSI', 'threshold': self.rsi_oversold}
-                )
-            elif rsi > self.rsi_overbought:
-                return TacticalSignal(
-                    symbol=symbol,
-                    signal_type='rsi_overbought',
-                    strength=min((rsi - self.rsi_overbought) / 15, 1.0),
-                    confidence=0.7,
-                    side='sell',
-                    source="technical",
-                    features={'rsi': rsi, 'condition': 'overbought'},
-                    timestamp=pd.Timestamp.now(),
-                    metadata={'indicator': 'RSI', 'threshold': self.rsi_overbought}
-                )
+            # RSI signal generation disabled
+            logger.debug(f"🔴 RSI analysis disabled for {symbol} - pure trend-following system")
             return None
         except Exception as e:
-            logger.error(f"❌ Error en análisis RSI: {e}")
+            logger.error(f"❌ Error in disabled RSI analysis: {e}")
             return None
     
     def _analyze_macd(self, symbol: str, indicators: Dict[str, Any]) -> Optional[TacticalSignal]:

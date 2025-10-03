@@ -1,6 +1,7 @@
 import os
 import json
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from transformers import BertTokenizer, BertForSequenceClassification
 import torch
@@ -35,17 +36,17 @@ tokenizer = BertTokenizer.from_pretrained(MODEL_DIR)
 model = BertForSequenceClassification.from_pretrained(MODEL_DIR)
 model.eval()  # modo evaluación
 
-# Cache para datos de sentimiento
-SENTIMENT_CACHE_FILE = os.path.join(DATA_DIR, "sentiment_cache.json")
-SENTIMENT_CACHE_DURATION = 3600  # 1 hora en segundos
+# Cache para análisis de sentimiento BERT (6 horas para coincidir con cache de textos)
+SENTIMENT_BERT_CACHE_FILE = os.path.join(DATA_DIR, "sentiment_bert_cache.json")
+SENTIMENT_BERT_CACHE_DURATION = 21600  # 6 horas en segundos
 
-def _load_sentiment_cache():
-    """Carga datos de sentimiento desde cache si están frescos"""
+def _load_sentiment_bert_cache():
+    """Carga análisis BERT completo desde cache si está fresco"""
     try:
-        if not os.path.exists(SENTIMENT_CACHE_FILE):
+        if not os.path.exists(SENTIMENT_BERT_CACHE_FILE):
             return None
 
-        with open(SENTIMENT_CACHE_FILE, 'r', encoding='utf-8') as f:
+        with open(SENTIMENT_BERT_CACHE_FILE, 'r', encoding='utf-8') as f:
             cache_data = json.load(f)
 
         # Verificar si el cache está fresco
@@ -57,39 +58,51 @@ def _load_sentiment_cache():
         current_time = datetime.now()
         age_seconds = (current_time - cache_time).total_seconds()
 
-        if age_seconds > SENTIMENT_CACHE_DURATION:
-            logger.debug(f"📅 SENTIMENT: Cache expirado (edad: {age_seconds:.0f}s > {SENTIMENT_CACHE_DURATION}s)")
+        if age_seconds > SENTIMENT_BERT_CACHE_DURATION:
+            age_hours = age_seconds / 3600
+            logger.debug(f"📅 SENTIMENT: Cache BERT expirado (edad: {age_hours:.1f}h > {SENTIMENT_BERT_CACHE_DURATION/3600:.1f}h)")
             return None
 
-        logger.info(f"✅ SENTIMENT: Cache cargado (edad: {age_seconds:.0f}s)")
+        age_hours = age_seconds / 3600
+        logger.info(f"✅ SENTIMENT: Cache BERT cargado (edad: {age_hours:.1f}h, {cache_data.get('texts_count', 0)} textos)")
         return cache_data
 
     except Exception as e:
-        logger.warning(f"⚠️ SENTIMENT: Error cargando cache: {e}")
+        logger.warning(f"⚠️ SENTIMENT: Error cargando cache BERT: {e}")
         return None
 
-def _save_sentiment_cache(sentiment_score, texts_count):
-    """Guarda datos de sentimiento en cache"""
+def _save_sentiment_bert_cache(sentiment_results, sentiment_score, texts_count):
+    """Guarda análisis BERT completo en cache (resultados detallados + score agregado)"""
     try:
         cache_data = {
-            'sentiment_score': float(sentiment_score),
+            'sentiment_results': sentiment_results,  # Los resultados detallados de BERT por texto
+            'sentiment_score': float(sentiment_score),  # Score agregado
             'texts_count': texts_count,
             'timestamp': datetime.now().isoformat()
         }
 
-        with open(SENTIMENT_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, indent=2)
+        with open(SENTIMENT_BERT_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2, default=str)
 
-        logger.debug("💾 SENTIMENT: Cache guardado")
+        logger.debug(f"💾 SENTIMENT: Cache BERT guardado completo ({texts_count} textos, score: {sentiment_score:.3f})")
+        return True  # Return success flag
 
     except Exception as e:
-        logger.warning(f"⚠️ SENTIMENT: Error guardando cache: {e}")
+        logger.warning(f"⚠️ SENTIMENT: Error guardando cache BERT: {e}")
+        return False  # Return failure flag
 
 # =========================
 # DESCARGA DE DATOS
 # =========================
 async def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], limit=500):
     logger.info(f"🔄 SENTIMENT: Iniciando descarga de Reddit - Subreddits: {subreddits}, Limit: {limit}")
+
+    # ✨ CRITICAL: Only download reddit when BERT cache is expired
+    cached_score = get_cached_sentiment_score(max_age_hours=6.0)
+
+    if cached_score is not None:
+        logger.info(f"✅ BERT cache still valid (score: {cached_score:.3f}) - No reddit download needed")
+        return _generate_synthetic_reddit_data()  ## Return empty/synthetic to avoid cache loading loop
 
     if not (REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT):
         logger.warning("⚠️ SENTIMENT: Reddit API keys no configuradas - Usando datos sintéticos de respaldo")
@@ -166,36 +179,33 @@ async def download_reddit(subreddits=["CryptoCurrency", "Bitcoin", "Ethereum"], 
     return pd.DataFrame(posts)
 
 def _generate_synthetic_reddit_data(num_posts=50):
-    """Genera datos de Reddit sintéticos cuando las APIs fallan"""
-    logger.info(f"🎭 SENTIMENT: Generando {num_posts} posts de Reddit sintéticos")
+    """Genera datos de Reddit sintéticos FUERA DE LÍNEA cuando las APIs fallan - EQUILIBRADOS PARA EVITAR SESGO POSITIVO"""
+    logger.info(f"🎭 SENTIMENT: Generando {num_posts} posts de Reddit sintéticos equilibrados (fuera de línea)")
 
-    # Posts de ejemplo con sentimiento variado
-    synthetic_posts = [
-        {
-            "date": (END_DATE - timedelta(hours=i)),
-            "text": "Bitcoin is mooning! Institutional adoption is accelerating 🚀🚀🚀"
-        } for i in range(num_posts//5)
-    ] + [
-        {
-            "date": (END_DATE - timedelta(hours=i)),
-            "text": "ETH 2.0 upgrade looks promising, staking rewards are amazing"
-        } for i in range(num_posts//5)
-    ] + [
+    # Distribución realista basada en análisis de sentimiento histórico crypto (50% neutral, 25% positivo, 25% negativo)
+    neutral_posts = [
         {
             "date": (END_DATE - timedelta(hours=i)),
             "text": "Crypto market is volatile but the technology is solid"
-        } for i in range(num_posts//5)
-    ] + [
+        } for i in range(num_posts//2)
+    ]
+
+    positive_posts = [
+        {
+            "date": (END_DATE - timedelta(hours=i)),
+            "text": "Some institutional adoption happening, cautiously optimistic about BTC fundamentals"
+        } for i in range(num_posts//4)
+    ]
+
+    negative_posts = [
         {
             "date": (END_DATE - timedelta(hours=i)),
             "text": "Concerned about the recent dip, is this the beginning of a correction?"
-        } for i in range(num_posts//5)
-    ] + [
-        {
-            "date": (END_DATE - timedelta(hours=i)),
-            "text": "Just HODLing through the volatility, diamond hands 💎🙌"
-        } for i in range(num_posts - 4*(num_posts//5))
+        } for i in range(num_posts//4)
     ]
+
+    # Combinar posts equitativamente
+    synthetic_posts = neutral_posts[:num_posts//4] + positive_posts[:num_posts//4] + negative_posts[:num_posts//4] + neutral_posts[num_posts//4:num_posts//2]
 
     # Añadir más variación
     import random
@@ -225,115 +235,136 @@ def _generate_synthetic_reddit_data(num_posts=50):
 def download_news(query="crypto OR bitcoin OR ethereum OR blockchain"):
     logger.info(f"📰 SENTIMENT: Iniciando descarga de noticias - Query: '{query}'")
 
+    # ✨ CRITICAL: Only download news when BERT cache is expired
+    cached_score = get_cached_sentiment_score(max_age_hours=6.0)
+
+    if cached_score is not None:
+        logger.info(f"✅ BERT cache still valid (score: {cached_score:.3f}) - No news download needed")
+        return _generate_synthetic_news_data()  ## Return empty/synthetic to avoid cache loading loop
+
     if not NEWS_API_KEY:
         logger.warning("⚠️ SENTIMENT: NEWS_API_KEY no configurada - Usando datos sintéticos de respaldo")
         return _generate_synthetic_news_data()
 
     logger.info("🔑 SENTIMENT: News API key configurada - Iniciando descarga")
 
-    all_articles = []
-    total_articles = 0
-    current_start = START_DATE
+    # 🛠️ Rate limiting fix: Simpler approach - fetch last 24 hours with one request, higher pageSize
+    START_DATE_LIMITED = END_DATE - timedelta(days=1)  # Last 24 hours only
+    logger.info(f"📅 SENTIMENT: Descargando noticias desde {START_DATE_LIMITED.date()} hasta {END_DATE.date()}")
 
-    # 🛠️ RATE LIMITING: Limitar a los últimos 3 días para backtesting (en lugar de 7 días)
-    START_DATE_LIMITED = END_DATE - timedelta(days=3)
-    current_start = max(current_start, START_DATE_LIMITED)
+    url = (
+        f"https://newsapi.org/v2/everything?q={query}&language=en"
+        f"&from={START_DATE_LIMITED.date()}&to={END_DATE.date()}"
+        f"&sortBy=publishedAt&pageSize=50&apiKey={NEWS_API_KEY}"
+    )
 
-    logger.info(f"📅 SENTIMENT: Descargando noticias desde {current_start.date()} hasta {END_DATE.date()}")
+    max_retries = 3
+    retry_delay = 5  # Increased retry delay
 
-    consecutive_failures = 0
-    max_consecutive_failures = 3
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"🔄 SENTIMENT: Attempt {attempt+1}/{max_retries} - Requesting news data...")
 
-    while current_start < END_DATE:
-        current_end = min(current_start + timedelta(days=1), END_DATE)  # Un día a la vez para mejor control
+            import time
+            if attempt > 0:
+                # Longer delay on retries
+                wait_time = retry_delay * (2 ** attempt)
+                logger.warning(f"⚠️ SENTIMENT: Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
 
-        logger.debug(f"🕐 SENTIMENT: Descargando período {current_start.date()} - {current_end.date()}")
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
 
-        url = (
-            f"https://newsapi.org/v2/everything?q={query}&language=en"
-            f"&from={current_start.date()}&to={current_end.date()}"
-            f"&sortBy=publishedAt&pageSize=30&apiKey={NEWS_API_KEY}"  # Reducir a 30 artículos por día
-        )
+            data = response.json()
 
-        # 🛠️ RATE LIMITING: Agregar delay entre requests para evitar 429 errors
-        import time
-        time.sleep(1.5)  # 1.5 segundos entre requests (NewsAPI free tier permite ~1 request/segundo)
+            if "articles" in data and data["articles"]:
+                all_articles = [{
+                    "date": a["publishedAt"],
+                    "text": a.get("title","") + " " + str(a.get("content",""))
+                } for a in data["articles"]]
 
-        max_retries = 3
-        retry_delay = 2
-
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(url, timeout=15)  # Aumentar timeout a 15 segundos
-                response.raise_for_status()  # Levantar excepción para códigos de error HTTP
-
-                data = response.json()
-
-                if "articles" in data:
-                    articles_in_period = len(data["articles"])
-                    all_articles.extend([{
-                        "date": a["publishedAt"],
-                        "text": a.get("title","") + " " + str(a.get("content",""))
-                    } for a in data["articles"]])
-
-                    total_articles += articles_in_period
-                    logger.debug(f"✅ SENTIMENT: {current_start.date()} - {articles_in_period} artículos")
-                    consecutive_failures = 0  # Reset counter on success
+                total_articles = len(all_articles)
+                logger.info(f"✅ SENTIMENT: Successfully downloaded {total_articles} articles")
+                return pd.DataFrame(all_articles)
+            else:
+                logger.warning("⚠️ SENTIMENT: No articles found in response")
+                if attempt < max_retries - 1:
+                    continue
                 else:
-                    logger.warning(f"⚠️ SENTIMENT: No se encontraron artículos para {current_start.date()}")
-
-                break  # Salir del loop de reintentos si fue exitoso
-
-            except requests.exceptions.HTTPError as e:
-                if response.status_code == 429:  # Too Many Requests
-                    consecutive_failures += 1
-                    if attempt < max_retries - 1 and consecutive_failures < max_consecutive_failures:
-                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
-                        logger.warning(f"⚠️ SENTIMENT: Rate limit alcanzado, esperando {wait_time}s antes de reintentar...")
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        logger.error(f"❌ SENTIMENT: Rate limit persistente, saltando día {current_start.date()}")
-                        break
-                else:
-                    logger.error(f"❌ SENTIMENT: Error HTTP {response.status_code} descargando noticias {current_start.date()}: {e}")
-                    consecutive_failures += 1
                     break
 
-            except requests.exceptions.RequestException as e:
-                consecutive_failures += 1
-                if attempt < max_retries - 1 and consecutive_failures < max_consecutive_failures:
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 429:  # Too Many Requests
+                if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)
-                    logger.warning(f"⚠️ SENTIMENT: Error de conexión, reintentando en {wait_time}s... ({e})")
+                    logger.warning(f"⚠️ SENTIMENT: Rate limit reached, waiting {wait_time}s...")
                     time.sleep(wait_time)
                     continue
                 else:
-                    logger.error(f"❌ SENTIMENT: Error persistente descargando noticias {current_start.date()}: {e}")
+                    logger.warning("❌ SENTIMENT: Rate limit persists, using synthetic data")
+                    break
+            else:
+                logger.error(f"❌ SENTIMENT: HTTP error {response.status_code}: {e}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
                     break
 
-            except Exception as e:
-                logger.error(f"❌ SENTIMENT: Error procesando noticias {current_start.date()}: {e}")
-                consecutive_failures += 1
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"⚠️ SENTIMENT: Connection error: {e}")
+            if attempt < max_retries - 1:
+                continue
+            else:
+                break
+        except Exception as e:
+            logger.error(f"❌ SENTIMENT: Unexpected error: {e}")
+            if attempt < max_retries - 1:
+                continue
+            else:
                 break
 
-        # 🛠️ FALLBACK: Si demasiados fallos consecutivos, usar datos sintéticos
-        if consecutive_failures >= max_consecutive_failures:
-            logger.warning(f"🚨 SENTIMENT: Demasiados fallos consecutivos ({consecutive_failures}), usando datos sintéticos de respaldo")
-            synthetic_df = _generate_synthetic_news_data()
-            logger.info(f"📊 SENTIMENT: Datos sintéticos generados: {len(synthetic_df)} artículos")
-            return synthetic_df
+    # Fallback to LAST REAL CACHED DATA first, then synthetic data
+    logger.warning("🚨 SENTIMENT: News API failed after retries, checking for cached data...")
 
-        current_start = current_end + timedelta(days=1)
+    # Try to load cached data from previous successful downloads
+    try:
+        # Look for files that might contain cached news data
+        import glob
+        import os
 
-    # 🛠️ FALLBACK: Si no se obtuvieron artículos, generar datos sintéticos
-    if total_articles == 0:
-        logger.warning("⚠️ SENTIMENT: No se obtuvieron artículos de News API, usando datos sintéticos de respaldo")
-        synthetic_df = _generate_synthetic_news_data()
-        logger.info(f"📊 SENTIMENT: Datos sintéticos generados: {len(synthetic_df)} artículos")
-        return synthetic_df
+        news_cache_files = [
+            os.path.join(DATA_DIR, f"sentiment_l2_{pd.Timestamp.now().date()}.json"),
+            os.path.join(DATA_DIR, f"sentiment_l2_{(pd.Timestamp.now() - pd.Timedelta(days=1)).date()}.json")
+        ]
 
-    logger.info(f"📊 SENTIMENT: News total descargado: {total_articles} artículos")
-    return pd.DataFrame(all_articles)
+        for cache_file in news_cache_files:
+            if os.path.exists(cache_file):
+                try:
+                    # Load JSON array (not JSON Lines)
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cached_data = json.load(f)
+
+                    if cached_data and isinstance(cached_data, list) and len(cached_data) > 0:
+                        cached_df = pd.DataFrame(cached_data)
+                        # Filter to keep only text fields that look like news articles
+                        cached_df = cached_df[cached_df['text'].str.len() > 100]  # Longer texts are likely real news
+
+                        if len(cached_df) >= 5:  # At least some articles
+                            logger.info(f"✅ SENTIMENT: Using cached news data ({len(cached_df)} articles) from {cache_file}")
+                            return cached_df.head(num_articles//2).rename(columns={'date': 'date', 'text': 'text'})  # Limit to half the requested amount
+
+                except Exception as cache_error:
+                    logger.debug(f"Cached file {cache_file} not usable: {cache_error}")
+                    continue
+
+    except Exception as cache_check_error:
+        logger.debug(f"Error checking cache: {cache_check_error}")
+
+    # Final fallback to synthetic data if no cached data found
+    logger.warning("❌ SENTIMENT: No cached data available, using synthetic data")
+    synthetic_df = _generate_synthetic_news_data()
+    logger.info(f"📊 SENTIMENT: Synthetic data generated: {len(synthetic_df)} articles")
+    return synthetic_df
 
 def _generate_synthetic_news_data(num_articles=20):
     """Genera datos de noticias sintéticos cuando las APIs fallan"""
@@ -381,6 +412,73 @@ def _generate_synthetic_news_data(num_articles=20):
     logger.debug(f"🎭 SENTIMENT: Artículos sintéticos generados con variación de sentimiento")
     return pd.DataFrame(synthetic_articles)
 
+def get_cached_sentiment_score(max_age_hours=6):
+    """Get cached sentiment score if available and fresh (< max_age_hours)"""
+    try:
+        if not os.path.exists(SENTIMENT_BERT_CACHE_FILE):
+            logger.warning(f"⚠️ SENTIMENT: BERT cache file does not exist: {SENTIMENT_BERT_CACHE_FILE}")
+            return None
+
+        with open(SENTIMENT_BERT_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+
+        # Check timestamp
+        cache_timestamp = cache_data.get('timestamp')
+        if not cache_timestamp:
+            logger.warning("⚠️ SENTIMENT: BERT cache missing timestamp")
+            return None
+
+        cache_time = datetime.fromisoformat(cache_timestamp)
+        current_time = datetime.now()
+        age_seconds = (current_time - cache_time).total_seconds()
+        age_hours = age_seconds / 3600
+
+        if age_seconds > (max_age_hours * 3600):
+            logger.info(f"📅 SENTIMENT: BERT cache expired ({age_hours:.1f}h > {max_age_hours}h)")
+            return None
+
+        sentiment_score = cache_data.get('sentiment_score')
+        if sentiment_score is None:
+            logger.warning("⚠️ SENTIMENT: BERT cache missing sentiment_score")
+            return None
+
+        logger.info(f"✅ SENTIMENT: BERT cache fresh ({age_hours:.1f}h < {max_age_hours}h), returning cached score: {sentiment_score:.4f}")
+        return sentiment_score
+
+    except Exception as e:
+        logger.warning(f"⚠️ SENTIMENT: Error checking cached sentiment score: {e}")
+        return None
+
+def should_use_full_bert_cache(text_count):
+    """
+    Check if full BERT cache should be used based on count matching
+    This is more strict than sentiment score cache - requires exact count match
+    """
+    try:
+        if not os.path.exists(SENTIMENT_BERT_CACHE_FILE):
+            return False
+
+        with open(SENTIMENT_BERT_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache_data = json.load(f)
+
+        # For full BERT cache, we need exact count match AND fresh timestamp
+        cache_timestamp = cache_data.get('timestamp')
+        if not cache_timestamp:
+            return False
+
+        cache_time = datetime.fromisoformat(cache_timestamp)
+        current_time = datetime.now()
+        age_seconds = (current_time - cache_time).total_seconds()
+        if age_seconds > (SENTIMENT_BERT_CACHE_DURATION):
+            return False
+
+        cached_count = cache_data.get('texts_count', 0)
+        return cached_count == text_count
+
+    except Exception as e:
+        logger.debug(f"⚠️ Error checking full BERT cache usability: {e}")
+        return False
+
 # =========================
 # LIMPIEZA DE RECURSOS
 # =========================
@@ -421,7 +519,7 @@ atexit.register(cleanup_http_resources)
 # =========================
 # INFERENCIA
 # =========================
-def infer_sentiment(texts, batch_size=16):
+def infer_sentiment(texts, batch_size=16, force_save=False):
     logger.info(f"🧠 SENTIMENT: Iniciando inferencia de sentimiento - {len(texts)} textos, batch_size={batch_size}")
 
     if not texts or len(texts) == 0:
@@ -433,30 +531,49 @@ def infer_sentiment(texts, batch_size=16):
     if len(valid_texts) != len(texts):
         logger.info(f"🧹 SENTIMENT: Filtrados {len(texts) - len(valid_texts)} textos vacíos, quedan {len(valid_texts)}")
 
-    # Intentar usar cache si hay suficientes textos
-    if len(valid_texts) >= 10:  # Solo usar cache si hay al menos 10 textos
-        cache_data = _load_sentiment_cache()
-        if cache_data:
-            logger.info("✅ SENTIMENT: Usando datos de cache para inferencia")
-            sentiment_score = cache_data.get('sentiment_score', 0.5)
-            # Convertir score único a probabilidades por texto (simplificado)
-            # En un sistema real, guardaríamos las probabilidades individuales
-            neutral_prob = [0.33, 0.34, 0.33]  # Probabilidades neutras por defecto
-            if sentiment_score > 0.6:
-                bullish_prob = [0.1, 0.8, 0.1]  # Más bullish
-            elif sentiment_score < 0.4:
-                bearish_prob = [0.8, 0.1, 0.1]  # Más bearish
-            else:
-                bullish_prob = neutral_prob
+    # 🔄 FIXED CACHE LOGIC: Check cache but prioritize fresh data when available
+    if not force_save and len(valid_texts) <= 20:  # Only use cache optimization for small datasets
+        # Try full cache first (exact match - for development/debugging)
+        bert_cache_data = _load_sentiment_bert_cache()
+        if bert_cache_data:
+            cached_results = bert_cache_data.get('sentiment_results', [])
+            cached_count = bert_cache_data.get('texts_count', 0)
 
-            results = [bullish_prob] * len(valid_texts)
-            logger.info(f"🎯 SENTIMENT: Cache usado - score: {sentiment_score:.3f}, textos: {len(valid_texts)}")
+            # Only use full cache if EXACT count match (same dataset)
+            if cached_results and len(cached_results) == len(valid_texts) and cached_count == len(valid_texts):
+                logger.info("✅ SENTIMENT: Usando cache BERT completo - mismo dataset detectado!")
+                results = cached_results.copy()
+                sentiment_score = bert_cache_data.get('sentiment_score', 0.5)
+                logger.info(f"🎯 SENTIMENT: Cache completo usado - score: {sentiment_score:.3f}, {len(results)} textos procesados instantáneamente")
+                return results
+
+        # 🔄 Only use sentiment score cache for VERY small datasets to avoid blocking fresh analysis
+        recent_sentiment_score = get_cached_sentiment_score(max_age_hours=6.0)  # Back to 6 hours
+        if recent_sentiment_score is not None and len(valid_texts) <= 10:  # Only for tiny datasets
+            logger.info(f"🎯 SENTIMENT: Reciente análisis de sentimiento detectado (score: {recent_sentiment_score:.3f}) - Using synthetic for small dataset")
+
+            # Return synthetic results based on recent sentiment score
+            neutral_probs = [0.33, 0.34, 0.33]  # Neutral baseline
+            if recent_sentiment_score > 0.5:
+                positive_shift = (recent_sentiment_score - 0.5) * 0.4
+                synthetic_probs = [0.33 - positive_shift/2, 0.34 - positive_shift/4, 0.33 + positive_shift]
+            elif recent_sentiment_score < 0.5:
+                negative_shift = (0.5 - recent_sentiment_score) * 0.4
+                synthetic_probs = [0.33 + negative_shift, 0.34 - negative_shift/4, 0.33 - negative_shift/2]
+            else:
+                synthetic_probs = neutral_probs.copy()
+
+            results = [synthetic_probs] * len(valid_texts)
+            logger.info(f"🧠 SENTIMENT: Generados {len(results)} resultados sintéticos para dataset pequeño")
             return results
 
-    results = []
-    total_batches = (len(valid_texts) + batch_size - 1) // batch_size  # Calcular número total de batches
+        logger.debug(f"⚠️ Cache no usable o dataset grande - procediendo con análisis completo de {len(valid_texts)} textos")
 
-    logger.info(f"📊 SENTIMENT: Procesando {total_batches} batches de inferencia...")
+    # Full processing (only when cache is expired/missing or force_save=True)
+    results = []
+    total_batches = (len(valid_texts) + batch_size - 1) // batch_size
+
+    logger.info(f"📊 SENTIMENT: Procesando {total_batches} batches de inferencia completa...")
 
     for batch_idx, i in enumerate(range(0, len(valid_texts), batch_size), 1):
         batch = valid_texts[i:i+batch_size]
@@ -471,9 +588,31 @@ def infer_sentiment(texts, batch_size=16):
             # Inferencia
             with torch.no_grad():
                 outputs = model(**encodings)
-                probs = torch.softmax(outputs.logits, dim=1).tolist()
+                raw_probs = torch.softmax(outputs.logits, dim=1).tolist()
 
-            results.extend(probs)
+                # Convert to 3-class format (negative, neutral, positive)
+                processed_probs = []
+                for prob in raw_probs:
+                    if len(prob) == 2:  # Binary model (negative, positive)
+                        neg_prob, pos_prob = prob[0], prob[1]
+                        # Assume neutral is split between them when close to 0.5
+                        if abs(neg_prob - 0.5) < 0.1 and abs(pos_prob - 0.5) < 0.1:
+                            # Very neutral
+                            processed_probs.append([neg_prob, 0.8, pos_prob])  # High neutral
+                        elif pos_prob > neg_prob:
+                            # Mostly positive
+                            neutral = min(pos_prob, neg_prob) * 0.5
+                            processed_probs.append([neg_prob - neutral/2, neutral, pos_prob + neutral/2])
+                        else:
+                            # Mostly negative
+                            neutral = min(pos_prob, neg_prob) * 0.5
+                            processed_probs.append([neg_prob + neutral/2, neutral, pos_prob - neutral/2])
+                    elif len(prob) == 3:  # Already 3-class
+                        processed_probs.append(prob)
+                    else:  # Unexpected format, use neutral
+                        processed_probs.append([0.33, 0.34, 0.33])
+
+                results.extend(processed_probs)
 
             # Log progreso cada 5 batches
             if batch_idx % 5 == 0 or batch_idx == total_batches:
@@ -484,47 +623,110 @@ def infer_sentiment(texts, batch_size=16):
             # Agregar probabilidades neutras para textos fallidos
             results.extend([[0.33, 0.34, 0.33]] * batch_size_actual)
 
-    # Calcular y guardar score promedio en cache
+    # Calcular score promedio y guardar cache BERT completa
     if results:
         try:
             # Calcular score promedio (simplificado: clase 2 - clase 0)
             avg_sentiment = sum((probs[2] - probs[0]) for probs in results) / len(results)
             # Normalizar a rango 0-1
             sentiment_score = (avg_sentiment + 1) / 2
-            _save_sentiment_cache(sentiment_score, len(valid_texts))
-            logger.debug(f"💾 SENTIMENT: Score promedio guardado en cache: {sentiment_score:.3f}")
-        except Exception as e:
-            logger.debug(f"⚠️ SENTIMENT: Error calculando score para cache: {e}")
 
-    logger.info(f"🎯 SENTIMENT: Inferencia completada - {len(results)} resultados generados")
+            # CRITICAL FIX: Guardar cache inmediatamente para asegurar persistencia
+            success = _save_sentiment_bert_cache(results, sentiment_score, len(valid_texts))
+            if success:
+                logger.info(f"✅ BERT cache saved: score={sentiment_score:.4f}, texts={len(valid_texts)}")
+            else:
+                logger.error("❌ Failed to save BERT cache!")
+
+        except Exception as e:
+            logger.debug(f"⚠️ SENTIMENT: Error guardando cache BERT completa: {e}")
+
+    logger.info(f"🎯 SENTIMENT: Inferencia completa finalizada - {len(results)} resultados generados")
     return results
+
+def save_sentiment_results(df_reddit, df_news):
+    """Save sentiment analysis results given downloaded data"""
+    logger.info("💾 SENTIMENT: Saving sentiment analysis results...")
+
+    try:
+        # Combinar
+        df_all = pd.concat([df_reddit, df_news], ignore_index=True)
+        df_all.dropna(subset=['text'], inplace=True)
+
+        if df_all.empty:
+            logger.warning("⚠️ SENTIMENT: No data to save")
+            return None
+
+        # Inferencia
+        texts_list = df_all['text'].tolist()
+        sentiment_results = infer_sentiment(texts_list)
+
+        df_all['sentiment_probs'] = sentiment_results
+        df_all['predicted_class'] = df_all['sentiment_probs'].apply(lambda x: int(np.argmax(x)) if x else 1)
+
+        # Guardar CSV de inferencia
+        csv_path = os.path.join(DATA_DIR, f"sentiment_inference_{END_DATE.date()}.csv")
+        df_all.to_csv(csv_path, index=False)
+        logger.info(f"✅ CSV de inferencia guardado en '{csv_path}'")
+
+        # Guardar JSON para L2
+        json_path = os.path.join(DATA_DIR, f"sentiment_l2_{END_DATE.date()}.json")
+        # Convert DataFrame to dict, converting dates to ISO format strings
+        json_data = df_all.to_dict('records')
+        for record in json_data:
+            if 'date' in record and hasattr(record['date'], 'isoformat'):
+                record['date'] = record['date'].isoformat()
+
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"✅ JSON listo para L2 guardado en '{json_path}'")
+
+        # Also save a summary file
+        summary_path = os.path.join(DATA_DIR, f"sentiment_summary_{END_DATE.date()}.json")
+        summary = {
+            "total_texts": len(df_all),
+            "execution_date": END_DATE.isoformat(),
+            "csv_file": csv_path,
+            "json_file": json_path,
+            "sentiment_distribution": df_all['predicted_class'].value_counts().to_dict()
+        }
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2)
+        logger.info(f"✅ Resumen guardado en '{summary_path}'")
+
+        return df_all
+
+    except Exception as e:
+        logger.error(f"❌ SENTIMENT: Error saving sentiment results: {e}")
+        raise
+
+async def run_sentiment_analysis_and_save_async():
+    """Run complete sentiment analysis and save results to files"""
+    logger.info("🚀 SENTIMENT: Running complete sentiment analysis with file saving...")
+
+    try:
+        print("⏳ Descargando datos de sentimiento...")
+        df_reddit = await download_reddit()
+        df_news = download_news()
+
+        result = save_sentiment_results(df_reddit, df_news)
+        print(f"✅ SENTIMENT: Complete analysis completed and saved: {len(result) if result is not None else 0} texts processed")
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ SENTIMENT: Error in complete sentiment analysis: {e}")
+        raise
+    else:
+        logger.info("✅ SENTIMENT: Analysis completed successfully")
+
+def run_sentiment_analysis_and_save():
+    """Sync wrapper for the async sentiment analysis"""
+    import asyncio
+    return asyncio.run(run_sentiment_analysis_and_save_async())
 
 # =========================
 # MAIN
 # =========================
 if __name__ == "__main__":
-    print("⏳ Descargando datos de sentimiento...")
-    df_reddit = download_reddit()
-    df_news = download_news()
-
-    # Combinar
-    df_all = pd.concat([df_reddit, df_news], ignore_index=True)
-    df_all.dropna(subset=['text'], inplace=True)
-    print(f"✅ Total de registros: {len(df_all)}")
-
-    # Inferencia
-    print("🧠 Ejecutando inferencia de sentimiento...")
-    df_all['sentiment_probs'] = infer_sentiment(df_all['text'].tolist())
-    df_all['predicted_class'] = df_all['sentiment_probs'].apply(lambda x: int(np.argmax(x)))
-
-    # Guardar CSV de inferencia
-    csv_path = os.path.join(DATA_DIR, f"sentiment_inference_{END_DATE.date()}.csv")
-    df_all.to_csv(csv_path, index=False)
-    print(f"✅ CSV de inferencia guardado en '{csv_path}'")
-
-    # Guardar JSON para L2
-    json_path = os.path.join(DATA_DIR, f"sentiment_l2_{END_DATE.date()}.json")
-    df_all.to_dict('records')
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(df_all.to_dict('records'), f, ensure_ascii=False, indent=2)
-    print(f"✅ JSON listo para L2 guardado en '{json_path}'")
+    # Run the async sentiment analysis
+    run_sentiment_analysis_and_save()

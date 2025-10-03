@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 
 from core.logging import logger
 from .signal_composer import SignalComposer
-from .signal_generator import L2TacticProcessor
+from .tactical_signal_processor import L2TacticProcessor
 from .position_sizer import PositionSizerManager
 from .technical.multi_timeframe import resample_and_consensus
 from .ensemble import VotingEnsemble, BlenderEnsemble

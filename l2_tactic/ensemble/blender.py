@@ -32,7 +32,7 @@ class BlenderEnsemble:
         self.strategies = {
             'technical': 0.4,      # Peso para señales técnicas
             'finrl_ppo': 0.4,      # Peso para modelo FinRL PPO
-            'mean_reversion': 0.2   # Peso para mean reversion
+            # 'mean_reversion': 0.2   # DISABLED: Pure trend-following - mean reversion removed
         }
         logger.info(f"[BlenderEnsemble] inicializado: {self.strategies}")
         logger.info(

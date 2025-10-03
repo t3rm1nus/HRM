@@ -238,7 +238,7 @@ class L2Config:
     pattern_weight: float = 0.2
 
     # --- Thresholds para validar señal compuesta ---
-    min_signal_confidence: float = 0.1  # Lowered from 0.3 to allow wrapper signals through
+    min_signal_confidence: float = 0.70  # TEST A: Increased to 0.70 for higher quality signals
    
     min_signal_strength: float = 0.05
 

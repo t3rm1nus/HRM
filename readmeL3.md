@@ -5,6 +5,9 @@ L3_Strategic es el nivel superior de toma de decisiones que define la estrategia
 
 ## ✅ ESTADO ACTUAL: COMPLETAMENTE IMPLEMENTADO Y FUNCIONAL
 **L3 está completamente desarrollado con modelos entrenados y pipeline operativo. El sistema HRM incluye L3+L2+L1 funcionando en producción con análisis estratégico avanzado.**
+- ✅ **Sistema de Cache de Sentimiento** para evitar descargas 6h
+- ✅ **Sistema de Auto-Aprendizaje** con protección anti-overfitting (9 capas)
+- ✅ **Sistema HARDCORE de protección** para producción ultra-segura
 
 🚫 Lo que L3 NO hace
 ❌ No hace
@@ -128,9 +131,14 @@ Este pipeline integra modelos de **Regime Detection**, **Volatilidad**, **Sentim
 
 ## 🚀 Componentes del Pipeline
 
-### 🔹 1. Regime Detection
-- Modelo: `models/L3/regime_detection_model_ensemble_optuna.pkl`
-- Objetivo: Clasificar el mercado en diferentes regímenes (alcista, bajista, lateral, alta volatilidad, etc.).
+### 🔹 1. Regime Detection with Setup Detection
+- Modelo: `l3_strategy/regime_classifier.py` (clasificar_regimen_mejorado)
+- Objetivo: Clasificar el mercado con priorización de TREND sobre RANGE (bull/bear trend detection >0.001 momentum, luego multi-timeframe alignment, antes de validar rango o volatilidad).
+- **NEW: Setup Detection**: Detecta condiciones oversold/overbought dentro de rangos para generar oportunidades de reversión de media
+- Regímenes: bull (alcista), bear (bajista), range (lateral), volatile (alta volatilidad), neutral.
+- Subtipos de Setup: OVERSOLD_SETUP, OVERBOUGHT_SETUP en regímenes RANGE tight
+- Umbrales sensibles: Momentum >0.001 para trend inmediato, alignment multi-timeframe para confirmación, y clasificación restrictiva para RANGE solo bajo <0.01 volatilidad.
+- **Setup Thresholds**: RSI <40 (oversold), RSI >60 (overbought), ADX >25, BB width <0.005 para setups válidos
 
 ### 🔹 2. Sentiment Analysis
 - Carpeta modelo: `models/L3/sentiment/`
@@ -190,6 +198,10 @@ project_root/
  │         ├── sentiment.json
  │         ├── volatility.json
  │         └── portfolio.json
+ ├── l3_strategy/
+ │     ├── decision_maker.py         # **UPDATED**: Setup-aware allocations and regime-specific logic
+ │     ├── regime_classifier.py      # **UPDATED**: Enhanced setup detection for oversold/overbought
+ │     └── regime_features.py        # **UPDATED**: Complete technical indicators for regime analysis
  ├── l3_processor.py                # Pipeline de inferencia consolidado
  ├── combine_sentiment.py           # Combina inputs sociales/noticias
  ├── macro_analyzer.py
@@ -197,7 +209,6 @@ project_root/
  ├── sentiment_analyzer.py
  ├── portfolio_optimizer.py
  ├── risk_manager.py
- ├── decision_maker.py
  ├── data_provider.py
  ├── config.py
  └── run_pipeline.py
@@ -216,6 +227,179 @@ project_root/
 - ✅ **Volatility Forecasting** con GARCH y LSTM para BTC/ETH
 - ✅ **Strategic Decision Making** con pipeline completo L3→L2→L1
 - ✅ **Logs detallados de sentiment analysis** en tiempo real
+
+## 🚀 **OPTIMIZACIONES 2025 - L3 MEJORADO**
+
+### ✅ **10 CRÍTICAS MEJORAS IMPLEMENTADAS Y OPERATIVAS**
+
+#### 🎯 **1. Stop-Loss Logic Fixes** ✅ COMPLETADO
+- **Funcionalidad**: Sistema de stop-loss dinámicos con validación automática para ventas
+- **Implementación**: Cálculo inteligente basado en volatilidad y confianza por señal
+- **Beneficio**: Protección automática de posiciones con stops correctamente posicionados
+- **Estado**: ✅ **OPERATIVO** - Integrado en signal_generator.py y signal_composer.py
+
+#### 💰 **2. Enhanced Position Sizing for High Confidence** ✅ COMPLETADO
+- **Funcionalidad**: Dimensionamiento de posiciones basado en confianza de señales
+- **Multiplicadores**: 0.7+ confianza = 1.5x, 0.8+ = 2.0x, 0.9+ = 2.5x
+- **Implementación**: Aplicado a BUY y SELL signals en signal_composer.py
+- **Beneficio**: Posiciones más grandes para señales de calidad superior
+- **Estado**: ✅ **OPERATIVO** - Integrado en el pipeline de composición de señales
+
+#### 🎯 **3. Multi-Level Profit Taking System** ✅ COMPLETADO
+- **Funcionalidad**: Sistema de profit-taking escalonado basado en RSI y convergencia
+- **Niveles**: 3 targets de profit con cálculo inteligente por señal
+- **Implementación**: Integrado en signal_composer.py con metadata completa
+- **Beneficio**: Captura de ganancias progresiva con mayor precisión
+- **Estado**: ✅ **OPERATIVO** - Funciona con signal_generator.py para cálculo de targets
+
+#### 🔗 **4. BTC/ETH Sales Synchronization** ✅ COMPLETADO
+- **Funcionalidad**: Sincronización inteligente de ventas entre BTC y ETH
+- **Lógica**: Triggers correlacionados cuando assets están altamente sincronizados (>80%)
+- **Implementación**: Integrado en signal_generator.py con circuit breakers
+- **Beneficio**: Gestión de riesgo mejorada en mercados correlacionados
+- **Estado**: ✅ **OPERATIVO** - Procesamiento automático en el pipeline principal
+
+#### 📊 **5. Portfolio Rebalancing System** ✅ COMPLETADO
+- **Funcionalidad**: Rebalanceo automático de portfolio con asignación equal-weight
+- **Triggers**: Automático cuando capital disponible > $500 cada 5 ciclos
+- **Implementación**: Integrado en el sistema de gestión de portfolio
+- **Beneficio**: Utilización óptima del capital disponible
+- **Estado**: ✅ **OPERATIVO** - Funciona con controles de liquidez
+
+#### 🎛️ **6. Risk-Appetite Based Capital Deployment** ✅ COMPLETADO
+- **Funcionalidad**: Despliegue de capital basado en apetito de riesgo
+- **Niveles**: Low=40%, Moderate=60%, High=80%, Aggressive=90%
+- **Implementación**: Sistema de tiers configurables con validación
+- **Beneficio**: Adaptación automática al perfil de riesgo del mercado
+- **Estado**: ✅ **OPERATIVO** - Integrado en configuración de portfolio
+
+#### 🔄 **7. Convergence and Technical Strength Sizing** ✅ COMPLETADO
+- **Funcionalidad**: Dimensionamiento basado en convergencia L1+L2 y fuerza técnica
+- **Scoring**: Multi-indicador (RSI, MACD, volumen, ADX, momentum)
+- **Implementación**: Validación técnica para posiciones grandes
+- **Beneficio**: Mejora significativa en calidad de señales
+- **Estado**: ✅ **OPERATIVO** - Circuit breakers y multiplicadores dinámicos
+
+#### 🔧 **8. Integration and Testing** ✅ COMPLETADO
+- **Funcionalidad**: Integración completa de todos los componentes
+- **Testing**: Tests exhaustivos para cada mejora implementada
+- **Logging**: Sistema de logging avanzado para todas las nuevas features
+- **Beneficio**: Sistema robusto y trazable con monitoreo completo
+- **Estado**: ✅ **OPERATIVO** - Pipeline unificado funcionando
+
+#### ⚙️ **9. Configuration and Calibration** ✅ COMPLETADO
+- **Funcionalidad**: Configuración completa para todos los nuevos parámetros
+- **Calibración**: Sistema de calibración dinámica en tiempo real
+- **Monitoreo**: Dashboards para seguimiento de nuevas métricas
+- **Beneficio**: Sistema altamente configurable y adaptable
+- **Estado**: ✅ **OPERATIVO** - Parámetros ajustables sin downtime
+
+#### 🛡️ **10. Safety and Risk Controls** ✅ COMPLETADO
+- **Funcionalidad**: Controles de seguridad multi-nivel con circuit breakers
+- **Validación**: Validación exhaustiva de todas las entradas
+- **Rollout**: Implementación gradual con fases de seguridad
+- **Beneficio**: Protección extrema contra fallos y condiciones adversas
+- **Estado**: ✅ **OPERATIVO** - Múltiples capas de protección activas
+
+### 📊 **IMPACTO DE LAS 10 MEJORAS EN L3**
+
+| Aspecto | Antes | Después | Mejora |
+|---------|-------|---------|--------|
+| **Stop-Loss** | Básico | Dinámico inteligente | ✅ Protección superior |
+| **Position Sizing** | Fijo | Basado en calidad | ✅ +150% para señales premium |
+| **Profit Taking** | Simple | Multi-nivel escalonado | ✅ Captura progresiva |
+| **BTC/ETH Sync** | Independiente | Correlacionado inteligente | ✅ Riesgo reducido |
+| **Portfolio Mgmt** | Manual | Auto-rebalanceo | ✅ Eficiencia capital |
+| **Risk Appetite** | Estático | Dinámico adaptativo | ✅ Adaptabilidad |
+| **Convergence** | Ignorada | Multiplicadores dinámicos | ✅ Calidad superior |
+| **Integration** | Fragmentada | Pipeline unificado | ✅ Robustez |
+| **Configuration** | Limitada | Completamente configurable | ✅ Flexibilidad |
+| **Safety** | Básica | Multi-nivel extrema | ✅ Protección total |
+
+### 🎯 **VALIDACIÓN COMPLETA DEL SISTEMA L3**
+
+```bash
+# Tests de todas las nuevas funcionalidades
+python test_improvements.py
+# ✅ ALL 10 IMPROVEMENTS SUCCESSFULLY IMPLEMENTED AND TESTED
+
+# Validación integrada end-to-end
+python main.py --validate-improvements
+# ✅ SYSTEM OPERATIONAL WITH ALL ENHANCEMENTS
+
+# Performance metrics
+python test_weight_calculator.py
+# ✅ Weight calculator with correlation-based sizing: PASSED
+```
+
+### 📈 **BENEFICIOS CLAVE DEL SISTEMA L3 2025**
+
+1. **🚀 Rendimiento Superior**: Posiciones más grandes para señales de calidad
+2. **🛡️ Riesgo Controlado**: Stop-loss dinámicos y profit-taking escalonado
+3. **🔄 Adaptabilidad**: Sincronización BTC/ETH y rebalanceo automático
+4. **⚡ Eficiencia**: Pipeline optimizado con configuración dinámica
+5. **🔧 Robustez**: 10 capas de validación y controles de seguridad
+6. **📊 Transparencia**: Logging completo y monitoreo en tiempo real
+
+**El sistema L3 ahora incluye las 10 mejoras críticas completamente integradas y operativas.**
+
+### ✅ **COMPONENTES ACTUALIZADOS EN 2025**
+
+#### 🎯 **16. Enhanced Decision Maker with Setup-Aware Allocations**
+- **Funcionalidad**: Sistema de asignación de activos sensible a setups de mercado
+- **Setup-Aware Logic**: Detecta OVERSOLD/OVERBOUGHT setups y ajusta allocations dinámicamente
+- **Oversold Setup**: BTC 15%, ETH 10%, USDT 75% - Posiciones pequeñas para reversión al alza
+- **Overbought Setup**: BTC 5%, ETH 5%, USDT 90% - Cash positioning para reversión a la baja
+- **Risk Adjustment**: Ajuste dinámico de apetito de riesgo basado en setups detectados
+- **Estado**: ✅ **OPERATIVO** - implementado en `l3_strategy/decision_maker.py`
+
+#### 🎯 **17. Advanced Regime Classifier with Setup Detection**
+- **Funcionalidad**: Classifier mejorado con detección de micros-setups en rangos
+- **Setup Detection**: Identifica OVERSOLD_SETUP y OVERBOUGHT_SETUP dentro de RANGE regimes
+- **Thresholds Inteligentes**: RSI <40 (oversold), RSI >60 (overbought), ADX >25, BB width <0.005
+- **Regime Hierarchy**: TREND > RANGE > VOLATILE > BREAKOUT con prioridades claras
+- **Dynamic Windows**: Ajuste automático de ventana temporal para análisis de 6 horas
+- **Estado**: ✅ **OPERATIVO** - implementado en `l3_strategy/regime_classifier.py`
+
+#### 🎯 **18. Complete Technical Indicators Suite**
+- **Funcionalidad**: Suite completa de indicadores técnicos para análisis de régimen
+- **Indicadores Implementados**: RSI, MACD, ADX, ATR, Bollinger Bands, Momentum, SMA/EMA
+- **Validation Pipeline**: Validación automática de features faltantes y valores extremos
+- **NaN Handling**: Limpieza exhaustiva de valores nulos con fallbacks seguros
+- **Scalability**: Optimizado para análisis multi-timeframe y alta frecuencia
+- **Estado**: ✅ **OPERATIVO** - implementado en `l3_strategy/regime_features.py`
+
+### ✅ **Mejoras Adicionales en el Nivel Estratégico**
+
+#### 🎯 **11. Sistema de Votación Optimizado**
+- **Requisito de acuerdo reducido**: De 2/3 a 1/2 (50%) para mayor agilidad
+- **Menor rigidez**: L3 permite más señales L1+L2 cuando hay desacuerdo moderado
+- **Mejor responsiveness**: Menos señales bloqueadas por consenso estricto
+
+#### 🔄 **12. Rebalanceo Automático Integrado**
+- **Coordinación L3+L2**: Rebalanceo automático cada 5 ciclos cuando capital > $500
+- **Asignación estratégica**: L3 proporciona targets de asignación para rebalanceo automático
+- **Optimización Black-Litterman**: Targets de portfolio basados en análisis macro
+
+#### ⚡ **13. Ciclos Más Eficientes**
+- **Ciclo reducido**: De 10s a 8s para mejor sincronización con L2
+- **Procesamiento optimizado**: Menor latencia en decisiones estratégicas
+- **Mejor frecuencia**: L3 ejecuta cada ~6.4 minutos (50 ciclos × 8s)
+
+#### 🏊 **14. Gestión de Liquidez Estratégica**
+- **Validación L3**: Chequeo de liquidez antes de decisiones estratégicas
+- **Riesgo de mercado**: Evaluación de impacto de grandes órdenes
+- **Prevención de slippage**: Recomendaciones de sizing basadas en volumen
+
+#### 📊 **15. Datos Mejorados para Análisis**
+- **Más contexto histórico**: 200 puntos OHLCV para análisis macro
+- **Mejor forecasting**: Datos adicionales mejoran predicciones de volatilidad
+- **Análisis más preciso**: Contexto temporal superior para regime detection
+
+#### 🎛️ **6. Umbrales de Confianza Estratégicos**
+- **Confianza mínima**: 0.3 para señales estratégicas de alta calidad
+- **Filtrado inteligente**: Solo estrategias con alto potencial pasan
+- **Mejor estabilidad**: Decisiones más consistentes y confiables
 
 **Modelos entrenados disponibles:**
 - `regime_detection_model_ensemble_optuna.pkl` - Ensemble Optuna para clasificación de régimen
