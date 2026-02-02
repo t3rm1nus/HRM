@@ -205,6 +205,42 @@ class EnvironmentConfig:
         """Check if running in backtesting mode"""
         return self.mode == "backtest"
 
+# ============================================================================
+# HRM SIGNAL CONFIDENCE THRESHOLDS - REDUCED FOR MORE TRADING OPPORTUNITIES
+# ============================================================================
+
+# ❌ BEFORE (too restrictive - blocking signals)
+MIN_SIGNAL_CONFIDENCE_OLD = 0.50  # 50% minimum
+MIN_L2_CONFIDENCE_OLD = 0.60      # 60% for L2-only signals
+
+# ✅ AFTER (more permissive - allowing legitimate signals)
+MIN_SIGNAL_CONFIDENCE = 0.35      # 35% minimum (allows more L1/L2 signals)
+MIN_L2_CONFIDENCE = 0.40          # 40% for L2 signals (more flexible)
+
+# ============================================================================
+# SIGNAL VERIFICATION CONFIG - LESS RESTRICTIVE
+# ============================================================================
+SIGNAL_VERIFICATION_CONFIG = {
+    'min_confidence': 0.35,         # ✅ Reduced from 0.50
+    'min_l3_confidence': 0.45,      # ✅ Reduced from 0.55
+    'min_convergence': 0.30,        # ✅ Reduced from 0.40
+    'allow_hold_signals': True,     # ✅ Allow HOLD when L3 says BUY
+    'l3_override_threshold': 0.55   # ✅ L3 can force signals if > 55%
+}
+
+# ============================================================================
+# SIGNAL COMPOSER CONFIG - BALANCED WEIGHTS
+# ============================================================================
+SIGNAL_COMPOSER_CONFIG = {
+    'hold_confidence_boost': 0.15,  # ✅ Amplify HOLD confidence +15%
+    'l3_signal_weight': 0.60,       # ✅ Higher L3 weight (60%)
+    'l2_technical_weight': 0.40,    # ✅ Lower technical weight (40%)
+    'require_l1_l2_agreement': False # ✅ No L1+L2 agreement required
+}
+
+# Logging for confidence adjustments
+logger.info(f"✅ Confidence thresholds adjusted: min={MIN_SIGNAL_CONFIDENCE}, L2={MIN_L2_CONFIDENCE}")
+
 # Global configuration instance
 _config_instance = None
 

@@ -12,9 +12,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from l1_operational.models import Signal
-    from l1_operational.order_manager import order_manager
-    from l1_operational.bus_adapter import bus_adapter
+    from l1_operational.models import Signal, create_signal
+    from l1_operational.order_manager import OrderManager
     from l1_operational.config import RISK_LIMITS, PORTFOLIO_LIMITS
 except ImportError as e:
     print(f"❌ Error de importación: {e}")
@@ -30,29 +29,29 @@ def test_l1_no_takes_trading_decisions():
     print("🧪 Probando que L1 no toma decisiones de trading...")
     
     # Crear una señal de prueba
-    test_signal = Signal(
+    test_signal = create_signal(
         signal_id="test_signal_1",
-        strategy_id="test_strategy",
-        timestamp=time.time(),
         symbol="BTC/USDT",
         side="buy",
         qty=0.1,  # Cantidad que excede el límite
+        strategy_id="test_strategy",
         order_type="market",
-        risk={"max_slippage_bps": 100},
-        metadata={"confidence": 0.8}
+        confidence=0.8,
+        strength=0.8,
+        features={"max_slippage_bps": 100}
     )
     
     # L1 debe rechazar la orden, no ajustarla
-    import asyncio
-    report = asyncio.run(order_manager.handle_signal(test_signal))
+    order_manager = OrderManager()
+    report = order_manager.trading_cycle.handle_signal(test_signal)
     
     print(f"   Señal original: {test_signal.qty} BTC")
-    print(f"   Reporte: {report.status}")
-    print(f"   Error: {report.message}")
+    print(f"   Reporte: {report.get('status', 'unknown')}")
+    print(f"   Error: {report.get('reason', 'unknown')}")
     
     # Verificar que L1 no modificó la señal original
     assert test_signal.qty == 0.1, "L1 no debe modificar la señal original"
-    assert report.status == "rejected", "L1 debe rechazar órdenes que exceden límites"
+    assert report.get('status') == "rejected", "L1 debe rechazar órdenes que exceden límites"
     
     print("   ✅ L1 no modifica señales, solo las valida")
 
@@ -63,26 +62,26 @@ def test_l1_only_validates_and_executes():
     print("🧪 Probando que L1 solo valida y ejecuta...")
     
     # Señal válida
-    valid_signal = Signal(
+    valid_signal = create_signal(
         signal_id="test_signal_2",
-        strategy_id="test_strategy",
-        timestamp=time.time(),
         symbol="BTC/USDT",
         side="buy",
         qty=0.01,  # Cantidad dentro del límite
+        strategy_id="test_strategy",
         order_type="market",
-        risk={"max_slippage_bps": 50},
-        metadata={"confidence": 0.9}
+        confidence=0.9,
+        strength=0.9,
+        features={"max_slippage_bps": 50}
     )
     
     # L1 debe procesar la señal sin modificarla
     original_qty = valid_signal.qty
-    import asyncio
-    report = asyncio.run(order_manager.handle_signal(valid_signal))
+    order_manager = OrderManager()
+    report = order_manager.trading_cycle.handle_signal(valid_signal)
     
     print(f"   Señal original: {original_qty} BTC")
     print(f"   Señal después: {valid_signal.qty} BTC")
-    print(f"   Reporte: {report.status}")
+    print(f"   Reporte: {report.get('status', 'unknown')}")
     
     # Verificar que L1 no modificó la señal
     assert valid_signal.qty == original_qty, "L1 no debe modificar señales válidas"
@@ -125,14 +124,15 @@ def test_l1_risk_validation():
         },
         {
             "name": "Señal válida",
-            "signal": Signal(
+            "signal": create_signal(
                 signal_id="test_risk_3",
-                strategy_id="test_strategy",
-                timestamp=time.time(),
                 symbol="BTC/USDT",
                 side="buy",
                 qty=0.01,
-                order_type="market"
+                strategy_id="test_strategy",
+                order_type="market",
+                confidence=0.8,
+                strength=0.8
             ),
             "expected_status": "filled"  # Puede ser rechazada por saldo insuficiente en test
         }
@@ -140,9 +140,9 @@ def test_l1_risk_validation():
     
     for test_case in test_cases:
         print(f"   Probando: {test_case['name']}")
-        import asyncio
-        report = asyncio.run(order_manager.handle_signal(test_case['signal']))
-        print(f"     Resultado: {report.status}")
+        order_manager = OrderManager()
+        report = order_manager.trading_cycle.handle_signal(test_case['signal'])
+        print(f"     Resultado: {report.get('status', 'unknown')}")
         
         # Verificar que L1 no modificó la señal
         assert test_case['signal'].qty == test_case['signal'].qty, "L1 no debe modificar señales"
@@ -156,36 +156,38 @@ def test_l1_deterministic_behavior():
     print("🧪 Probando comportamiento determinista de L1...")
     
     # Misma señal, mismo resultado
-    signal1 = Signal(
+    signal1 = create_signal(
         signal_id="test_det_1",
-        strategy_id="test_strategy",
-        timestamp=time.time(),
         symbol="BTC/USDT",
         side="buy",
         qty=0.1,  # Excede límite
-        order_type="market"
+        strategy_id="test_strategy",
+        order_type="market",
+        confidence=0.8,
+        strength=0.8
     )
     
-    signal2 = Signal(
+    signal2 = create_signal(
         signal_id="test_det_2",
-        strategy_id="test_strategy",
-        timestamp=time.time(),
         symbol="BTC/USDT",
         side="buy",
         qty=0.1,  # Excede límite
-        order_type="market"
+        strategy_id="test_strategy",
+        order_type="market",
+        confidence=0.8,
+        strength=0.8
     )
     
-    import asyncio
-    report1 = asyncio.run(order_manager.handle_signal(signal1))
-    report2 = asyncio.run(order_manager.handle_signal(signal2))
+    order_manager = OrderManager()
+    report1 = order_manager.trading_cycle.handle_signal(signal1)
+    report2 = order_manager.trading_cycle.handle_signal(signal2)
     
-    print(f"   Primera ejecución: {report1.status}")
-    print(f"   Segunda ejecución: {report2.status}")
+    print(f"   Primera ejecución: {report1.get('status', 'unknown')}")
+    print(f"   Segunda ejecución: {report2.get('status', 'unknown')}")
     
     # Ambas deben ser rechazadas por el mismo motivo
-    assert report1.status == "rejected", "Primera señal debe ser rechazada"
-    assert report2.status == "rejected", "Segunda señal debe ser rechazada"
+    assert report1.get('status') == "rejected", "Primera señal debe ser rechazada"
+    assert report2.get('status') == "rejected", "Segunda señal debe ser rechazada"
     
     print("   ✅ L1 tiene comportamiento determinista")
 

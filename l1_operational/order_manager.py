@@ -7,17 +7,830 @@ import time
 
 from core.logging import logger, log_trading_action
 from core.config import HRM_PATH_MODE, PATH3_SIGNAL_SOURCE, MAX_CONTRA_ALLOCATION_PATH2
+from core.selling_strategy import get_selling_strategy, SellSignal
 from .config import ConfigObject
 from l2_tactic.models import TacticalSignal
+from .position_manager import PositionManager
+
+# ========================================================================================
+# CRÍTICO: CONSTANTES PARA FIXES OBLIGATORIOS
+# ========================================================================================
+DUST_THRESHOLD = 0.0000001  # Threshold para considerar posición válida
+
+class FullTradingCycleManager:
+    """
+    Gestiona el ciclo completo de trading: BUY → HOLD → SELL
+    """
+
+    def __init__(self, state_manager, portfolio_manager, config: Dict):
+        # Initialize PositionManager
+        self.position_manager = PositionManager(
+            state_manager=state_manager,
+            portfolio_manager=portfolio_manager,
+            config=config
+        )
+
+        self.portfolio = portfolio_manager
+        self.state = state_manager
+        self.config = config
+        self.position_tracker = {}  # Track open positions
+        self.trading_state = {}     # Track trading state per symbol
+
+        # Initialize selling strategy
+        from core.selling_strategy import get_selling_strategy
+        self.selling_strategy = get_selling_strategy()
+
+        # Initialize validators and executors
+        from l1_operational.order_validators import OrderValidators
+        from l1_operational.order_executors import OrderExecutors
+        self.validators = OrderValidators(config)
+        self.executors = OrderExecutors(state_manager, portfolio_manager, config)
+
+        # Trading state
+        self.last_action = {}  # {symbol: 'buy'/'sell'}
+        self.last_trade_time = {}  # {symbol: timestamp}
+        self.cooldown_seconds = config.get('COOLDOWN_SECONDS', 60)
+
+        logger.info("âœ… FullTradingCycleManager initialized with PositionManager and SellingStrategy")
+
+    async def assess_sell_opportunities(self, symbol: str, current_price: float,
+                                market_data: pd.DataFrame, l3_context: Dict[str, Any],
+                                position_data: Dict[str, Any]) -> Optional[SellSignal]:
+        """
+        Assess sell opportunities using the four-level hierarchical selling strategy.
+
+        🔴 PRIORITY 1: Stop-loss protection (immediate execution)
+        🟠 PRIORITY 2: Tactical edge disappearance (L2 assessment)
+        🟡 PRIORITY 3: Strategic regime change (L3 assessment)
+        🔵 PRIORITY 4: Timeout exit (system-level)
+
+        Returns the highest priority sell signal or None if no selling opportunity.
+        """
+        try:
+            return self.selling_strategy.assess_sell_opportunities(
+                symbol=symbol,
+                current_price=current_price,
+                market_data=market_data,
+                l3_context=l3_context,
+                position_data=position_data
+            )
+        except Exception as e:
+            logger.error(f"❌ Error assessing sell opportunities for {symbol}: {e}")
+            return None
+
+    def register_position_for_selling_strategy(self, symbol: str, entry_data: Dict[str, Any],
+                                             market_data: pd.DataFrame, l3_context: Dict[str, Any]):
+        """
+        Register a new position with the selling strategy for tracking.
+
+        This allows the selling strategy to monitor positions for exit opportunities.
+        """
+        try:
+            self.selling_strategy.register_position_entry(
+                symbol=symbol,
+                entry_data=entry_data,
+                market_data=market_data,
+                l3_context=l3_context
+            )
+        except Exception as e:
+            logger.error(f"❌ Error registering position for selling strategy {symbol}: {e}")
+
+    def close_position_in_selling_strategy(self, symbol: str):
+        """
+        Close position tracking in selling strategy when position is closed.
+        """
+        try:
+            self.selling_strategy.close_position(symbol)
+        except Exception as e:
+            logger.error(f"❌ Error closing position in selling strategy {symbol}: {e}")
+
+    def calculate_dynamic_reserve(self, portfolio_value: Optional[float] = None) -> float:
+        """
+        Calcular reserva dinámica de USDT basada en el valor total del portfolio.
+
+        Args:
+            portfolio_value: Valor total del portfolio (opcional). Si no se proporciona,
+                           se calcula desde el portfolio manager.
+
+        Returns:
+            Reserva USDT recomendada (mínimo $50.0)
+        """
+        try:
+            MIN_BASE_RESERVE = 50.0  # Reserva mínima absoluta
+            RESERVE_PCT = 0.02  # 2% del portfolio total como reserva
+
+            # 💰 CRITICAL FIX: Mode-dependent portfolio value calculation
+            # Check if we're in simulated mode
+            if portfolio_value is not None:
+                # Usar el valor proporcionado directamente
+                used_portfolio_value = portfolio_value
+                calculation_source = f"provided_value=${portfolio_value:.2f}"
+            elif self.portfolio is not None:
+                # Check if we're in simulated mode
+                if hasattr(self.portfolio, 'mode') and self.portfolio.mode == "simulated":
+                    # Simulated mode - use portfolio manager
+                    used_portfolio_value = self.portfolio.get_usdt_balance()
+                    calculation_source = f"portfolio_manager=${used_portfolio_value:.2f}"
+                    logger.debug(f"📊 SIMULATED MODE: Using portfolio manager for dynamic reserve calculation")
+                else:
+                    # Real mode - use exchange client
+                    used_portfolio_value = self.portfolio.get_available_balance("USDT")
+                    calculation_source = f"exchange_client=${used_portfolio_value:.2f}"
+                    logger.debug(f"📊 REAL MODE: Using exchange client for dynamic reserve calculation")
+            else:
+                logger.warning("⚠️ No portfolio_value provided and no portfolio manager available, using minimum reserve")
+                return MIN_BASE_RESERVE  # Fallback a reserva mínima
+
+            dynamic_reserve = max(MIN_BASE_RESERVE, used_portfolio_value * RESERVE_PCT)
+
+            logger.debug(f"💰 Dynamic reserve calculation: portfolio=${used_portfolio_value:.2f} ({calculation_source}), reserve=${dynamic_reserve:.2f} (2% of total, min $50)")
+            return dynamic_reserve
+
+        except Exception as e:
+            logger.error(f"❌ Error calculating dynamic reserve: {e}")
+            return MIN_BASE_RESERVE  # Fallback a reserva mínima
+
+    def get_available_usdt(self) -> float:
+        """
+        Obtener USDT disponible para trading después de reservas.
+
+        Returns:
+            float: USDT disponible
+        """
+        try:
+            # 💰 CRITICAL FIX: Mode-dependent USDT balance check
+            # Check if we're in simulated mode
+            if hasattr(self.portfolio, 'mode') and self.portfolio.mode == "simulated":
+                usdt_balance = self.portfolio.get_usdt_balance()
+                logger.debug(f"📊 SIMULATED MODE: Using portfolio USDT balance: ${usdt_balance:.2f}")
+            else:
+                # Real mode - use exchange client
+                usdt_balance = self.portfolio.get_available_balance("USDT")
+                logger.debug(f"📊 REAL MODE: Using exchange USDT balance: ${usdt_balance:.2f}")
+
+            # Calcular reserva
+            reserve = self.calculate_dynamic_reserve()
+
+            # Calcular disponible
+            available = max(0.0, usdt_balance - reserve)
+
+            logger.info(f"💰 USDT: balance=${usdt_balance:.2f}, reserve=${reserve:.2f}, available=${available:.2f}")
+
+            return available
+
+        except Exception as e:
+            logger.error(f"❌ Error calculating available USDT: {e}")
+            return 0.0
+
+    def handle_signal(self, signal: TacticalSignal, market_data=None) -> Dict[str, Any]:
+        """
+        Process tactical signal through complete validation pipeline
+
+        Args:
+            signal: TacticalSignal from L2
+            market_data: Market data for the symbol (can be DataFrame or dict)
+
+        Returns:
+            dict: Execution report
+        """
+        # Initialize current_price at method scope to ensure availability in exception handler
+        current_price = None
+
+        try:
+            symbol = signal.symbol
+            action = signal.side.lower()
+
+            # ========================================================================================
+            # CRÍTICO: HOLD signals NO pasan por cooldown ni validadores - son estados neutrales
+            # ========================================================================================
+            if action == 'hold':
+                return {
+                    'status': 'hold',
+                    'symbol': symbol,
+                    'action': 'hold',
+                    'reason': 'HOLD signals are neutral states - no cooldown/validation needed',
+                    'timestamp': datetime.now().isoformat()
+                }
+
+            # Get current price with comprehensive validation for both DataFrame and dict formats
+            current_price = self._extract_current_price(market_data, symbol) if market_data is not None else 0.0
+
+            if current_price <= 0:
+                logger.error(f"Invalid market data for {symbol} - could not extract positive price")
+                return self._create_rejection_report(signal, "Could not extract valid current price")
+
+            logger.info(f"[SIG] Processing {symbol}: action={action}, price={current_price:.2f}")
+
+            # Check cooldown - HOLD signals no pasan por cooldown
+            if not self._check_cooldown(symbol, action):
+                return self._create_rejection_report(signal, "Cooldown period active")
+
+            # ========================================================================================
+            # 🥇 FIX 2: SEMANTIC SELL RULE - SELL without position = IGNORE (no alternatives)
+            # ========================================================================================
+            # Handle SELL without position - SEMANTIC RULE: SELL signals never mutate to BUY
+            # CRITICAL: Remove portfolio_manager dependency - use state_manager instead
+            if action == 'sell':
+                logger.warning(f"🚫 SEMANTIC SELL RULE: {symbol} SELL signal with no position - IGNORED (no alternatives allowed)")
+                return self._create_rejection_report(signal, "SELL signal with no position - ignored (semantic trading rule)")
+
+            # âœ… CRITICAL FIX: Use position_manager to calculate order size
+            order_size = self.position_manager.calculate_order_size(
+                symbol=symbol,
+                action=action,
+                signal_confidence=signal.confidence,
+                current_price=current_price,
+                position_qty=0  # No position tracking needed for this fix
+            )
+
+            if order_size <= 0:
+                logger.warning(f"⚠️ Invalid order size calculated: {order_size}")
+                return self._create_rejection_report(signal, "Invalid order size")
+
+            # Validate order
+            validation_result = self.validators.validate_order(
+                symbol=symbol,
+                action=action,
+                quantity=order_size,
+                current_price=current_price,
+                portfolio_value=0,  # No portfolio access needed for this fix
+                position_qty=0
+            )
+
+            if not validation_result['valid']:
+                logger.warning(f"❌ Order validation failed: {validation_result['reason']}")
+                return self._create_rejection_report(signal, validation_result['reason'])
+
+            # Execute order
+            execution_result = self.executors.execute_order(
+                symbol=symbol,
+                action=action,
+                quantity=order_size,
+                current_price=current_price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit
+            )
+
+            if execution_result['status'] == 'executed':
+                self._update_trading_state(symbol, action)
+                logger.info(f"âœ… Order executed: {symbol} {action} {order_size:.6f} @ {current_price:.2f}")
+
+            return execution_result
+
+        except Exception as e:
+            logger.error(f"❌ Error processing signal {signal}: {e}")
+            return self._create_rejection_report(signal, f"Processing error: {str(e)}")
+
+    def handle_signal_legacy(self, signal: TacticalSignal, market_data=None) -> Dict[str, Any]:
+        """
+        Legacy method for backward compatibility with test files.
+        This method provides the same functionality as process_signal.
+        """
+        return self.process_signal(signal, market_data)
+
+    def process_signal(self, signal: TacticalSignal, market_data) -> Dict[str, Any]:
+        """
+        Process tactical signal through complete validation pipeline
+
+        Args:
+            signal: TacticalSignal from L2
+            market_data: Market data for the symbol (can be DataFrame or dict)
+
+        Returns:
+            dict: Execution report
+        """
+        # Initialize current_price at method scope to ensure availability in exception handler
+        current_price = None
+
+        try:
+            symbol = signal.symbol
+            action = signal.side.lower()
+
+            # ========================================================================================
+            # CRÍTICO: HOLD signals NO pasan por cooldown ni validadores - son estados neutrales
+            # ========================================================================================
+            if action == 'hold':
+                return {
+                    'status': 'hold',
+                    'symbol': symbol,
+                    'action': 'hold',
+                    'reason': 'HOLD signals are neutral states - no cooldown/validation needed',
+                    'timestamp': datetime.now().isoformat()
+                }
+
+            # Get current price with comprehensive validation for both DataFrame and dict formats
+            current_price = self._extract_current_price(market_data, symbol) if market_data is not None else 0.0
+
+            if current_price <= 0:
+                logger.error(f"Invalid market data for {symbol} - could not extract positive price")
+                return self._create_rejection_report(signal, "Could not extract valid current price")
+
+            logger.info(f"[SIG] Processing {symbol}: action={action}, price={current_price:.2f}")
+
+            # Check cooldown - HOLD signals no pasan por cooldown
+            if not self._check_cooldown(symbol, action):
+                return self._create_rejection_report(signal, "Cooldown period active")
+
+            # ========================================================================================
+            # 🥇 FIX 2: SEMANTIC SELL RULE - SELL without position = IGNORE (no alternatives)
+            # ========================================================================================
+            # Handle SELL without position - SEMANTIC RULE: SELL signals never mutate to BUY
+            # CRITICAL: Remove portfolio_manager dependency - use state_manager instead
+            if action == 'sell':
+                logger.warning(f"🚫 SEMANTIC SELL RULE: {symbol} SELL signal with no position - IGNORED (no alternatives allowed)")
+                return self._create_rejection_report(signal, "SELL signal with no position - ignored (semantic trading rule)")
+
+            # âœ… CRITICAL FIX: Use position_manager to calculate order size
+            order_size = self.position_manager.calculate_order_size(
+                symbol=symbol,
+                action=action,
+                signal_confidence=signal.confidence,
+                current_price=current_price,
+                position_qty=0  # No position tracking needed for this fix
+            )
+
+            if order_size <= 0:
+                logger.warning(f"⚠️ Invalid order size calculated: {order_size}")
+                return self._create_rejection_report(signal, "Invalid order size")
+
+            # Validate order
+            validation_result = self.validators.validate_order(
+                symbol=symbol,
+                action=action,
+                quantity=order_size,
+                current_price=current_price,
+                portfolio_value=0,  # No portfolio access needed for this fix
+                position_qty=0
+            )
+
+            if not validation_result['valid']:
+                logger.warning(f"❌ Order validation failed: {validation_result['reason']}")
+                return self._create_rejection_report(signal, validation_result['reason'])
+
+            # Execute order
+            execution_result = self.executors.execute_order(
+                symbol=symbol,
+                action=action,
+                quantity=order_size,
+                current_price=current_price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit
+            )
+
+            if execution_result['status'] == 'executed':
+                self._update_trading_state(symbol, action)
+                logger.info(f"âœ… Order executed: {symbol} {action} {order_size:.6f} @ {current_price:.2f}")
+
+            return execution_result
+
+        except Exception as e:
+            logger.error(f"❌ Error processing signal {signal}: {e}")
+            return self._create_rejection_report(signal, f"Processing error: {str(e)}")
+
+
+    def _check_cooldown(self, symbol: str, action: str) -> bool:
+        """Check if cooldown period has passed"""
+        if symbol not in self.last_action:
+            return True
+
+        last_action = self.last_action.get(symbol)
+        time_since_last = (datetime.now() - self.last_trade_time[symbol]).total_seconds()
+
+        # Allow opposite actions immediately
+        if last_action and last_action != action:
+            logger.info(f"âœ… TRADE COOLDOWN: {symbol} {action} allowed after {last_action} - opposite to last {last_action}")
+            return True
+
+        # Check cooldown for same action
+        if time_since_last < self.cooldown_seconds:
+            logger.warning(f"⚠️ COOLDOWN: {symbol} - Wait {self.cooldown_seconds - time_since_last:.0f}s")
+            return False
+
+        return True
+
+
+    def _handle_alternative_action(self, signal: TacticalSignal, market_data: Any, current_price: float) -> Dict[str, Any]:
+        """Handle alternative action when original action is not possible
+
+        🥇 FIX 2: GOLDEN RULE - SELL signals NEVER mutate to BUY automatically.
+        🥉 FIX 3: L3 SELL signals NEVER get alternatives - strategic SELL should never be reinterpreted.
+        """
+        symbol = signal.symbol
+        action = signal.side.lower()
+
+        # ========================================================================================
+        # 🥉 FIX 3: L3 SELL PROTECTION - Check if this is L3 strategic signal
+        # ========================================================================================
+        l3_context = getattr(signal, 'metadata', {}).get('l3_context', {})
+        l3_bias = l3_context.get('signal', '').lower() if isinstance(l3_context, dict) else ''
+        is_l3_strategic_sell = l3_bias == 'sell' or getattr(signal, 'metadata', {}).get('l3_authority', False)
+
+        if is_l3_strategic_sell and action == 'sell':
+            logger.warning(f"🚫 L3 STRATEGIC SELL PROTECTION: {symbol} L3 SELL signal - alternatives DISABLED (strategic SELL never reinterpreted)")
+            return self._create_rejection_report(signal, "L3 STRATEGIC SELL - alternatives disabled")
+
+        # ========================================================================================
+        # 🥇 FIX 2: SEMANTIC SELL RULE - SELL without position = IGNORE (no alternatives)
+        # ========================================================================================
+        if action == 'sell':
+            logger.warning(f"🚫 SEMANTIC SELL RULE: {symbol} SELL signal with no position - IGNORED (no alternatives allowed)")
+            return self._create_rejection_report(signal, "SELL signal with no position - ignored (semantic trading rule)")
+
+        # ========================================================================================
+        # LEGACY CODE: Alternative BUY logic (only for non-SEMANTIC signals)
+        # ========================================================================================
+        # Only BUY signals can reach this point (SELL signals are blocked above)
+        if action == 'buy':
+            # This would be for future expansion if BUY signals need alternatives
+            logger.warning(f"💡 BUY ALTERNATIVE: {symbol} BUY signal - checking for SELL opportunity instead")
+            # For now, just ignore BUY alternatives too to keep logic clean
+            return self._create_rejection_report(signal, "BUY signal alternative not implemented")
+
+        # Default: no alternative available
+        return self._create_rejection_report(signal, "No alternative action available")
+
+
+    def _update_trading_state(self, symbol: str, action: str):
+        """Update trading state after execution"""
+        self.last_action[symbol] = action
+        self.last_trade_time[symbol] = datetime.now()
+
+
+    def _create_rejection_report(self, signal: TacticalSignal, reason: str) -> Dict[str, Any]:
+        """Create rejection report"""
+        return {
+            'status': 'rejected',
+            'symbol': signal.symbol,
+            'action': signal.side,
+            'reason': reason,
+            'timestamp': datetime.now().isoformat()
+        }
+
+
+    def process_signal_with_position_awareness(self, signal: Dict[str, Any],
+                                               market_data: Dict, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Procesa señal considerando posiciones actuales
+
+        FLUJO:
+        1. Si señal=BUY y NO hay posición → COMPRAR
+        2. Si señal=BUY y HAY posición → HOLD (no re-comprar)
+        3. Si señal=SELL y HAY posición → VENDER
+        4. Si señal=SELL y NO hay posición → HOLD (no vender en vacío)
+        5. Si señal=HOLD → mantener estado actual
+        """
+        symbol = signal.get('symbol')
+        action = signal.get('action', 'hold').lower() if isinstance(signal, dict) else signal.side.lower()
+
+        # ✅ CRITICAL FIX: Manejar errores de estado sin fallback automático
+        try:
+            # Intentar obtener posición actual
+            current_position = self._get_current_position(symbol, state)
+            has_position = current_position > 0
+        except RuntimeError as e:
+            # Estado no inicializado - abortar generación de órdenes
+            logger.error(f"❌ State not initialized for {symbol}: {e}")
+            return {
+                'status': 'error',
+                'reason': 'System state not initialized. Must be injected before trading loop.',
+                'action': 'hold',
+                'symbol': symbol
+            }
+
+        # ✅ CASO 1: Señal BUY
+        if action == 'buy':
+            if not has_position:
+                logger.info(f"✅ BUY SIGNAL VALID: No position for {symbol}, proceeding with BUY")
+                return self._execute_buy(signal, market_data, state)
+            else:
+                logger.warning(f"⚠️ BUY SIGNAL IGNORED: Already have position for {symbol} ({current_position:.6f})")
+                return {'status': 'ignored', 'reason': 'already_have_position',
+                       'action': 'hold', 'symbol': symbol}
+
+        # ✅ CASO 2: Señal SELL
+        elif action == 'sell':
+            if has_position:
+                logger.info(f"✅ SELL SIGNAL VALID: Have position for {symbol} ({current_position:.6f}), proceeding with SELL")
+                return self._execute_sell(signal, market_data, state, current_position)
+            else:
+                # ========================================================================================
+                # 🥇 FIX 2: SEMANTIC SELL RULE - SELL without position = IGNORE (no alternatives)
+                # ========================================================================================
+                logger.warning(f"🚫 SEMANTIC SELL RULE: {symbol} SELL signal with no position - IGNORED (no alternatives allowed)")
+                return {'status': 'ignored', 'reason': 'SELL signal with no position - ignored (semantic trading rule)',
+                       'action': 'hold', 'symbol': symbol}
+
+        # ✅ CASO 3: Señal HOLD
+        else:
+            logger.info(f"📊 HOLD SIGNAL: Maintaining current state for {symbol}")
+            return {'status': 'hold', 'action': 'hold', 'symbol': symbol}
+
+    def _get_current_position(self, symbol: str, state: Dict[str, Any]) -> float:
+        """
+        Obtiene posición actual desde PortfolioManager (FUENTE ÚNICA DE VERDAD)
+        No usar state/portfolio que puede estar cacheado o vacío
+        """
+        try:
+            # CRÍTICO: Usar PortfolioManager como FUENTE ÚNICA DE VERDAD
+            # Convertir BTCUSDT -> BTC para consultar balance real
+            asset_symbol = symbol.replace('USDT', '')
+            position = self.portfolio.get_balance(asset_symbol)
+
+            logger.debug(f"📊 Current position for {symbol}: {position:.6f} (from PortfolioManager)")
+            return position
+
+        except Exception as e:
+            # Handle BLIND mode fallback
+            from core.state_manager import get_system_state
+            current_system_state = get_system_state()
+
+            if current_system_state == "BLIND":
+                # Try to get position from portfolio snapshot in state
+                portfolio_snapshot = state.get("portfolio", {})
+                if portfolio_snapshot:
+                    # Get position from portfolio snapshot
+                    position = portfolio_snapshot.get(asset_symbol, {}).get("position", 0.0)
+                    logger.debug(f"📊 BLIND MODE: Current position for {symbol}: {position:.6f} (from portfolio snapshot)")
+                    return position
+
+            logger.error(f"❌ Error getting position for {symbol}: {e}")
+            return 0.0
+
+    def _execute_buy(self, signal: Dict[str, Any], market_data: Dict,
+                     state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ejecuta orden de compra con sizing dinámico y reservas proporcionales
+
+        CRITICAL FIX: Extract current_price at the start of this method
+        """
+        symbol = signal.get('symbol')
+        confidence = signal.get('confidence', 0.5)
+
+        # ✅ CRITICAL FIX: Extract current_price HERE at method start
+        current_price = self._extract_current_price(market_data, symbol)
+
+        # Validate price was extracted successfully
+        if current_price <= 0:
+            logger.error(f"❌ Failed to extract valid price for {symbol}: {current_price}")
+            return {'status': 'rejected', 'reason': f'Invalid current price {current_price} for {symbol}'}
+
+        logger.info(f"💰 BUY ORDER CALCULATION: {symbol} @ ${current_price:.2f}")
+
+        # 💰 CRITICAL FIX: Mode-dependent USDT balance check
+        # Check if we're in simulated mode
+        if hasattr(self.portfolio, 'mode') and self.portfolio.mode == "simulated":
+            total_usdt_balance = self.portfolio.get_usdt_balance()
+            logger.debug(f"📊 SIMULATED MODE: Using portfolio USDT balance: ${total_usdt_balance:.2f}")
+        else:
+            # Real mode - use exchange client
+            total_usdt_balance = self.portfolio.get_available_balance("USDT")
+            logger.debug(f"📊 REAL MODE: Using exchange USDT balance: ${total_usdt_balance:.2f}")
+
+        # Calcular valor total del portfolio para reserva dinámica
+        portfolio_value = total_usdt_balance
+        # Agregar valor de posiciones (aproximado)
+        for asset_key, position_data in state.get("portfolio", {}).items():
+            if asset_key != 'USDT' and isinstance(position_data, dict):
+                position = position_data.get('position', 0.0)
+                if position > 0 and asset_key in market_data:
+                    # Obtener precio actual para calcular valor de posición
+                    asset_price = self._extract_current_price(market_data, asset_key)
+                    if asset_price > 0:
+                        portfolio_value += position * asset_price
+
+        # 💰 Calcular reserva dinámica (2% del portfolio total, mínimo $50)
+        dynamic_reserve = self.calculate_dynamic_reserve(portfolio_value)
+        available_usdt = max(0, total_usdt_balance - dynamic_reserve)
+
+        logger.info(f"💰 DYNAMIC RESERVE: portfolio=${portfolio_value:.2f}, reserve=${dynamic_reserve:.2f}, available=${available_usdt:.2f}")
+
+        # 💰 Usar PositionManager para calculo de sizing dinámico
+        order_size = self.position_manager.calculate_order_size(
+            symbol=symbol,
+            action='buy',
+            signal_confidence=confidence,
+            current_price=current_price,  # ✅ Now properly available
+            position_qty=0  # No current position for buy
+        )
+
+        # Convert to USDT for validation
+        order_size_usdt = order_size * current_price
+
+        # Si no hay tamaño válido, rechazar la orden
+        if order_size_usdt <= 0:
+            logger.warning(f"⚠️ No valid order size calculated for {symbol} (confidence={confidence:.2f})")
+            return {'status': 'rejected', 'reason': 'insufficient_capital_after_dynamic_reserve'}
+
+        position_size_usdt = order_size_usdt
+
+        # Calcular cantidad de activo a comprar
+        qty = position_size_usdt / current_price
+
+        logger.info(f"✅ BUY ORDER: {symbol} qty={qty:.6f} @ {current_price:.2f} "
+                   f"(confidence={confidence:.2f}, size_usdt={position_size_usdt:.2f})")
+
+        # Create order for execution
+        buy_order = {
+            'symbol': symbol,
+            'side': 'buy',
+            'type': 'MARKET',
+            'quantity': qty,
+            'price': current_price,
+            'timestamp': datetime.utcnow().isoformat(),
+            'signal_source': 'full_cycle_manager',
+            'status': 'pending',
+            'order_type': 'ENTRY'
+        }
+
+        # Actualizar tracking
+        if buy_order['status'] == 'pending':
+            self.position_tracker[symbol] = {
+                'qty': qty,
+                'entry_price': current_price,
+                'confidence': confidence,
+                'timestamp': buy_order['timestamp']
+            }
+
+        return buy_order
+
+    def _execute_sell(self, signal: Dict[str, Any], market_data: Dict,
+                     state: Dict[str, Any], position_qty: float) -> Dict[str, Any]:
+        """
+        Ejecuta orden de venta
+
+        CRITICAL FIX: Extract current_price at the start of this method
+        """
+        symbol = signal.get('symbol')
+        confidence = signal.get('confidence', 0.5)
+
+        # ✅ CRITICAL FIX: Extract current_price HERE at method start
+        current_price = self._extract_current_price(market_data, symbol)
+
+        # Validate price was extracted successfully
+        if current_price <= 0:
+            logger.error(f"❌ Failed to extract valid price for {symbol}: {current_price}")
+            return {'status': 'rejected', 'reason': f'Invalid current price {current_price} for {symbol}'}
+
+        logger.info(f"💰 SELL ORDER CALCULATION: {symbol} @ ${current_price:.2f}")
+
+        # 🎯 Sell sizing: vender toda la posición o parcial según confianza
+        if confidence >= 0.70:
+            # Alta confianza → vender TODO
+            qty_to_sell = position_qty
+            logger.info(f"🔴 HIGH CONFIDENCE SELL: Selling ALL {qty_to_sell:.6f} {symbol}")
+        elif confidence >= 0.55:
+            # Confianza media → vender 75%
+            qty_to_sell = position_qty * 0.75
+            logger.info(f"🟡 MEDIUM CONFIDENCE SELL: Selling 75% ({qty_to_sell:.6f}) of {symbol}")
+        else:
+            # Confianza baja → vender 50%
+            qty_to_sell = position_qty * 0.50
+            logger.info(f"🟢 LOW CONFIDENCE SELL: Selling 50% ({qty_to_sell:.6f}) of {symbol}")
+
+        logger.info(f"✅ SELL ORDER: {symbol} qty={qty_to_sell:.6f} @ {current_price:.2f} "
+                   f"(confidence={confidence:.2f})")
+
+        # Create sell order
+        sell_order = {
+            'symbol': symbol,
+            'side': 'sell',
+            'type': 'MARKET',
+            'quantity': -qty_to_sell,  # Negative for sell
+            'price': current_price,
+            'timestamp': datetime.utcnow().isoformat(),
+            'signal_source': 'full_cycle_manager',
+            'status': 'pending',
+            'order_type': 'ENTRY'
+        }
+
+        # Actualizar tracking
+        if sell_order['status'] == 'pending':
+            if qty_to_sell >= position_qty * 0.99:  # Vendió casi todo
+                self.position_tracker.pop(symbol, None)
+                logger.info(f"✅ Position CLOSED for {symbol}")
+            else:
+                # Actualizar posición parcial
+                if symbol in self.position_tracker:
+                    self.position_tracker[symbol]['qty'] -= qty_to_sell
+                    logger.info(f"✅ Position REDUCED for {symbol}: {self.position_tracker[symbol]['qty']:.6f} remaining")
+
+        return sell_order
+
+    def _suggest_alternative_action(self, signal: Dict[str, Any],
+                                   market_data: Dict, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        DEPRECATED: This method should never be called due to FIX 2 implementation.
+        SELL signals without position are now directly rejected in process_signal_with_position_awareness.
+
+        This method is kept for backward compatibility but should return HOLD for all cases.
+        """
+        symbol = signal.get('symbol')
+        original_action = signal.get('action')
+
+        logger.warning(f"🚫 ALTERNATIVE ACTION DEPRECATED: {symbol} {original_action} - This method should not be called (FIX 2 violation)")
+
+        # ========================================================================================
+        # 🥇 FIX 2: NO ALTERNATIVES ALLOWED - Return HOLD for all cases
+        # ========================================================================================
+        return {'status': 'hold', 'action': 'hold', 'symbol': symbol,
+               'reason': 'Alternative actions disabled by FIX 2 - semantic trading rule'}
+
+    def _extract_current_price(self, data, symbol: str) -> float:
+        """
+        Extract current price from market data, handling both DataFrame and dict formats.
+
+        Args:
+            data: Market data (DataFrame or dict)
+            symbol: Trading symbol
+
+        Returns:
+            Current price as float, or 0.0 if extraction fails
+        """
+        try:
+            if data is None:
+                logger.error(f"Market data is None for {symbol}")
+                return 0.0
+
+            # Handle DataFrame format (direct data)
+            if isinstance(data, pd.DataFrame):
+                if data.empty:
+                    logger.warning(f"Empty DataFrame for {symbol}")
+                    return 0.0
+                if 'close' not in data.columns:
+                    logger.error(f"No 'close' column in DataFrame for {symbol}")
+                    return 0.0
+                current_price = float(data['close'].iloc[-1])
+                logger.debug(f"Extracted price from DataFrame para {symbol}: {current_price}")
+                return current_price
+
+            # Handle dict format (when market_data_dict contains per-symbol data)
+            elif isinstance(data, dict):
+                if symbol not in data:
+                    logger.warning(f"Symbol {symbol} not found in market data dict")
+                    return 50000.0 if symbol == 'BTCUSDT' else 3000.0  # Reasonable fallback
+
+                symbol_data = data[symbol]
+                if symbol_data is None:
+                    logger.warning(f"Symbol data is None for {symbol}")
+                    return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+
+                # Handle nested DataFrame (most common case)
+                if isinstance(symbol_data, pd.DataFrame):
+                    if symbol_data.empty:
+                        logger.warning(f"Empty DataFrame for {symbol}")
+                        return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+                    if 'close' not in symbol_data.columns:
+                        logger.error(f"No 'close' column in DataFrame for {symbol}")
+                        return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+                    current_price = float(symbol_data['close'].iloc[-1])
+                    logger.debug(f"Extracted price from nested DataFrame para {symbol}: {current_price}")
+                    return current_price
+
+                # Handle nested dict format
+                elif isinstance(symbol_data, dict):
+                    if 'close' not in symbol_data:
+                        logger.warning(f"No 'close' key in market data dict for {symbol}")
+                        return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+
+                    close_value = symbol_data['close']
+                    # Handle list/dict formats from close value
+                    if isinstance(close_value, list) and close_value:
+                        current_price = float(close_value[-1])
+                    elif isinstance(close_value, (int, float)):
+                        current_price = float(close_value)
+                    else:
+                        logger.warning(f"Unsupported close value format for {symbol}: {type(close_value)}")
+                        return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+
+                    logger.debug(f"Extracted price from nested dict para {symbol}: {current_price}")
+                    return current_price
+
+                else:
+                    logger.warning(f"Unsupported symbol data format for {symbol}: {type(symbol_data)}")
+                    return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+
+            else:
+                logger.warning(f"Unsupported data format: {type(data)}")
+                return 50000.0 if symbol == 'BTCUSDT' else 3000.0
+
+        except Exception as e:
+            logger.error(f"❌ Error extracting current price for {symbol}: {e}")
+            return 50000.0 if symbol == 'BTCUSDT' else 3000.0  # Safe fallback
+
+    def _get_current_price(self, symbol: str, market_data: Dict) -> float:
+        """
+        Legacy method - redirects to new extract method
+        """
+        return self._extract_current_price(market_data.get(symbol), symbol) if isinstance(market_data, dict) and symbol in market_data else 0.0
 
 class OrderManager:
     # Minimum order size in USD - REDUCED FOR BETTER SIGNAL EXECUTION
     MIN_ORDER_SIZE = 5.0  # $5 mínimo para órdenes válidas (reducido de $10)
     MIN_ORDER_USDT = 5.0  # Mínimo $5 USDT para órdenes
 
-    def __init__(self, binance_client=None, market_data=None):
+    def __init__(self, binance_client=None, market_data=None, portfolio_manager=None):
         """Initialize OrderManager."""
-        self.config = ConfigObject
+        self.config = ConfigObject()
         self.binance_client = binance_client
         self.market_data = market_data or {}
         self.active_orders = {}
@@ -26,18 +839,38 @@ class OrderManager:
         self.portfolio_limits = ConfigObject.PORTFOLIO_LIMITS
         self.execution_config = ConfigObject.EXECUTION_CONFIG
 
-        # Force testnet mode
-        self.config.OPERATION_MODE = "TESTNET"
-        self.execution_config["PAPER_MODE"] = True
-        self.execution_config["USE_TESTNET"] = True
+        # 🔥 CRITICAL FIX: Store portfolio_manager as instance variable
+        self.portfolio_manager = portfolio_manager
+        self.portfolio = portfolio_manager  # Alias for backward compatibility
+
+        # 🎯 FULL TRADING CYCLE MANAGER: Gestiona BUY→HOLD→SELL completo
+        # CRITICAL: portfolio_manager puede ser None en arquitectura desacoplada
+        self.trading_cycle = FullTradingCycleManager(
+            state_manager=None,  # Will be set when used
+            portfolio_manager=portfolio_manager,  # Puede ser None
+            config=self.config
+        )
+
+        # ✅ CRITICAL: Detectar modo paper y configurar para no enviar órdenes reales
+        self.paper_mode = self._detect_paper_mode()
+        self.execution_config["PAPER_MODE"] = self.paper_mode
+        self.execution_config["USE_TESTNET"] = True  # Siempre usar testnet para seguridad
+
+        logger.info(f"🛡️ MODO PAPER DETECTADO: {self.paper_mode} - {'Paper trading habilitado' if self.paper_mode else 'Modo real detectado'}")
+
+        # FIX 3 - Permitir BUY desde USDT en paper mode
+        self.allow_entry_from_cash = self.paper_mode  # Siempre True en paper mode
+        logger.info(f"💰 FIX 3: allow_entry_from_cash = {self.allow_entry_from_cash} (paper_mode = {self.paper_mode})")
+
+        # ✅ FIX OBLIGATORIO: Initialize monitoring flags
+        self.stop_loss_monitor_active = False
+        self.cooldown_monitor_active = False
 
         # 🛡️ STOP-LOSS SIMULATION SYSTEM
         self.active_stop_losses = {}  # symbol -> list of stop orders
-        self.stop_loss_monitor_active = True
 
         # 💰 PROFIT-TAKING ORDER MONITORING SYSTEM
         self.active_profit_orders = {}  # symbol -> list of profit orders
-        self.profit_order_monitor_active = True
 
         # 🔄 PERSISTENT ORDER TRACKING - Track simulated orders across cycles
         self.simulated_orders_file = "portfolio_state_live.json"  # Use existing JSON file
@@ -54,7 +887,6 @@ class OrderManager:
             "ETHUSDT": 15,  # 15 seconds for ETH (faster trading)
             "default": 15   # 15 seconds for other assets (improved responsiveness)
         }
-        self.cooldown_monitor_active = True
         self.cooldown_blocked_count = 0  # Track cooldown blocks per cycle
 
         # 🎯 CONFIDENCE-BASED MULTIPLIER SYSTEM
@@ -123,9 +955,220 @@ class OrderManager:
             "market_regime_adjustment": True,  # Adjust based on market conditions
         }
 
+        # 💰 DYNAMIC ORDER SIZING CONFIGURATION
+        self.MIN_ORDER_USDT = 11.25  # Minimum order size for Binance
+        self.MAX_ALLOCATION_PCT = 0.30  # Maximum 30% of available capital per order
+
         logger.info(f"✅ OrderManager initialized - Mode: {ConfigObject.OPERATION_MODE}")
         logger.info(f"✅ Limits BTC: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_BTC']}, ETH: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_ETH']}")
         logger.info(f"🎯 Confidence multipliers: {self.confidence_multipliers['enabled']}")
+        logger.info(f"💰 Dynamic sizing: MIN_ORDER=${self.MIN_ORDER_USDT}, MAX_ALLOCATION={self.MAX_ALLOCATION_PCT*100:.0f}%")
+
+    def _detect_paper_mode(self) -> bool:
+        """Detect if we're in paper trading mode based on configuration."""
+        try:
+            # ✅ CRITICAL: Check execution config first
+            if self.execution_config.get("PAPER_MODE", False):
+                logger.info("🛡️ MODO PAPER DETECTADO: PAPER_MODE=True en execution_config")
+                return True
+            
+            # ✅ Check operation mode
+            if hasattr(self.config, 'OPERATION_MODE') and self.config.OPERATION_MODE == "TESTNET":
+                logger.info("🛡️ MODO PAPER DETECTADO: OPERATION_MODE=TESTNET")
+                return True
+            
+            # ✅ Check if we have a Binance client configured for testnet
+            if self.binance_client:
+                # Try to detect if client is in testnet mode
+                # This is a heuristic - in real implementation you'd check client config
+                logger.info("🛡️ MODO PAPER DETECTADO: Binance client presente (asumiendo testnet)")
+                return True
+            
+            # ✅ Default to paper mode for safety
+            logger.info("🛡️ MODO PAPER DETECTADO: Modo por defecto (seguridad)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error detecting paper mode: {e}")
+            # ✅ CRITICAL: Default to paper mode on error for safety
+            logger.warning("🛡️ MODO PAPER DETECTADO: Error en detección, usando modo seguro (paper)")
+            return True
+
+        # 🛡️ STOP-LOSS SIMULATION SYSTEM
+        self.active_stop_losses = {}  # symbol -> list of stop orders
+
+        # 💰 PROFIT-TAKING ORDER MONITORING SYSTEM
+        self.active_profit_orders = {}  # symbol -> list of profit orders
+
+        # 🔄 PERSISTENT ORDER TRACKING - Track simulated orders across cycles
+        self.simulated_orders_file = "portfolio_state_live.json"  # Use existing JSON file
+        self._load_persistent_orders()
+
+        # Max stop-loss % widened from 1.5% to 5% for range-bound markets
+        self.MAX_STOP_LOSS_PCT = 0.050  # 5% instead of 1.5%
+
+        # ⏰ TRADE COOLDOWN SYSTEM - Prevent overtrading same symbol
+        self.trade_cooldowns = {}  # symbol -> last_trade_timestamp
+        self.last_signal_type = {}  # symbol -> last_signal_type (buy/sell/initial_deployment)
+        self.cooldown_periods = {
+            "BTCUSDT": 15,  # 15 seconds for BTC (high volume, faster trading)
+            "ETHUSDT": 15,  # 15 seconds for ETH (faster trading)
+            "default": 15   # 15 seconds for other assets (improved responsiveness)
+        }
+        self.cooldown_blocked_count = 0  # Track cooldown blocks per cycle
+
+        # 🎯 CONFIDENCE-BASED MULTIPLIER SYSTEM
+        self.confidence_multipliers = {
+            "enabled": True,
+            "sizing_range": (0.5, 2.5),  # Min/Max sizing multiplier
+            "stop_loss_range": (0.7, 1.3),  # Stop-loss tightness (lower = tighter stops)
+            "risk_range": (0.8, 1.5),  # Risk adjustment (lower = more conservative)
+            "priority_range": (0.5, 2.0),  # Execution priority
+            "position_limit_range": (0.7, 1.8),  # Position size limits
+        }
+
+        # 💰 STAGGERED PROFIT-TAKING SYSTEM - REDISIGNED FOR PROPER RISK-REWARD
+        # FIXED: Much wider profit targets to compensate for tighter stops
+        self.profit_taking_config = {
+            "enabled": True,
+            "levels": [
+                {"profit_pct": 0.03, "sell_pct": 0.25, "name": "quick_profit"},    # 3% profit, sell 25%
+                {"profit_pct": 0.08, "sell_pct": 0.35, "name": "moderate_gain"},  # 8% profit, sell 35%
+                {"profit_pct": 0.15, "sell_pct": 0.40, "name": "strong_gain"},    # 15% profit, sell 40%
+            ],
+            "regime_adjustments": {
+                "RANGE": {"multiplier": 0.8, "description": "Slightly conservative for range markets"},
+                "TREND": {"multiplier": 1.2, "description": "More aggressive for trending markets"},
+                "VOLATILE": {"multiplier": 1.0, "description": "Standard for volatile markets"}
+            },
+            "confidence_adjustment": True,  # Adjust levels based on confidence
+            "volatility_adjustment": True,  # Adjust profit targets based on volatility
+            "convergence_adjustment": True,  # Adjust levels based on signal convergence
+            "max_levels": 3,  # Maximum profit-taking levels
+            "min_profit_threshold": 0.025,  # 2.5% minimum profit to enable profit-taking (was 1.5%)
+        }
+
+        # 🔄 CONVERGENCE-BASED PROFIT TAKING
+        self.convergence_profit_taking = {
+            "enabled": True,
+            "convergence_multipliers": {
+                "high": 1.4,    # 40% more aggressive profit-taking for high convergence
+                "medium": 1.0,  # Baseline for medium convergence
+                "low": 0.6      # 40% more conservative for low convergence
+            },
+            "convergence_levels": {
+                "high": 0.8,    # Convergence score >= 0.8 is high
+                "medium": 0.5,  # Convergence score >= 0.5 is medium
+                "low": 0.0      # Below 0.5 is low
+            },
+            "early_exit_convergence": 0.9,  # Take all profits if convergence drops below this
+            "profit_lock_convergence": 0.85, # Lock in profits if convergence reaches this level
+        }
+
+        # 🎯 PROFIT TARGET CALCULATOR
+        self.profit_target_calculator = {
+            "enabled": True,
+            "risk_reward_ratios": [1.5, 2.0, 3.0, 4.0],  # RR ratios for different targets
+            "confidence_multipliers": {
+                "high": 1.3,    # 30% more aggressive for high confidence
+                "medium": 1.0,  # Baseline for medium confidence
+                "low": 0.7      # 30% more conservative for low confidence
+            },
+            "volatility_multipliers": {
+                "low": 0.8,     # Tighter targets in low volatility
+                "medium": 1.0,  # Baseline for medium volatility
+                "high": 1.4     # Wider targets in high volatility
+            },
+            "time_based_adjustment": True,  # Adjust targets based on holding time
+            "market_regime_adjustment": True,  # Adjust based on market conditions
+        }
+
+        # 💰 DYNAMIC ORDER SIZING CONFIGURATION
+        self.MIN_ORDER_USDT = 11.25  # Minimum order size for Binance
+        self.MAX_ALLOCATION_PCT = 0.30  # Maximum 30% of available capital per order
+
+        logger.info(f"✅ OrderManager initialized - Mode: {ConfigObject.OPERATION_MODE}")
+        logger.info(f"✅ Limits BTC: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_BTC']}, ETH: {ConfigObject.RISK_LIMITS['MAX_ORDER_SIZE_ETH']}")
+        logger.info(f"🎯 Confidence multipliers: {self.confidence_multipliers['enabled']}")
+        logger.info(f"💰 Dynamic sizing: MIN_ORDER=${self.MIN_ORDER_USDT}, MAX_ALLOCATION={self.MAX_ALLOCATION_PCT*100:.0f}%")
+
+    def calculate_dynamic_reserve(self, portfolio_value: float) -> float:
+        """
+        Calcular reserva USDT dinámica basada en el valor total del portfolio.
+
+        Args:
+            portfolio_value: Valor total del portfolio (USDT + posiciones valoradas)
+
+        Returns:
+            Reserva USDT recomendada (mínimo $50.0)
+        """
+        MIN_BASE_RESERVE = 50.0  # Reserva mínima absoluta
+        RESERVE_PCT = 0.02  # 2% del portfolio total como reserva
+
+        dynamic_reserve = max(MIN_BASE_RESERVE, portfolio_value * RESERVE_PCT)
+
+        logger.debug(f"💰 Dynamic reserve calculation: portfolio=${portfolio_value:.2f}, reserve=${dynamic_reserve:.2f} (2% of total, min $50)")
+        return dynamic_reserve
+
+    def set_portfolio_manager(self, portfolio_manager):
+        """
+        Setter method to inject portfolio_manager after initialization.
+        This fixes the NoneType error when portfolio_manager is injected post-creation.
+        """
+        self.portfolio_manager = portfolio_manager
+        self.portfolio = portfolio_manager
+        
+        # Also update in trading_cycle if it exists
+        if hasattr(self, 'trading_cycle') and self.trading_cycle:
+            self.trading_cycle.portfolio = portfolio_manager
+            if hasattr(self.trading_cycle, 'position_manager'):
+                self.trading_cycle.position_manager.portfolio = portfolio_manager
+        
+        logger.info("✅ portfolio_manager injected successfully into OrderManager")
+
+
+    def calculate_order_size(self, symbol: str, confidence: float, available_usdt: float) -> float:
+        """
+        Calcular tamaño de orden dinámicamente basado en USDT disponible.
+
+        Args:
+            symbol: Par de trading (e.g., 'BTCUSDT')
+            confidence: Confianza de la señal (0.0-1.0)
+            available_usdt: USDT disponible después de reservas
+
+        Returns:
+            Tamaño de orden en USDT
+        """
+
+        # Configuración base
+        MIN_ORDER_USDT = self.MIN_ORDER_USDT  # Mínimo de Binance
+        MAX_ALLOCATION_PCT = self.MAX_ALLOCATION_PCT  # Máximo 30% del capital disponible por orden
+
+        # Calcular tamaño base (30% del disponible)
+        base_size = available_usdt * MAX_ALLOCATION_PCT
+
+        # Aplicar multiplicador de confianza
+        confidence_multiplier = 1.0
+        if confidence > 0.7:
+            confidence_multiplier = 1.5
+        elif confidence > 0.8:
+            confidence_multiplier = 2.0
+        elif confidence > 0.9:
+            confidence_multiplier = 2.5
+
+        # Calcular tamaño final
+        order_size = base_size * confidence_multiplier
+
+        # Limitar al disponible
+        order_size = min(order_size, available_usdt - MIN_ORDER_USDT)
+
+        # Verificar mínimo
+        if order_size < MIN_ORDER_USDT:
+            logger.warning(f"⚠️ Order size too small: ${order_size:.2f} < ${MIN_ORDER_USDT} minimum")
+            return 0.0  # No hay suficiente capital
+
+        logger.info(f"💰 Dynamic order sizing: ${order_size:.2f} USDT ({confidence_multiplier:.1f}x confidence multiplier, base: ${base_size:.2f})")
+        return order_size
 
     def validate_order(self, order: Dict[str, Any], path_mode: str = None) -> Dict[str, Any]:
         """
@@ -740,343 +1783,39 @@ class OrderManager:
         """Generate orders from tactical signals."""
         try:
             orders = []
-            portfolio = state.get("portfolio", {})
-
-            # Debug logging
-            market_data_dict = state.get("market_data")
-            logger.info(f"🐛 DEBUG OrderManager - market_data type: {type(market_data_dict)}")
-            logger.info(f"🐛 DEBUG OrderManager - market_data keys: {list(market_data_dict.keys()) if isinstance(market_data_dict, dict) else 'N/A'}")
 
             for signal in valid_signals:
                 try:
-                    # ⏰ CHECK TRADE COOLDOWN BEFORE PROCESSING SIGNAL - PASAR TIPO DE SEÑAL
-                    signal_type = signal.side  # buy, sell, hold
-                    if self.should_apply_cooldown(signal.symbol, signal_type,
-                                                self.last_signal_type.get(signal.symbol),
-                                                self.trade_cooldowns.get(signal.symbol)):
-                        logger.warning(f"⏰ SIGNAL REJECTED: {signal.symbol} in trade cooldown, skipping signal generation")
-                        self.cooldown_blocked_count += 1  # Track cooldown blocks
-                        continue
+                    # Use FullTradingCycleManager to process signal and generate orders
+                    signal_dict = {
+                        'symbol': signal.symbol,
+                        'action': signal.side,
+                        'confidence': float(getattr(signal, "confidence", 0.5)),
+                        'strength': float(getattr(signal, "strength", 0.5)),
+                        'source': getattr(signal, "source", "l2_tactical")
+                    }
 
-                    # Ensure market_data is a dict
-                    if not isinstance(market_data_dict, dict):
-                        logger.error(f"❌ Invalid market_data type: {type(market_data_dict)}")
-                        continue
+                    # Process signal with position awareness - this returns order dict if successful
+                    result = self.trading_cycle.process_signal_with_position_awareness(
+                        signal_dict, state.get("market_data", {}), state
+                    )
 
-                    market_data = market_data_dict.get(signal.symbol)
-                    logger.info(f"🐛 DEBUG OrderManager - {signal.symbol} market_data type: {type(market_data)}")
-
-                    if market_data is None:
-                        logger.warning(f"⚠️ No market data for {signal.symbol} - key not found")
-                        continue
-
-                    if isinstance(market_data, pd.DataFrame):
-                        if market_data.empty:
-                            logger.warning(f"⚠️ Empty DataFrame for {signal.symbol}")
-                            continue
-                        # CRITICAL FIX: Extract scalar value properly from DataFrame/Series
-                        close_series = market_data["close"]
-                        if hasattr(close_series, 'iloc'):
-                            current_price = float(close_series.iloc[-1])
-                        else:
-                            current_price = float(close_series)
-                        logger.info(f"🐛 DEBUG OrderManager - {signal.symbol} current_price from DataFrame: {current_price}")
-                    elif isinstance(market_data, dict):
-                        # Handle dict format
-                        if 'close' in market_data:
-                            close_value = market_data['close']
-                            # Handle list/dict formats
-                            if isinstance(close_value, list):
-                                current_price = float(close_value[-1]) if close_value else 50000.0
-                            else:
-                                current_price = float(close_value)
-                            logger.info(f"🐛 DEBUG OrderManager - {signal.symbol} current_price from dict: {current_price}")
-                        else:
-                            logger.warning(f"⚠️ No 'close' key in market data dict for {signal.symbol}")
-                            continue
+                    # If we got a valid order back, add it to orders list
+                    if isinstance(result, dict) and result.get('status') == 'pending':
+                        orders.append(result)
+                        logger.info(f"✅ ORDER GENERATED: {signal.symbol} {result.get('side')} {result.get('quantity', 0):.4f}")
+                    elif result.get('status') == 'hold':
+                        logger.debug(f"📊 HOLD SIGNAL: {signal.symbol} - no order generated")
+                    elif result.get('status') == 'ignored':
+                        logger.info(f"⚠️ SIGNAL FILTERED: {signal.symbol} {signal.side} - {result.get('reason', 'unknown')} (actionable signal filtered by position logic)")
                     else:
-                        logger.warning(f"⚠️ Unsupported market data format for {signal.symbol}: {type(market_data)}")
-                        continue
-                    max_position = 1200.0 / current_price  # Coordinate with rotator's $1200 limit
-                    current_position = portfolio.get(signal.symbol, {}).get("position", 0.0)
-
-                    # ✅ FIXED: Dynamic threshold adjustment based on market conditions
-                    # Get market volatility and risk context
-                    l3_context = state.get("l3_output", {})
-
-                    # Handle volatility_forecast - can be nested dict or direct value
-                    vol_forecast_value = l3_context.get("volatility_forecast", {})
-                    if isinstance(vol_forecast_value, dict):
-                        volatility_forecast = float(vol_forecast_value.get(signal.symbol, 0.03) or 0.03)
-                    else:
-                        # Handle direct numeric value or string that should be numeric
-                        try:
-                            volatility_forecast = float(vol_forecast_value) if vol_forecast_value is not None else 0.03
-                        except (ValueError, TypeError):
-                            volatility_forecast = 0.03  # Default fallback
-
-                    # Handle risk_appetite - can be string category or numeric
-                    risk_appetite_value = l3_context.get("risk_appetite", 0.5)
-                    try:
-                        risk_appetite = float(risk_appetite_value) if risk_appetite_value is not None else 0.5
-                    except (ValueError, TypeError):
-                        # Map string categories to numeric values
-                        if isinstance(risk_appetite_value, str):
-                            risk_mapping = {
-                                "low": 0.3,
-                                "moderate": 0.5,
-                                "medium": 0.5,
-                                "high": 0.7,
-                                "conservative": 0.3,
-                                "aggressive": 0.8
-                            }
-                            risk_appetite = risk_mapping.get(risk_appetite_value.lower(), 0.5)
-                        else:
-                            risk_appetite = 0.5  # Default fallback
-
-                    # MICRO-POSITIONS FIX: Higher minimums to prevent insignificant positions
-                    # This prevents orders that cost less than $10 (too small to execute)
-                    base_min_order = 10.0  # Minimum $10 order value to be worth executing
-
-                    # Adjust minimum based on volatility (higher vol = slightly higher min to avoid slippage)
-                    vol_multiplier = max(0.3, min(1.5, volatility_forecast * 30))  # 0.3x to 1.5x based on vol %
-                    dynamic_min_order = base_min_order * vol_multiplier
-
-                    # Adjust based on risk appetite (higher risk = smaller orders)
-                    risk_multiplier = 1.5 - risk_appetite * 0.5  # 1.0 for high risk, 1.5 for low risk
-                    dynamic_min_order *= risk_multiplier
-
-                    # Ensure minimum doesn't go below MIN_ORDER_SIZE, max $25
-                    dynamic_min_order = max(self.MIN_ORDER_SIZE, min(25.0, dynamic_min_order))
-
-                    logger.info(f"📊 Dynamic thresholds for {signal.symbol}: min_order=${dynamic_min_order:.2f}, vol={volatility_forecast:.4f}, risk={risk_appetite:.2f}")
-
-                    # 🎯 CALCULATE CONFIDENCE MULTIPLIERS
-                    signal_confidence = float(getattr(signal, "confidence", 0.5))
-                    signal_strength = float(getattr(signal, "strength", 0.5))
-                    confidence_multipliers = self.calculate_confidence_multipliers(signal_confidence, signal_strength)
-
-                    logger.info(f"🎯 CONFIDENCE MULTIPLIERS for {signal.symbol}: sizing={confidence_multipliers['sizing']:.2f}x, stop_loss={confidence_multipliers['stop_loss']:.2f}x, risk={confidence_multipliers['risk']:.2f}x")
-
-                    # ✅ FIXED: Proper buy/sell/hold logic with dynamic thresholds
-                    if signal.side == "buy":
-                        # Buy logic
-                        usdt_balance = portfolio.get("USDT", {}).get("free", 0.0)
-                        if usdt_balance < dynamic_min_order:
-                            logger.warning(f"⚠️ Insufficient USDT balance: {usdt_balance:.2f} < {dynamic_min_order:.2f}")
-                            continue
-
-                        # COORDINATE WITH POSITION ROTATOR LIMITS - PRIORITY 3 FIX
-                        # Calculate TOTAL position including planned buy to respect $1200 limit
-                        base_order_pct = 0.25  # Base 25% of balance (increased for better capital utilization)
-                        strength_multiplier = getattr(signal, "strength", 0.5) * 2.0  # 0.5 to 2.0x
-                        vol_adjustment = max(0.7, 1.0 - volatility_forecast * 30)  # Reduce size in high vol (less aggressive reduction)
-                        confidence_sizing = confidence_multipliers["sizing"]  # Additional confidence-based sizing
-
-                        order_pct = base_order_pct * strength_multiplier * vol_adjustment * confidence_sizing
-                        order_value = min(usdt_balance * order_pct, 1000.0 * confidence_multipliers["position_limit"])  # Cap adjusted by confidence
-                        quantity = order_value / current_price
-
-                        # CRITICAL FIX: COORDINATE WITH POSITION ROTATOR - Calculate TOTAL position including planned buy
-                        total_after_buy = current_position + quantity
-                        max_position_rotator_limit = 1200.0 / current_price  # $1200 position limit used by rotator
-
-                        # If total after buy would exceed rotator limit, adjust buy size DOWN
-                        if total_after_buy > max_position_rotator_limit:
-                            logger.warning(f"🔄 POSITION COORDINATION: Planned buy would exceed rotator limit ${1200.0:.0f}")
-                            logger.warning(f"   Current position: {current_position:.4f}, Planned buy: {quantity:.4f}, Total: {total_after_buy:.4f} > {max_position_rotator_limit:.4f}")
-                            # Adjust quantity to fit within limit, leaving small buffer
-                            adjusted_quantity = max(0.0, max_position_rotator_limit - current_position - 0.001)  # Leave tiny buffer
-                            logger.info(f"   Adjusted buy size: {quantity:.4f} → {adjusted_quantity:.4f} to respect $1200 limit")
-                            quantity = adjusted_quantity
-                            order_value = quantity * current_price
-
-                        # Apply confidence-based position limit multiplier (additional safety layer)
-                        adjusted_max_position = max_position * confidence_multipliers["position_limit"]
-                        if current_position + quantity > adjusted_max_position:
-                            quantity = max(0.0, adjusted_max_position - current_position)
-                            order_value = quantity * current_price
-
-                    elif signal.side == "sell":
-                        # Sell logic - CRITICAL: Allow selling even with small positions for signal execution
-                        if current_position <= 0:
-                            logger.warning(f"⚠️ No position to sell for {signal.symbol}")
-                            continue
-
-                        # Dynamic sell sizing based on signal strength and confidence multipliers - HIGH CONFIDENCE AGGRESSIVE SIZING
-                        strength_multiplier = getattr(signal, "strength", 0.5) * 2.0
-                        base_sell_pct = min(0.7, 0.20 * strength_multiplier)  # 10% to 70% of position (base calculation)
-                        confidence_sell_multiplier = confidence_multipliers["sizing"]  # Additional confidence-based sizing
-                        sell_pct = min(0.9, base_sell_pct * confidence_sell_multiplier)  # Apply confidence multiplier, max 90%
-                        quantity = -current_position * sell_pct  # Negative for sell
-
-                        logger.info(f"📈 SELL EXECUTION: {signal.symbol} selling {sell_pct:.1%} of position ({abs(quantity):.4f} units) [confidence: {confidence_sell_multiplier:.2f}x]")
-
-                    else:  # hold
-                        # Do nothing for hold signals
-                        logger.info(f"📊 Hold signal for {signal.symbol} - no action taken")
-                        continue
-
-                    # Check against dynamic minimum order size WITH MICRO-POSITION FIX
-                    quantity = float(quantity)  # Ensure scalar value
-                    current_price = float(current_price)  # Ensure scalar value
-                    order_value_usdt = abs(quantity) * current_price
-                    validation_result = self.validate_order_size(signal.symbol, quantity, current_price, portfolio)
-
-                    # 💰 MICRO-POSITION FIX: Handle modified quantity for 100% sells
-                    if validation_result.get("modified_quantity") is not None and validation_result["conversion_type"] == "100_sell_micro_position":
-                        logger.info(f"💰 MICRO-POSITION FIX: Updating {signal.symbol} sell quantity from {quantity:.4f} to {validation_result['modified_quantity']:.4f} (100% position sell)")
-                        quantity = validation_result["modified_quantity"]
-                        order_value_usdt = validation_result["order_value"]  # Use the full position value
-
-                    if validation_result["valid"]:
-                        # 🎯 PATH MODE VALIDATION: Check HRM_PATH_MODE rules before proceeding
-                        path_order = {
-                            "symbol": signal.symbol,
-                            "side": signal.side,
-                            "signal_source": getattr(signal, "source", "unknown"),
-                            "quantity": quantity,
-                            "price": current_price
-                        }
-
-                        path_validation = self.validate_order(path_order)
-                        if not path_validation["valid"]:
-                            logger.warning(f"🚫 PATH MODE BLOCKED: {signal.symbol} {signal.side} - {path_validation['reason']}")
-                            continue  # Skip this signal, don't generate order
-
-                        logger.info(f"✅ PATH MODE VALIDATION PASSED: {signal.symbol} {signal.side} in {HRM_PATH_MODE}")
-
-                        # Prepare order parameters for conflict resolution
-                        order_params = {
-                            "quantity": quantity,
-                            "order_value": order_value_usdt,
-                            "max_order_cap": 1000.0,  # Default $1000 cap
-                            "volatility_used": volatility_forecast,
-                            "stop_loss_pct": max(0.008, min(0.015, volatility_forecast * 10)),  # FIXED: Tighter base stop-loss (0.8-1.5% range)
-                        }
-
-                        # 🎯 RESOLVE CONFLICTS BETWEEN DIFFERENT SIZING AND RISK PARAMETERS
-                        resolved_params = self.resolve_order_conflicts(
-                            order_params, signal, confidence_multipliers,
-                            max_position, current_position, current_price
-                        )
-
-                        # Update quantity and order value with resolved parameters
-                        quantity = resolved_params["quantity"]
-                        order_value_usdt = resolved_params["order_value"]
-
-                        # Create main market order with resolved parameters
-                        order = {
-                            "symbol": signal.symbol,
-                            "side": signal.side,
-                            "type": "MARKET",
-                            "quantity": quantity,
-                            "price": current_price,
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "signal_strength": signal_strength,
-                            "signal_confidence": signal_confidence,
-                            "signal_source": getattr(signal, "source", "tactical"),
-                            "dynamic_min_order": dynamic_min_order,
-                            "volatility_used": volatility_forecast,
-                            "risk_appetite_used": risk_appetite,
-                            "confidence_multipliers": confidence_multipliers,
-                            "conflicts_resolved": resolved_params.get("conflicts_resolved", []),
-                            "l3_regime": l3_context.get("regime", "unknown"),
-                            "status": "pending",
-                            "order_type": "ENTRY",  # Tag as entry order
-                            "execution_type": "MARKET"  # Execute as market order immediately
-                        }
-
-                        # CRÍTICO: Agregar STOP-LOSS order - SIEMPRE generar para todas las órdenes buy/sell
-                        stop_loss = getattr(signal, "stop_loss", None)
-
-                        # Si no hay stop-loss en la señal, calcular uno automático
-                        if not stop_loss or stop_loss <= 0:
-                            # Use resolved stop-loss percentage from conflict resolution
-                            stop_loss_pct = resolved_params.get("adjusted_stop_loss_pct",
-                                                               resolved_params.get("stop_loss_pct",
-                                                                                  max(0.015, min(0.05, volatility_forecast * 10))))
-
-                            if signal.side == "buy":
-                                stop_loss = current_price * (1 - stop_loss_pct)
-                            else:  # sell
-                                stop_loss = current_price * (1 + stop_loss_pct)
-                            logger.info(f"🛡️ AUTO STOP-LOSS: {signal.symbol} {signal.side} @ ${stop_loss:.2f} ({stop_loss_pct*100:.1f}% from entry) [resolved]")
-
-                        # 🛡️ CRITICAL VALIDATION: Stop-loss calculations and positioning
-                        stop_loss_valid, validation_details = self._validate_stop_loss_calculation(
-                            signal.side, current_price, stop_loss, signal.symbol
-                        )
-
-                        if stop_loss_valid:
-                            # Create appropriate stop-loss order based on signal direction
-                            if signal.side == "buy":
-                                # BUY signals: Stop-loss below current price, triggers SELL to exit long position
-                                sl_order = {
-                                    "symbol": signal.symbol,
-                                    "side": "SELL",  # Stop-loss sells to exit long position
-                                    "type": "STOP_LOSS",
-                                    "quantity": abs(quantity),  # Always positive
-                                    "stop_price": stop_loss,
-                                    "price": current_price,
-                                    "timestamp": datetime.utcnow().isoformat(),
-                                    "signal_strength": getattr(signal, "strength", 0.5),
-                                    "signal_source": "stop_loss_protection",
-                                    "parent_order": f"{signal.symbol}_{signal.side}_{datetime.utcnow().isoformat()}",
-                                    "status": "pending",
-                                    "stop_loss_validation": validation_details
-                                }
-                                orders.append(sl_order)
-                                logger.info(f"🛡️ STOP-LOSS VALIDADO: {signal.symbol} BUY→SELL {abs(quantity):.4f} @ stop={stop_loss:.2f} (below {current_price:.2f}) | Distance: {validation_details['distance_pct']:.2f}%")
-
-                            elif signal.side == "sell":
-                                # SELL signals: Stop-loss above current price, triggers BUY to cover short position
-                                sl_order = {
-                                    "symbol": signal.symbol,
-                                    "side": "BUY",  # Stop-loss buys to cover short position
-                                    "type": "STOP_LOSS",
-                                    "quantity": abs(quantity),  # Always positive
-                                    "stop_price": stop_loss,
-                                    "price": current_price,
-                                    "timestamp": datetime.utcnow().isoformat(),
-                                    "signal_strength": getattr(signal, "strength", 0.5),
-                                    "signal_source": "stop_loss_protection",
-                                    "parent_order": f"{signal.symbol}_{signal.side}_{datetime.utcnow().isoformat()}",
-                                    "status": "pending",
-                                    "stop_loss_validation": validation_details
-                                }
-                                orders.append(sl_order)
-                                logger.info(f"🛡️ STOP-LOSS VALIDADO: {signal.symbol} SELL→BUY {abs(quantity):.4f} @ stop={stop_loss:.2f} (above {current_price:.2f}) | Distance: {validation_details['distance_pct']:.2f}%")
-                        else:
-                            logger.error(f"🚨 STOP-LOSS REJECTED for {signal.symbol} {signal.side}: {validation_details['reason']}")
-                            logger.error(f"   Current Price: {current_price:.8f}, Stop Loss: {stop_loss:.8f}, Side: {signal.side}")
-                            # Continue without stop-loss - main order still executes but without protection
-                            logger.warning(f"⚠️ MAIN ORDER EXECUTING WITHOUT STOP-LOSS PROTECTION for {signal.symbol}")
-
-                        # ✅ FIXED: CORRECT ORDER EXECUTION
-                        # 1. FIRST: Add main market order
-                        orders.append(order)
-
-                        # 2. SECOND: Generate profit-taking orders (after main order, so position exists)
-                        if signal.side == "buy":
-                            # Get convergence score for profit-taking adjustments
-                            convergence_score = getattr(signal, "convergence", 0.5)
-                            # Get market regime from L3 context for regime-specific profit-taking
-                            market_regime = l3_context.get("regime", "TREND")  # Default to TREND if not available
-                            profit_taking_orders = self.generate_staggered_profit_taking(
-                                signal, quantity, current_price, confidence_multipliers, volatility_forecast, convergence_score, market_regime
-                            )
-                            orders.extend(profit_taking_orders)
-
-                        # 3. THIRD: Add stop-loss orders (after main order and profit-taking, ensuring position exists)
-                        logger.info(f"✅ Order generated: {signal.symbol} {signal.side} {quantity:.4f} (${order_value_usdt:.2f}) [min: ${dynamic_min_order:.2f}]")
-                    else:
-                        logger.warning(f"⚠️ Order too small: {signal.symbol} {signal.side} {quantity:.4f} (${order_value_usdt:.2f}) < ${dynamic_min_order:.2f} minimum")
+                        logger.warning(f"⚠️ UNEXPECTED RESULT: {signal.symbol} {signal.side} - {result}")
 
                 except Exception as e:
                     logger.error(f"❌ Error processing signal {signal}: {e}")
                     continue
 
+            logger.info(f"📊 ORDER GENERATION COMPLETE: {len(orders)} orders generated from {len(valid_signals)} signals")
             return orders
 
         except Exception as e:
@@ -1746,10 +2485,19 @@ class OrderManager:
                 "available_capital": liquidity_check['max_order_value']
             }
 
-        # Verificar que tenemos suficiente capital para buy orders
+        # 💰 CRITICAL FIX: Mode-dependent USDT balance check for buy orders
         if quantity > 0:  # Buy order
             required_usdt = order_value * 1.002  # Incluir fees
-            available_usdt = portfolio.get('USDT', {}).get('free', 0.0) if portfolio else 0.0
+            
+            # Check if we're in simulated mode
+            if hasattr(self.portfolio, 'mode') and self.portfolio.mode == "simulated":
+                available_usdt = self.portfolio.get_usdt_balance()
+                logger.debug(f"📊 SIMULATED MODE: Using portfolio USDT balance: ${available_usdt:.2f}")
+            else:
+                # Real mode - use exchange client
+                available_usdt = self.portfolio.get_available_balance("USDT")
+                logger.debug(f"📊 REAL MODE: Using exchange USDT balance: ${available_usdt:.2f}")
+
             if required_usdt > available_usdt:
                 logger.warning(f"🛑 Insufficient capital: {symbol} requires ${required_usdt:.2f}, available ${available_usdt:.2f}")
                 return {
@@ -1784,7 +2532,7 @@ class OrderManager:
             "reason": "Order size, capital, and liquidity requirements met",
             "order_value": order_value,
             "required_capital": order_value * 1.002 if quantity > 0 else 0.0,
-            "available_capital": portfolio.get('USDT', {}).get('free', 0.0) if quantity > 0 else portfolio.get(symbol, {}).get("position", 0.0) if portfolio else 0.0
+            "available_capital": available_usdt if quantity > 0 else portfolio.get(symbol, {}).get("position", 0.0) if portfolio else 0.0
         }
 
     def _check_market_liquidity(self, symbol: str, quantity: float, current_price: float) -> Dict[str, Any]:

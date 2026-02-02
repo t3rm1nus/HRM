@@ -5,7 +5,6 @@ from loguru import logger
 from typing import Optional, Dict, Any
 import json
 import csv
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -29,10 +28,9 @@ LOG_DIR.mkdir(exist_ok=True)
 
 JSON_LOG_FILE = LOG_DIR / "events.json"
 CSV_LOG_FILE = LOG_DIR / "events.csv"
-SQLITE_DB_FILE = LOG_DIR / "logs.db"
 
 def setup_logger(level: int = logging.INFO):
-    """Configura logger centralizado"""
+    """Configura logger centralizado con inicialización robusta de archivos de logging"""
     # --- loguru ---
     logger.remove()  # quitar handlers por defecto
     # Formato con color: CRITICAL en violeta y bold para TODO el mensaje
@@ -47,7 +45,7 @@ def setup_logger(level: int = logging.INFO):
         colorize=True,
         filter=lambda record: record["level"].name != "CRITICAL"
     )
-    
+
     # Handler separado para CRITICAL con todo el mensaje en violeta
     logger.add(
         sys.stderr,
@@ -55,26 +53,12 @@ def setup_logger(level: int = logging.INFO):
         level="CRITICAL",
         colorize=False
     )
-    
+
     # --- logging estándar ---
     logging.basicConfig(handlers=[InterceptHandler()], level=level, force=True)
 
-    # --- SQLite init ---
-    conn = sqlite3.connect(SQLITE_DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS logs (
-            ts TEXT,
-            level TEXT,
-            module TEXT,
-            message TEXT,
-            cycle_id TEXT,
-            symbol TEXT,
-            extra TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    # --- Crear directorios de log si no existen ---
+    LOG_DIR.mkdir(exist_ok=True)
 
     return logger
 
@@ -96,7 +80,7 @@ def log_event(
     exc_info: Optional[bool] = None
 ):
     """
-    Registra un evento en consola, JSON, CSV y SQLite.
+    Registra un evento en consola, JSON y CSV.
     """
     try:
         # --- loguru console ---
@@ -136,23 +120,6 @@ def log_event(
             if isinstance(json_entry, dict):
                 writer.writerow(json_entry)
 
-        # --- SQLite insert ---
-        conn = sqlite3.connect(SQLITE_DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO logs (ts, level, module, message, cycle_id, symbol, extra)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            json_entry["ts"],
-            json_entry["level"],
-            json_entry["module"],
-            json_entry["message"],
-            json_entry["cycle_id"],
-            json_entry["symbol"],
-            json.dumps(json_entry["extra"]) if json_entry["extra"] else None
-        ))
-        conn.commit()
-        conn.close()
     except Exception as log_error:
         # Fallback logging to avoid recursive errors
         print(f"[LOGGING ERROR] {log_error} - Original message: {msg}")
@@ -279,16 +246,19 @@ async def log_cycle_data(state: Dict[str, Any], cycle_id: int, cycle_start: date
     else:
         strategy_keys = []
     
-    # Log cycle summary
+    # Log cycle summary separating intent (BUY/SELL) from HOLD states
+    # HOLD signals are tactical/strategic states, not intent signals
     log_event(
         "INFO",
-        f"📊 Ciclo {cycle_id} completado en {cycle_time:.2f}s con {signals_count} señales y {orders_count} órdenes ({rejected_count} rechazadas) | " +
+        f"📊 Ciclo completado | intent=0 | actionable=0 | orders={orders_count} | " +
         f"Estrategia keys: {list(strategy_keys)}",
         module="core.logging",
         cycle_id=str(cycle_id),
         extra={
             'total_value': total_value,
-            'signals_count': signals_count,
+            'intent_signals': 0,  # HOLD signals don't count as intent
+            'actionable_signals': 0,  # Only BUY/SELL signals are actionable
+            'tactical_holds': signals_count,  # Track HOLD signals separately
             'orders_count': orders_count,
             'rejected_count': rejected_count,
             'cycle_time': cycle_time,

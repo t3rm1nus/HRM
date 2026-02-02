@@ -1,0 +1,20 @@
+{
+  "current_state": "BLIND",
+  "state_history": [
+    {
+      "from_state": "NORMAL",
+      "to_state": "BLIND",
+      "reason": "L3 balance sync failed - entering BLIND mode",
+      "timestamp": "2026-01-20T23:23:31.184120",
+      "metadata": {
+        "l3_balance_sync_failed": true,
+        "l3_mode": "BLIND"
+      }
+    }
+  ],
+  "state_metadata": {
+    "l3_balance_sync_failed": true,
+    "l3_mode": "BLIND"
+  },
+  "last_updated": "2026-01-20T23:23:31.184120"
+}

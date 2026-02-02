@@ -38,18 +38,25 @@ class BinanceClient:
         }
         api_key = self.config.get('BINANCE_API_KEY', '')
         api_secret = self.config.get('BINANCE_API_SECRET', '')
-        # Forzar testnet siempre
+        
+        # ✅ CRITICAL: Force testnet mode for paper trading safety
         use_testnet = True
+        self.config['USE_TESTNET'] = True  # Ensure config reflects this
 
         logger.info(f"Inicializando BinanceClient con: api_key={'SET' if api_key else 'NOT SET'}, api_secret={'SET' if api_secret else 'NOT SET'}, use_testnet={use_testnet}")
 
+        # ✅ CRITICAL: Validate testnet configuration
+        if not api_key or not api_secret:
+            logger.warning("⚠️ Advertencia: Claves API no configuradas - usando modo simulado")
+            # Could set to simulated mode here if needed
+        
         options = {
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot', 
-                'test': True,
+                'test': True,  # ✅ CRITICAL: Force testnet
                 # Configuración de timeouts
                 'timeout': 10000,  # 10 segundos
                 'connectTimeout': 5000,  # 5 segundos para conexión
@@ -66,7 +73,11 @@ class BinanceClient:
                     'ttl_dns_cache': 300  # 5 minutos de cache DNS
                 }
             },
-            'urls': {'api': 'https://testnet.binance.vision/api'}
+            # ✅ CRITICAL: Explicit testnet URLs
+            'urls': {
+                'api': 'https://testnet.binance.vision/api',
+                'test': 'https://testnet.binance.vision/api'
+            }
         }
         logger.info("✅ Usando Testnet de Binance con URLs configuradas")
 
@@ -120,6 +131,11 @@ class BinanceClient:
         """
         Obtiene datos OHLCV para un símbolo con manejo robusto de errores y reintentos.
         """
+        # ✅ CRITICAL: PROHIBIR Binance testnet para market data
+        if self.config.get('USE_TESTNET', True):
+            logger.warning(f"🧪 MODO PAPER: Retornando datos simulados para {symbol}")
+            return self._get_mock_klines(symbol, timeframe, limit)
+        
         max_retries = 3
         retry_delay = 1  # segundos
         
@@ -139,6 +155,7 @@ class BinanceClient:
                 
                 await self.exchange.load_markets()
                 logger.info(f"Solicitando OHLCV: symbol={symbol}, timeframe={timeframe}, limit={limit}")
+                
                 ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
                 
                 # Validar respuesta
@@ -169,6 +186,122 @@ class BinanceClient:
                 return []
                 
         return []  # Si llegamos aquí, todos los intentos fallaron
+
+    def _get_mock_klines(self, symbol: str, timeframe: str, limit: int) -> list:
+        """
+        Genera datos OHLCV simulados para modo paper trading.
+        """
+        import random
+        import time
+        
+        # Precios base según el símbolo
+        base_prices = {
+            'BTCUSDT': 50000.0,
+            'ETHUSDT': 3000.0,
+            'BNBUSDT': 300.0,
+            'SOLUSDT': 100.0
+        }
+        
+        base_price = base_prices.get(symbol, 50000.0)
+        current_time = int(time.time() * 1000)
+        timeframe_ms = self._get_timeframe_ms(timeframe)
+        
+        klines = []
+        current_price = base_price
+        
+        for i in range(limit):
+            # Generar precios aleatorios con tendencia suave
+            price_change = random.uniform(-0.02, 0.02) * current_price  # ±2%
+            current_price = max(0.01, current_price + price_change)
+            
+            open_price = current_price
+            high_price = open_price * random.uniform(1.0, 1.02)
+            low_price = open_price * random.uniform(0.98, 1.0)
+            close_price = random.uniform(low_price, high_price)
+            volume = random.uniform(1.0, 100.0)
+            
+            timestamp = current_time - (limit - i - 1) * timeframe_ms
+            
+            klines.append([
+                timestamp,
+                float(open_price),
+                float(high_price),
+                float(low_price),
+                float(close_price),
+                float(volume)
+            ])
+        
+        logger.info(f"📊 Datos simulados generados para {symbol}: {len(klines)} velas")
+        return klines
+
+    def _get_timeframe_ms(self, timeframe: str) -> int:
+        """Convierte timeframe a milisegundos"""
+        timeframe_map = {
+            '1m': 60000,
+            '3m': 180000,
+            '5m': 300000,
+            '15m': 900000,
+            '30m': 1800000,
+            '1h': 3600000,
+            '2h': 7200000,
+            '4h': 14400000,
+            '1d': 86400000
+        }
+        return timeframe_map.get(timeframe, 60000)
+
+    async def get_ticker_price(self, symbol: str) -> float:
+        """
+        Obtiene el precio actual de un símbolo.
+        """
+        # ✅ CRITICAL: PROHIBIR Binance testnet para market data
+        if self.config.get('USE_TESTNET', True):
+            logger.warning(f"🧪 MODO PAPER: Retornando precio simulado para {symbol}")
+            return self._get_mock_price(symbol)
+        
+        try:
+            if self.exchange.session is None or self.exchange.session.closed:
+                logger.warning("Sesión cerrada, reiniciando...")
+                await self.exchange.close()
+                # Recrear el exchange con las mismas opciones
+                self.exchange = ccxt.binance(self.exchange.options)
+                self.exchange.set_sandbox_mode(True)
+            
+            await self.exchange.load_markets()
+            ticker = await self.exchange.fetch_ticker(symbol)
+            
+            if 'last' in ticker:
+                price = float(ticker['last'])
+                logger.debug(f"💰 Precio actual {symbol}: {price}")
+                return price
+            else:
+                logger.error(f"❌ No se encontró precio en ticker para {symbol}")
+                return 0.0
+                
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo precio para {symbol}: {str(e)}")
+            return 0.0
+
+    def _get_mock_price(self, symbol: str) -> float:
+        """
+        Genera un precio simulado para modo paper trading.
+        """
+        import random
+        
+        # Precios base según el símbolo
+        base_prices = {
+            'BTCUSDT': 50000.0,
+            'ETHUSDT': 3000.0,
+            'BNBUSDT': 300.0,
+            'SOLUSDT': 100.0
+        }
+        
+        base_price = base_prices.get(symbol, 50000.0)
+        # Variación aleatoria del ±2%
+        price_change = random.uniform(-0.02, 0.02) * base_price
+        price = max(0.01, base_price + price_change)
+        
+        logger.info(f"💰 Precio simulado para {symbol}: {price:.2f}")
+        return price
         
     async def close(self):
         """Cierra apropiadamente las conexiones del cliente."""
@@ -180,12 +313,6 @@ class BinanceClient:
                 logger.info("Cliente cerrado correctamente")
         except Exception as e:
             logger.error(f"Error cerrando el cliente: {e}", exc_info=True)
-        except ccxt.NetworkError as e:
-            logger.error(f"❌ Error de red para {symbol}: {str(e)} (verifique conexión o URLs de testnet)", exc_info=True)
-            return []
-        except Exception as e:
-            logger.error(f"❌ Error obteniendo klines para {symbol}: {str(e)}", exc_info=True)
-            return []
 
     async def get_account_balances(self) -> Dict[str, float]:
         """

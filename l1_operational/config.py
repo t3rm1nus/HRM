@@ -4,6 +4,7 @@ Configuración centralizada de L1_operational.
 Contiene todos los límites de riesgo y parámetros de ejecución.
 """
 import os
+from typing import Dict, Optional, List, Any
 
 # Modo de operación
 OPERATION_MODE = "LIVE"  # "paper", "live", "development", "testing"
@@ -132,7 +133,11 @@ class ConfigObject:
     def is_paper_mode(self):
         """Verificar si estamos en modo paper"""
         return self.OPERATION_MODE.upper() == "PAPER" or self.EXECUTION_CONFIG["PAPER_MODE"]
-    
+
+    def get(self, key, default=None):
+        """Dictionary-like get method for compatibility"""
+        return getattr(self, key, default)
+
     @classmethod
     def get_class_risk_limit(cls, asset, limit_type=None):
         """Método de clase para obtener límites"""

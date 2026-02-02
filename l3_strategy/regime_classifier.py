@@ -21,11 +21,15 @@ class MarketRegimeClassifier:
         """Initialize classifier with calibrated crypto thresholds"""
         self.target_hours = 6
         self.min_data_points = 48
-        
+
         self.calculation_window = None
         self.detected_timeframe = None
 
-        # CALIBRATED THRESHOLDS FOR CRYPTO
+        # Cache to prevent multiple evaluations per cycle
+        self._regime_cache = {}
+        self._cycle_cache = {}
+
+        # CALIBRATED THRESHOLDS FOR CRYPTO - RELAXED RANGE REJECTION
         self.thresholds = {
             'trend': {
                 'strong_change': 0.020,
@@ -35,7 +39,7 @@ class MarketRegimeClassifier:
                 'min_adx': 20
             },
             'range': {
-                'max_directional_move': 0.003,  # 0.3% for strict range
+                'max_directional_move': 0.012,  # RELAXED: 1.2% for crypto (was 0.3%)
                 'tight_bb_width': 0.004,
                 'normal_bb_width': 0.010,
                 'min_touches': 2,
@@ -73,16 +77,31 @@ class MarketRegimeClassifier:
         window = int(target_minutes / timeframe_minutes)
         return max(self.min_data_points, window)
 
-    def classify_market_regime(self, df: pd.DataFrame, symbol: str = "BTCUSDT") -> Dict:
+    def classify_market_regime(self, df: pd.DataFrame, symbol: str = "BTCUSDT", cycle_id: Optional[int] = None) -> Dict:
         """Main classification with dynamic timeframe detection and setup detection"""
         try:
+            # Generate cache key - CRITICAL: Use cycle_id as primary key to prevent multiple evaluations per cycle
+            if cycle_id is not None:
+                cache_key = f"{symbol}_{cycle_id}"
+            else:
+                # Fallback to market data hash if no cycle_id (shouldn't happen in normal operation)
+                market_data_hash = hash(str(df.values.tobytes()) + str(df.index.to_list())) if hasattr(df, 'values') else hash(str(df))
+                cache_key = f"{symbol}_{market_data_hash}"
+
+            # Check cache to prevent duplicate evaluations per cycle - ONLY ALLOW 1 EVALUATION PER CYCLE
+            if cache_key in self._regime_cache:
+                logger.debug(f"Regime cache hit for {symbol} cycle {cycle_id} - using cached result")
+                return self._regime_cache[cache_key]
+
             self.detected_timeframe = self._detect_timeframe(df)
             self.calculation_window = self._calculate_dynamic_window(self.detected_timeframe)
-            
+
             logger.info(f"Detected timeframe: {self.detected_timeframe}min, using {self.calculation_window} candles for {self.target_hours}h analysis")
 
             if not self._validate_input_data(df):
-                return self._create_error_result("insufficient_data")
+                result = self._create_error_result("insufficient_data")
+                self._regime_cache[cache_key] = result
+                return result
 
             features_df = self._calculate_analysis_features(df)
             window_data = features_df.tail(self.calculation_window)
@@ -118,6 +137,10 @@ class MarketRegimeClassifier:
             }
 
             self._log_regime_classification(result, symbol)
+
+            # Store result in cache to prevent duplicate evaluations
+            self._regime_cache[cache_key] = result
+
             return result
 
         except Exception as e:
@@ -405,9 +428,15 @@ class MarketRegimeClassifier:
             }
             primary_regime = max(scores, key=scores.get)
             primary_score = scores[primary_regime]
-            
-            logger.warning(f"Regime determination fell back to highest score: {primary_regime} ({primary_score:.2f})")
-            
+
+            # Log with appropriate severity based on confidence
+            if primary_score > 0.4:
+                logger.info(f"Regime determination: {primary_regime} ({primary_score:.2f}) - acceptable fallback")
+            elif primary_score > 0.3:
+                logger.warning(f"Regime determination: {primary_regime} ({primary_score:.2f}) - low confidence fallback")
+            else:
+                logger.warning(f"Regime determination: {primary_regime} ({primary_score:.2f}) - very low confidence, potential classification issues")
+
             subtype = results[primary_regime.lower()]['subtype']
             return primary_regime, primary_score, subtype
 
@@ -495,33 +524,44 @@ class MarketRegimeClassifier:
             return {}
 
     def _log_regime_classification(self, result: Dict, symbol: str):
-        """Log regime classification results with setup detection in MAGENTA color"""
+        """Log regime classification results with setup detection - CHANGE vs CONFIRMED"""
         try:
             regime = result['primary_regime']
             subtype = result['subtype']
             confidence = result['confidence']
             metadata = result['metadata']
 
-            # ANSI color codes for MAGENTA/PINK
-            MAGENTA = '\033[95m'  # Bright magenta
-            RESET = '\033[0m'
+            # Check if regime has changed (store previous regime as instance variable)
+            current_regime_key = f"{regime}_{subtype}"  # Only check regime and subtype change, not confidence
+            regime_changed = not hasattr(self, '_previous_regime_key') or self._previous_regime_key != current_regime_key
 
-            logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
-            logger.info(f"{MAGENTA}{symbol} REGIME CLASSIFICATION{RESET}")
-            logger.info(f"{MAGENTA}Timeframe: {metadata['timeframe_minutes']}min | Window: {metadata['calculation_window']} candles ({self.target_hours}h){RESET}")
-            logger.info(f"{MAGENTA}Price Change: {metadata['price_change_pct']:+.2%}{RESET}")
-            logger.info(f"{MAGENTA}{'-' * 80}{RESET}")
-            logger.info(f"{MAGENTA}PRIMARY: {regime} | Subtype: {subtype} | Confidence: {confidence:.2%}{RESET}")
+            if regime_changed:
+                # Regime changed - log the details
+                self._previous_regime_key = current_regime_key
 
-            # Highlight setup detection
-            if subtype in ['OVERSOLD_SETUP', 'OVERBOUGHT_SETUP']:
-                logger.info(f"{MAGENTA}🎯 TRADING SETUP DETECTED: {subtype} - Mean reversion opportunity{RESET}")
+                # ANSI color codes for MAGENTA/PINK
+                MAGENTA = '\033[95m'  # Bright magenta
+                RESET = '\033[0m'
 
-            logger.info(f"{MAGENTA}Scores: T:{result['regime_scores']['TRENDING']:.2f} R:{result['regime_scores']['RANGE']:.2f} V:{result['regime_scores']['VOLATILE']:.2f} B:{result['regime_scores']['BREAKOUT']:.2f}{RESET}")
+                logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
+                logger.info(f"{MAGENTA}{symbol} REGIME CHANGE DETECTED{RESET}")
+                logger.info(f"{MAGENTA}Timeframe: {metadata['timeframe_minutes']}min | Window: {metadata['calculation_window']} candles ({self.target_hours}h){RESET}")
+                logger.info(f"{MAGENTA}Price Change: {metadata['price_change_pct']:+.2%}{RESET}")
+                logger.info(f"{MAGENTA}{'-' * 80}{RESET}")
+                logger.info(f"{MAGENTA}PRIMARY: {regime} | Subtype: {subtype} | Confidence: {confidence:.2%}{RESET}")
 
-            metrics = result['metrics']
-            logger.info(f"{MAGENTA}Metrics: RSI:{metrics.get('rsi', 50):.1f} ADX:{metrics.get('adx', 20):.1f} BBw:{metrics.get('bb_width', 0):.2%} Vol:{metrics.get('volatility', 0):.4f}{RESET}")
-            logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
+                # Highlight setup detection
+                if subtype in ['OVERSOLD_SETUP', 'OVERBOUGHT_SETUP']:
+                    logger.info(f"{MAGENTA}🎯 TRADING SETUP DETECTED: {subtype} - Mean reversion opportunity{RESET}")
+
+                logger.info(f"{MAGENTA}Scores: T:{result['regime_scores']['TRENDING']:.2f} R:{result['regime_scores']['RANGE']:.2f} V:{result['regime_scores']['VOLATILE']:.2f} B:{result['regime_scores']['BREAKOUT']:.2f}{RESET}")
+
+                metrics = result['metrics']
+                logger.info(f"{MAGENTA}Metrics: RSI:{metrics.get('rsi', 50):.1f} ADX:{metrics.get('adx', 20):.1f} BBw:{metrics.get('bb_width', 0):.2%} Vol:{metrics.get('volatility', 0):.4f}{RESET}")
+                logger.info(f"{MAGENTA}{'=' * 80}{RESET}")
+            else:
+                # Regime hasn't changed - log minimal confirmation
+                logger.debug(f"✅ {symbol} REGIME CONFIRMED (unchanged): {regime} {subtype} (conf={confidence:.2f})")
 
         except Exception as e:
             logger.error(f"Error logging regime classification: {e}")

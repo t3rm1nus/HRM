@@ -35,21 +35,22 @@ class PathModeSignalGenerator:
         # Extract setup information from L3 context
         setup_type = l3_context.get('setup_type')
         allow_l2_signals = l3_context.get('allow_l2_signals', False)
+        allow_setup_trades = l3_context.get('allow_setup_trades', False)
 
         self.logger.info(f"🎯 {path_mode} SIGNAL GENERATION: {symbol}")
         self.logger.info(f"   L1/L2: {l1_l2_signal} | L3: {l3_signal} ({l3_conf:.2f}) | Regime: {regime}")
-        self.logger.info(f"   Setup: {setup_type} | Allow L2: {allow_l2_signals}")
+        self.logger.info(f"   Setup: {setup_type} | Allow L2: {allow_l2_signals} | Allow Setup Trades: {allow_setup_trades}")
 
         # Process based on path mode
         if path_mode == 'PATH1':
             return self._process_path1_signal(symbol, l1_l2_signal, l3_context)
         elif path_mode == 'PATH2':
-            return self._process_path2_signal(symbol, l1_l2_signal, l3_context, setup_type, allow_l2_signals)
+            return self._process_path2_signal(symbol, l1_l2_signal, l3_context, setup_type, allow_l2_signals, allow_setup_trades)
         elif path_mode == 'PATH3':
             return self._process_path3_signal(symbol, l1_l2_signal, l3_context)
         else:
             self.logger.warning(f"Unknown path_mode: {path_mode}, defaulting to PATH2")
-            return self._process_path2_signal(symbol, l1_l2_signal, l3_context, setup_type, allow_l2_signals)
+            return self._process_path2_signal(symbol, l1_l2_signal, l3_context, setup_type, allow_l2_signals, allow_setup_trades)
 
     def _process_path1_signal(self, symbol: str, l1_l2_signal: str, l3_context: Dict[str, Any]) -> Dict[str, Any]:
         """PATH1: Pure Trend-Following - Regime driven only"""
@@ -71,7 +72,7 @@ class PathModeSignalGenerator:
         }
 
     def _process_path2_signal(self, symbol: str, l1_l2_signal: str, l3_context: Dict[str, Any],
-                            setup_type: Optional[str], allow_l2_signals: bool) -> Dict[str, Any]:
+                            setup_type: Optional[str], allow_l2_signals: bool, allow_setup_trades: bool) -> Dict[str, Any]:
         """PATH2: Hybrid Intelligent - Balanced multi-signal with setup awareness"""
         regime = l3_context.get('regime', 'neutral')
         l3_signal = l3_context.get('l3_signal', 'hold')
@@ -79,31 +80,43 @@ class PathModeSignalGenerator:
 
         self.logger.info(f"   PATH2: Hybrid intelligence - {regime.upper()} regime with L1/L2")
 
-        # PRIORITY: Handle activated setups
-        if setup_type == 'oversold' and l1_l2_signal.upper() == 'BUY':
-            self.logger.info(f"   ✅ OVERSOLD SETUP: Allowing L2 BUY for {symbol} with 50% size")
+        # PRIORITY: Handle activated setups - ONLY if allow_setup_trades is True
+        if allow_setup_trades and setup_type == 'oversold' and l1_l2_signal.upper() == 'BUY':
+            # Calculate confidence as per specification: max(0.5, min(l3_confidence, tactical_confidence + 0.15))
+            # Using l3_conf as tactical_confidence for now (L2 confidence not directly available here)
+            tactical_confidence = l3_conf
+            final_confidence = max(0.5, min(l3_conf, tactical_confidence + 0.15))
+            setup_max_allocation = l3_context.get('setup_max_allocation', 0.10)
+
+            self.logger.info(f"   ✅ OVERSOLD SETUP: L2 BUY allowed for {symbol} (conf={final_confidence:.2f})")
             return {
                 'symbol': symbol,
                 'action': 'BUY',
-                'confidence': min(l3_conf, 0.70),
-                'size_multiplier': 0.50,
+                'confidence': final_confidence,
+                'size_multiplier': setup_max_allocation,
                 'setup_trade': True,
                 'path_mode': 'PATH2',
                 'setup_type': setup_type,
-                'reason': f'path2_oversold_setup_mean_reversion'
+                'reason': 'L3 oversold setup - mean reversion'
             }
 
-        elif setup_type == 'overbought' and l1_l2_signal.upper() == 'SELL':
-            self.logger.info(f"   ✅ OVERBOUGHT SETUP: Allowing L2 SELL for {symbol} with 50% size")
+        elif allow_setup_trades and setup_type == 'overbought' and l1_l2_signal.upper() == 'SELL':
+            # Calculate confidence as per specification: max(0.5, min(l3_confidence, tactical_confidence + 0.15))
+            # Using l3_conf as tactical_confidence for now (L2 confidence not directly available here)
+            tactical_confidence = l3_conf
+            final_confidence = max(0.5, min(l3_conf, tactical_confidence + 0.15))
+            setup_max_allocation = l3_context.get('setup_max_allocation', 0.10)
+
+            self.logger.info(f"   ✅ OVERBOUGHT SETUP: L2 SELL allowed for {symbol} (conf={final_confidence:.2f})")
             return {
                 'symbol': symbol,
                 'action': 'SELL',
-                'confidence': min(l3_conf, 0.70),
-                'size_multiplier': 0.50,
+                'confidence': final_confidence,
+                'size_multiplier': setup_max_allocation,
                 'setup_trade': True,
                 'path_mode': 'PATH2',
                 'setup_type': setup_type,
-                'reason': f'path2_overbought_setup_mean_reversion'
+                'reason': 'L3 overbought setup - mean reversion'
             }
 
         # HIGH CONFIDENCE L3: Allow L2 signals when L3 has strong conviction
@@ -119,22 +132,10 @@ class PathModeSignalGenerator:
                 'reason': f'path2_strong_{regime.lower()}_regime'
             }
 
-        # RANGE REGIME: Generate range-specific signals instead of blocking
-        if regime.lower() == 'range':
-            if allow_l2_signals:
-                self.logger.info(f"   ⚠️ SETUP OVERRIDE: Allowing L2 signal for {symbol} despite range regime")
-                return {
-                    'symbol': symbol,
-                    'action': l1_l2_signal.upper(),
-                    'confidence': min(l3_conf, 0.60),
-                    'size_multiplier': 0.75,
-                    'setup_override': True,
-                    'path_mode': 'PATH2',
-                    'reason': f'path2_range_setup_override'
-                }
-            else:
-                self.logger.info(f"   🔄 RANGE REGIME: Generating range-specific signal for {symbol}")
-                return self._generate_range_signal(symbol, l3_context)
+        # RANGE REGIME: Only HOLD if not allowing setup trades
+        if regime.lower() == 'range' and not allow_setup_trades:
+            self.logger.info(f"   🔄 RANGE REGIME: HOLD (capital preservation, no setup trades allowed)")
+            return self._generate_range_signal(symbol, l3_context)
 
         # DEFAULT: Conservative approach
         self.logger.info(f"   📊 PATH2 CONSERVATIVE: L3 priority over L2")

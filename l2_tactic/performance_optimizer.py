@@ -22,6 +22,7 @@ No requiere dependencias externas. Si está instalado pandas, el batcher lo apro
 Uso rápido
 ----------
 from l2_tactic.performance_optimizer import PerformanceOptimizer, PerfConfig
+from typing import Dict, Optional, List, Any
 
 optimizer = PerformanceOptimizer()              # usa PerfConfig() por defecto
 model = AIModelWrapper(cfg)                     # tu wrapper actual

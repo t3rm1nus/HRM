@@ -17,364 +17,38 @@ except ImportError:
     TAX_TRACKER_AVAILABLE = False
     logger.warning("⚠️ TaxTracker no disponible - seguimiento fiscal deshabilitado")
 
-async def update_portfolio_from_orders(state, orders):
-    """Actualiza el portfolio basado en las órdenes ejecutadas"""
-    try:
-        # AUDITORÍA CRÍTICA: Logging del estado inicial
-        logger.info("🔍 [DEBUG] update_portfolio_from_orders - INICIO:")
-        logger.info(f"   Órdenes recibidas: {len(orders)}")
-        for i, order in enumerate(orders):
-            logger.info(f"   Orden {i}: {order.get('symbol')} {order.get('side')} {order.get('quantity', 0):.6f} @ {order.get('price', 0):.2f}")
+# Importar Paper Trade Logger para trades simulados
+try:
+    from storage.paper_trade_logger import get_paper_logger
+    PAPER_LOGGER_AVAILABLE = True
+except ImportError:
+    PAPER_LOGGER_AVAILABLE = False
+    logger.warning("⚠️ PaperTradeLogger no disponible - trades simulados no se guardarán")
 
-        # CRÍTICO: NO resetear estados - mantener posiciones entre ciclos
-        # Solo usar el portfolio existente del state - NUNCA inicializar con valores por defecto
-        portfolio = state.get("portfolio", {})
+# Importar SimulatedExchangeClient para modo simulado
+try:
+    from core.simulated_exchange_client import SimulatedExchangeClient
+    SIMULATED_CLIENT_AVAILABLE = True
+except ImportError:
+    SIMULATED_CLIENT_AVAILABLE = False
+    logger.warning("⚠️ SimulatedExchangeClient no disponible - modo simulado limitado")
 
-        # Si no hay portfolio en el state, inicializar vacío (no con valores por defecto)
-        if not portfolio:
-            logger.warning("⚠️ No hay portfolio en state - inicializando vacío")
-            portfolio = {
-                'BTCUSDT': {'position': 0.0, 'free': 0.0},
-                'ETHUSDT': {'position': 0.0, 'free': 0.0},
-                'USDT': {'free': 0.0},  # Inicializar en 0, no con 3000
-                'total': 0.0,
-                'peak_value': 0.0,
-                'total_fees': 0.0
-            }
-
-        logger.info("🔄 [DEBUG] Portfolio actual (sin resetear):")
-        logger.info(f"   Portfolio actual: BTC={portfolio.get('BTCUSDT', {}).get('position', 0.0):.6f}, ETH={portfolio.get('ETHUSDT', {}).get('position', 0.0):.3f}, USDT={portfolio.get('USDT', {}).get('free', 0.0):.2f}")
-
-        # DEBUG: Check if portfolio has the expected structure
-        logger.info(f"   Portfolio structure check:")
-        logger.info(f"     BTCUSDT key exists: {'BTCUSDT' in portfolio}")
-        logger.info(f"     ETHUSDT key exists: {'ETHUSDT' in portfolio}")
-        logger.info(f"     USDT key exists: {'USDT' in portfolio}")
-        if 'BTCUSDT' in portfolio:
-            logger.info(f"     BTCUSDT structure: {portfolio['BTCUSDT']}")
-        if 'ETHUSDT' in portfolio:
-            logger.info(f"     ETHUSDT structure: {portfolio['ETHUSDT']}")
-        if 'USDT' in portfolio:
-            logger.info(f"     USDT structure: {portfolio['USDT']}")
-
-        # VALIDACIÓN CRÍTICA: Los fees nunca deben ser negativos (antes de cualquier procesamiento)
-        total_fees = safe_float(portfolio.get("total_fees", 0.0))
-        if total_fees < 0:
-            logger.error(f"🚨 CRÍTICO: Total fees negativo detectado: {total_fees:.6f}")
-            logger.error("   Esto indica corrupción en el estado del portfolio")
-            logger.error("   Reseteando fees a 0.0")
-            total_fees = 0.0
-            # Actualizar el portfolio con fees corregidos
-            portfolio["total_fees"] = total_fees
-            # También actualizar el state para que se refleje el cambio
-            state["portfolio"]["total_fees"] = total_fees
-
-        # Si no hay órdenes procesadas, mantener el estado actual
-        filled_orders = [o for o in orders if o.get("status") == "filled"]
-        if len(filled_orders) == 0:
-            logger.info("ℹ️ [DEBUG] No hay órdenes procesadas - manteniendo portfolio actual")
-            # Mantener valores actuales sin cambios
-            return
-
-        logger.info(f"📈 [DEBUG] Procesando {len(filled_orders)} órdenes ejecutadas")
-
-        # Handle both old and new portfolio structures
-        if isinstance(portfolio.get("USDT"), dict):
-            # New structure
-            btc_balance = safe_float(portfolio.get("BTCUSDT", {}).get("position", 0.0))
-            eth_balance = safe_float(portfolio.get("ETHUSDT", {}).get("position", 0.0))
-            usdt_balance = safe_float(portfolio.get("USDT", {}).get("free", 3000.0))
-        else:
-            # Old structure (fallback)
-            positions = portfolio.get("positions", {})
-            btc_balance = safe_float(positions.get("BTCUSDT", {}).get("size", 0.0))
-            eth_balance = safe_float(positions.get("ETHUSDT", {}).get("size", 0.0))
-            usdt_balance = safe_float(portfolio.get("USDT", 3000.0))
-
-        logger.info(f"   Balances extraídos - BTC: {btc_balance}, ETH: {eth_balance}, USDT: {usdt_balance}")
-
-        total_fees = safe_float(portfolio.get("total_fees", 0.0))  # Tracking de fees acumulados
-        logger.info(f"   Total fees inicial: {total_fees}")
-
-        # VALIDACIÓN CRÍTICA: Los fees nunca deben ser negativos
-        if total_fees < 0:
-            logger.error(f"🚨 CRÍTICO: Total fees negativo detectado: {total_fees:.6f}")
-            logger.error("   Esto indica corrupción en el estado del portfolio")
-            logger.error("   Reseteando fees a 0.0")
-            total_fees = 0.0
-
-        # Obtener precios actuales del mercado
-        market_data = state.get("market_data", {})
-        btc_price = None
-        eth_price = None
-
-        # Manejar posibles Series o DataFrames en market_data
-        btc_market = market_data.get("BTCUSDT", {})
-        if isinstance(btc_market, dict):
-            btc_price = safe_float(btc_market.get("close", 50000.0))
-        elif isinstance(btc_market, (pd.Series, pd.DataFrame)) and 'close' in btc_market:
-            btc_price = safe_float(btc_market['close'].iloc[-1] if isinstance(btc_market, pd.DataFrame) else btc_market['close'])
-        else:
-            btc_price = 50000.0
-
-        eth_market = market_data.get("ETHUSDT", {})
-        if isinstance(eth_market, dict):
-            eth_price = safe_float(eth_market.get("close", 4327.46))
-        elif isinstance(eth_market, (pd.Series, pd.DataFrame)) and 'close' in eth_market:
-            eth_price = safe_float(eth_market['close'].iloc[-1] if isinstance(eth_market, pd.DataFrame) else eth_market['close'])
-        else:
-            eth_price = 4327.46
-
-        # Inicializar TaxTracker si está disponible
-        tax_tracker = None
-        if TAX_TRACKER_AVAILABLE:
-            try:
-                tax_tracker = TaxTracker()
-                logger.debug("✅ TaxTracker inicializado para seguimiento fiscal")
-            except Exception as e:
-                logger.warning(f"⚠️ Error inicializando TaxTracker: {e}")
-
-        # Procesar órdenes ejecutadas con validación de fondos
-        for order in orders:
-            if order.get("status") != "filled":
-                logger.warning(f"⚠️ Orden no procesada: {order.get('symbol', 'unknown')} - Status: {order.get('status')}")
-                continue
-            symbol = order.get("symbol")
-            side = order.get("side")
-            quantity = safe_float(order.get("quantity", 0.0))
-            # Usar filled_price de la orden si está disponible
-            price = safe_float(order.get("filled_price", btc_price if symbol == "BTCUSDT" else eth_price))
-
-            if not price or price <= 0:
-                logger.warning(f"⚠️ Precio inválido para {symbol}: {price}, omitiendo orden")
-                continue
-
-            # Calcular costos de trading
-            order_value = quantity * price
-            trading_fee_rate = 0.001  # 0.1% comisión de Binance
-            trading_fee = order_value * trading_fee_rate
-            total_cost = order_value + trading_fee
-
-            # Validar fondos suficientes antes de procesar la orden con validación estricta
-            if symbol == "BTCUSDT":
-                if side.lower() == "buy":
-                    # Validación estricta: NO permitir balances negativos bajo ninguna circunstancia
-                    required_funds = total_cost + 0.0001  # Pequeño buffer para errores de redondeo
-                    if usdt_balance < required_funds:
-                        logger.warning(f"⚠️ FONDOS INSUFICIENTES para comprar BTC: {usdt_balance:.6f} USDT < {required_funds:.6f} USDT requeridos")
-                        logger.warning(f"   Orden omitida: {quantity:.6f} BTC @ {price:.2f} (fee: {trading_fee:.4f})")
-                        continue
-                    # Calcular nuevo balance y verificar que no sea negativo
-                    new_balance = usdt_balance - total_cost
-                    if new_balance < 0.0:
-                        logger.error(f"🚨 CRÍTICO: Cálculo produciría balance negativo: {new_balance:.6f} USDT")
-                        logger.error(f"   Orden rechazada: {quantity:.6f} BTC @ {price:.2f}")
-                        continue
-                    logger.info(f"✅ Orden BUY BTC validada: {quantity:.6f} BTC @ {price:.2f} (costo total: {total_cost:.4f})")
-                    btc_balance += quantity
-                    usdt_balance = new_balance
-                elif side.lower() == "sell":
-                    if btc_balance < quantity:
-                        logger.warning(f"⚠️ BTC INSUFICIENTE para vender: {btc_balance:.6f} < {quantity:.6f}, omitiendo orden")
-                        continue
-                    proceeds = order_value - trading_fee
-                    logger.info(f"✅ Orden SELL BTC validada: {quantity:.6f} BTC @ {price:.2f} (proceeds: {proceeds:.4f})")
-                    btc_balance -= quantity
-                    usdt_balance += proceeds
-            elif symbol == "ETHUSDT":
-                if side.lower() == "buy":
-                    # Validación estricta: NO permitir balances negativos bajo ninguna circunstancia
-                    required_funds = total_cost + 0.0001  # Pequeño buffer para errores de redondeo
-                    if usdt_balance < required_funds:
-                        logger.warning(f"⚠️ FONDOS INSUFICIENTES para comprar ETH: {usdt_balance:.6f} USDT < {required_funds:.6f} USDT requeridos")
-                        logger.warning(f"   Orden omitida: {quantity:.6f} ETH @ {price:.2f} (fee: {trading_fee:.4f})")
-                        continue
-                    # Calcular nuevo balance y verificar que no sea negativo
-                    new_balance = usdt_balance - total_cost
-                    if new_balance < 0.0:
-                        logger.error(f"🚨 CRÍTICO: Cálculo produciría balance negativo: {new_balance:.6f} USDT")
-                        logger.error(f"   Orden rechazada: {quantity:.6f} ETH @ {price:.2f}")
-                        continue
-                    logger.info(f"✅ Orden BUY ETH validada: {quantity:.6f} ETH @ {price:.2f} (costo total: {total_cost:.4f})")
-                    eth_balance += quantity
-                    usdt_balance = new_balance
-                elif side.lower() == "sell":
-                    if eth_balance < quantity:
-                        logger.warning(f"⚠️ ETH INSUFICIENTE para vender: {eth_balance:.6f} < {quantity:.6f}, omitiendo orden")
-                        continue
-                    proceeds = order_value - trading_fee
-                    logger.info(f"✅ Orden SELL ETH validada: {quantity:.6f} ETH @ {price:.2f} (proceeds: {proceeds:.4f})")
-                    eth_balance -= quantity
-                    usdt_balance += proceeds
-
-            logger.info(f"📈 Orden procesada: {symbol} {side} {quantity} @ {price} (fee: +{trading_fee:.4f} USDT)")
-
-            # Registrar operación fiscal si TaxTracker está disponible
-            if tax_tracker:
-                try:
-                    # Crear orden con datos completos para TaxTracker
-                    tax_order = {
-                        'symbol': symbol,
-                        'side': side,
-                        'quantity': quantity,
-                        'filled_quantity': quantity,
-                        'price': price,
-                        'filled_price': price,
-                        'commission': trading_fee,
-                        'status': 'filled'
-                    }
-                    tax_tracker.record_operation(tax_order, exchange="Binance")
-                except Exception as e:
-                    logger.error(f"❌ Error registrando operación fiscal: {e}")
-
-            # Acumular fees totales
-            total_fees += trading_fee
-
-        # Validar balances - PREVENIR balances negativos en lugar de corregirlos
-        if usdt_balance < -0.001:  # Solo permitir errores de redondeo mínimos
-            logger.error(f"🚨 CRÍTICO: Balance USDT negativo detectado: {usdt_balance:.6f}")
-            logger.error("   Esto indica un error grave en la lógica de cálculo de órdenes")
-            logger.error("   Revirtiendo todas las transacciones de este ciclo")
-            # Revertir a valores iniciales del ciclo
-            usdt_balance = safe_float(portfolio.get("USDT", {}).get("free", 3000.0))
-            btc_balance = safe_float(portfolio.get("BTCUSDT", {}).get("position", 0.0))
-            eth_balance = safe_float(portfolio.get("ETHUSDT", {}).get("position", 0.0))
-            total_fees = safe_float(portfolio.get("total_fees", 0.0))
-            logger.info("🔄 Portfolio revertido a valores iniciales del ciclo")
-        if btc_balance < -0.000001:
-            logger.error(f"🚨 CRÍTICO: Balance BTC negativo detectado: {btc_balance:.6f}")
-            btc_balance = 0.0
-        if eth_balance < -0.000001:
-            logger.error(f"🚨 CRÍTICO: Balance ETH negativo detectado: {eth_balance:.6f}")
-            eth_balance = 0.0
-
-        # Calcular valores con validación
-        btc_value = btc_balance * btc_price if btc_price and btc_price > 0 else 0.0
-        eth_value = eth_balance * eth_price if eth_price and eth_price > 0 else 0.0
-        total_value = btc_value + eth_value + usdt_balance
-
-        # Validar que los valores sean realistas
-        if total_value < 0:
-            logger.warning(f"⚠️ Total value negativo detectado: {total_value}, ajustando a 0")
-            total_value = 0.0
-
-        # Calcular P&L desde capital inicial con validación
-        initial_capital = state.get("initial_capital", 1000.0)
-        if initial_capital <= 0:
-            logger.warning(f"⚠️ Capital inicial inválido: {initial_capital}, usando 1000.0")
-            initial_capital = 1000.0
-
-        pnl_absolute = total_value - initial_capital
-        pnl_percentage = (pnl_absolute / initial_capital) * 100
-
-        # Calcular drawdown con validación
-        peak_value = portfolio.get("peak_value", initial_capital)
-        if peak_value <= 0:
-            peak_value = initial_capital
-
-        peak_value = max(peak_value, total_value)
-        drawdown = ((peak_value - total_value) / peak_value) * 100 if peak_value > 0 else 0.0
-
-        # Validar drawdown
-        if drawdown < -100:
-            logger.warning(f"⚠️ Drawdown irrealisticamente bajo: {drawdown}%, ajustando")
-            drawdown = -100.0
-
-        # PROTECCIONES CONTRA EXPLOSIÓN DE VALORES
-        # Verificar que los valores no se hayan disparado
-        max_reasonable_value = initial_capital * 10  # Máximo 10x el capital inicial
-        if total_value > max_reasonable_value:
-            logger.error(f"🚨 EXPLOSIÓN DE VALOR DETECTADA!")
-            logger.error(f"   Total value: {total_value} > Max razonable: {max_reasonable_value}")
-            logger.error(f"   BTC: {btc_balance:.6f} @ {btc_price:.2f} = {btc_value:.2f}")
-            logger.error(f"   ETH: {eth_balance:.3f} @ {eth_price:.2f} = {eth_value:.2f}")
-            logger.error(f"   USDT: {usdt_balance:.2f}")
-            logger.error("   Posible causa: acumulación de posiciones sin vender correctamente")
-
-            # REVERTIR a valores seguros
-            btc_balance = 0.0
-            eth_balance = 0.0
-            usdt_balance = initial_capital
-            btc_value = 0.0
-            eth_value = 0.0
-            total_value = initial_capital
-            logger.info("🔄 Portfolio revertido a valores seguros")
-
-        # Verificar balances negativos (no deberían existir)
-        if btc_balance < -0.001 or eth_balance < -0.001 or usdt_balance < -0.001:
-            logger.error(f"🚨 BALANCES NEGATIVOS DETECTADOS!")
-            logger.error(f"   BTC: {btc_balance}, ETH: {eth_balance}, USDT: {usdt_balance}")
-            # Corregir balances negativos
-            btc_balance = max(0, btc_balance)
-            eth_balance = max(0, eth_balance)
-            usdt_balance = max(0, usdt_balance)
-            logger.info("🔄 Balances negativos corregidos")
-
-        # Actualizar state con nueva estructura
-        state["portfolio"] = {
-            'BTCUSDT': {'position': btc_balance, 'free': btc_balance},
-            'ETHUSDT': {'position': eth_balance, 'free': eth_balance},
-            'USDT': {'free': usdt_balance},
-            "drawdown": drawdown,
-            "peak_value": peak_value,
-            "total_fees": total_fees
-        }
-        state["btc_balance"] = btc_balance
-        state["btc_value"] = btc_value
-        state["eth_balance"] = eth_balance
-        state["eth_value"] = eth_value
-        state["usdt_balance"] = usdt_balance
-        state["total_value"] = total_value
-
-        # LOGGING DETALLADO PARA DIAGNÓSTICO
-        logger.info("🔍 DIAGNÓSTICO PORTFOLIO:")
-        logger.info(f"   Órdenes procesadas: {len([o for o in orders if o.get('status') == 'filled'])}")
-        logger.info(f"   Precios - BTC: {btc_price:.2f}, ETH: {eth_price:.2f}")
-        logger.info(f"   Valores calculados - BTC: {btc_value:.2f}, ETH: {eth_value:.2f}")
-        logger.info(f"   Total fees en este ciclo: {total_fees:.4f} USDT")
-
-        # Verificar si hay cambios inexplicables
-        old_total = state.get("total_value", initial_capital)
-        total_change = total_value - old_total
-        if abs(total_change) > 100:  # Cambio significativo
-            logger.warning(f"⚠️ CAMBIO SIGNIFICATIVO DETECTADO: {total_change:+.2f} USDT")
-            logger.warning(f"   Valor anterior: {old_total:.2f}, Nuevo: {total_value:.2f}")
-
-        # Log con color según comparación con capital inicial - NEGRITA Y TAMAÑO AUMENTADO
-        if total_value > initial_capital:
-            logger.info(f"")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"\x1b[32m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"")
-        elif total_value < initial_capital:
-            logger.info(f"")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"\x1b[31m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"")
-        else:
-            logger.info(f"")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"\x1b[34m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-            logger.info(f"********************************************************************************************")
-            logger.info(f"")
-
-        logger.info(f"📊 P&L: {pnl_absolute:+.2f} USDT ({pnl_percentage:+.2f}%), Drawdown={drawdown:.4f}")
-        logger.info(f"💸 Fees acumulados: {total_fees:.4f} USDT")
-
-    except Exception as e:
-        logger.error(f"❌ Error actualizando portfolio: {e}", exc_info=True)
+# REMOVED: Global function update_portfolio_from_orders has been deprecated
+# The PortfolioManager.update_from_orders_async method should be used instead
 
 async def save_portfolio_to_csv(state):
     """Guarda la línea del portfolio en un CSV externo usando los valores de state."""
     try:
-        total_value = state.get("total_value", 0.0)
-        btc_balance = state.get("btc_balance", 0.0)
-        btc_value = state.get("btc_value", 0.0)
-        eth_balance = state.get("eth_balance", 0.0)
-        eth_value = state.get("eth_value", 0.0)
-        usdt_balance = state.get("usdt_balance", 0.0)
+        # FIX FINAL - CAUSA RAÍZ DEFINITIVA
+        # Usar state["portfolio"] en lugar de campos raíz legacy
+        portfolio = state.get("portfolio", {})
+        
+        total_value = portfolio.get("total_value", state.get("total_value", 0.0))
+        btc_balance = portfolio.get("btc_balance", state.get("btc_balance", 0.0))
+        btc_value = state.get("btc_value", 0.0)  # Mantener legacy field para compatibilidad
+        eth_balance = portfolio.get("eth_balance", state.get("eth_balance", 0.0))
+        eth_value = state.get("eth_value", 0.0)  # Mantener legacy field para compatibilidad
+        usdt_balance = portfolio.get("usdt_balance", state.get("usdt_balance", 0.0))
         cycle_id = state.get("cycle_id", 0)
 
         output_dir = "data/portfolios"
@@ -443,14 +117,24 @@ class PortfolioManager:
         self._configure_trading_costs()
 
         # PROTECCIONES POR MODO
-        if self.mode in ["backtest", "simulated"]:
+        if self.mode in ["backtest"]:
             # Deshabilitar completamente cualquier sincronización externa
             self.client = None  # Forzar None para evitar lecturas accidentales
-            self.save_disabled = True  # Nunca guardar estado en modo simulado
+            self.save_disabled = True  # Nunca guardar estado en modo backtest
             self.sync_disabled = True  # Nunca sincronizar con exchange
             self.persist_enabled = False  # No leer/escribir archivos de estado
             self.state_file = f"portfolio_state_{mode}.json"  # Archivo separado por modo
             logger.info(f"🛡️ MODO {mode.upper()}: Protecciones activadas - Sin sincronización externa")
+            logger.info(f"📁 MODO {mode.upper()}: Usando archivo de estado separado - {self.state_file}")
+            
+        elif self.mode == "simulated":
+            # ✅ CRITICAL: Permitir conexión con exchange real en modo paper
+            # Mantener cliente para obtener datos reales de mercado
+            self.save_disabled = False  # Permitir guardar estado en modo paper
+            self.sync_disabled = False  # Permitir sincronización para datos reales
+            self.persist_enabled = True  # Permitir persistencia en modo paper
+            self.state_file = f"portfolio_state_{mode}.json"  # Archivo separado por modo
+            logger.info(f"🛡️ MODO {mode.upper()}: Paper trading con datos reales - Conexión a exchange permitida")
             logger.info(f"📁 MODO {mode.upper()}: Usando archivo de estado separado - {self.state_file}")
 
         elif self.mode == "testnet":
@@ -469,6 +153,10 @@ class PortfolioManager:
         self.portfolio = {}
         self.peak_value = initial_balance
         self.total_fees = 0.0
+
+        # SOLUTION 2: Position age tracking for rebalance grace period
+        self.position_age = {}  # Track when positions were last modified (timestamp)
+        self.MIN_HOLD_TIME = 60  # Minimum hold time in seconds before allowing rebalance (can be N cycles)
 
         # Inicializar portfolio según modo
         self._init_portfolio()
@@ -750,6 +438,9 @@ class PortfolioManager:
                 trading_fee_rate = 0.001  # 0.1% comisión
                 trading_fee = order_value * trading_fee_rate
 
+                # SOLUTION 2: Update position age tracking for rebalance grace period
+                current_time = datetime.now().timestamp()
+
                 # Procesar órdenes según dirección (signo de quantity)
                 if symbol == "BTCUSDT":
                     if side.lower() == "buy":
@@ -759,6 +450,8 @@ class PortfolioManager:
                             continue
                         btc_balance += abs_quantity  # Siempre positivo para posiciones
                         usdt_balance -= total_cost
+                        # SOLUTION 2: Update position age when buying
+                        self.position_age[symbol] = current_time
                         logger.info(f"✅ BUY BTC: {abs_quantity:.6f} @ {price:.2f} (costo total: {total_cost:.4f})")
                     elif side.lower() == "sell":
                         if btc_balance < abs_quantity:
@@ -777,6 +470,8 @@ class PortfolioManager:
                             continue
                         eth_balance += abs_quantity  # Siempre positivo para posiciones
                         usdt_balance -= total_cost
+                        # SOLUTION 2: Update position age when buying
+                        self.position_age[symbol] = current_time
                         logger.info(f"✅ BUY ETH: {abs_quantity:.6f} @ {price:.2f} (costo total: {total_cost:.4f})")
                     elif side.lower() == "sell":
                         if eth_balance < abs_quantity:
@@ -808,6 +503,23 @@ class PortfolioManager:
                 'peak_value': max(self.peak_value, self.get_total_value(market_data)),
                 'total_fees': self.total_fees
             }
+
+            # LOGGEAR TRADES PAPER SI ESTAMOS EN MODO SIMULADO
+            if self.mode in ["simulated", "backtest"] and PAPER_LOGGER_AVAILABLE:
+                try:
+                    paper_logger = get_paper_logger()
+                    # Obtener cycle_id del contexto (si está disponible en market_data o pasar None)
+                    cycle_id = market_data.get('cycle_id') if isinstance(market_data, dict) else None
+
+                    for order in filled_orders:
+                        paper_logger.log_paper_trade(
+                            order=order,
+                            market_data=market_data,
+                            cycle_id=cycle_id,
+                            strategy="portfolio_manager_simulated"
+                        )
+                except Exception as log_error:
+                    logger.warning(f"⚠️ Error logging paper trade: {log_error}")
 
             logger.info(f"✅ Portfolio actualizado: BTC={btc_balance:.6f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}")
 
@@ -850,6 +562,10 @@ class PortfolioManager:
             return safe_float(self.portfolio.get('USDT', {}).get('free', 0.0))
         else:
             return safe_float(self.portfolio.get(symbol, {}).get('position', 0.0))
+
+    def get_usdt_balance(self) -> float:
+        """Obtiene el balance de USDT (método específico para USDT)"""
+        return float(self.portfolio.get('USDT', {}).get('free', 0.0))
 
     def get_total_value(self, market_data: Optional[Dict[str, Any]] = None) -> float:
         """Calculate total portfolio value"""
@@ -964,12 +680,12 @@ class PortfolioManager:
         Esto previene pérdidas catastróficas por desincronización.
         """
         try:
-            if not self.client:
-                logger.warning("⚠️ No hay cliente de exchange disponible para sincronización")
-                return False
-
             if self.mode == "simulated":
                 logger.debug("🛡️ MODO SIMULADO: Saltando sincronización con exchange")
+                return True  # ✅ CAMBIO OBLIGATORIO: Nunca debe fallar en simulated
+
+            if not self.client:
+                logger.warning("⚠️ No hay cliente de exchange disponible para sincronización")
                 return False
 
             logger.info("🔄 Sincronizando portfolio con estado real de Binance...")
@@ -1280,6 +996,40 @@ class PortfolioManager:
         logger.info(f"💰 Portfolio Allocation | Total: ${total_portfolio:.2f} | Available: ${available_trading_capital:.2f}")
 
         return available_trading_capital, max_per_symbol
+
+    def save_state(self):
+        """Guarda el estado actual del portfolio (alias para save_to_json)"""
+        self.save_to_json()
+
+    def get_position_age_seconds(self, symbol: str) -> float:
+        """
+        SOLUTION 2: Get position age in seconds for rebalance grace period
+
+        Returns:
+            Age in seconds since position was last bought, or float('inf') if never bought
+        """
+        if symbol in self.position_age:
+            current_time = datetime.now().timestamp()
+            age_seconds = current_time - self.position_age[symbol]
+            return max(0, age_seconds)  # Ensure non-negative
+        return float('inf')  # Never bought = infinite age
+
+    def can_rebalance_position(self, symbol: str) -> bool:
+        """
+        SOLUTION 2: Check if position can be rebalanced based on age
+
+        Returns:
+            True if position is old enough to be rebalanced, False if too new
+        """
+        age_seconds = self.get_position_age_seconds(symbol)
+        can_rebalance = age_seconds >= self.MIN_HOLD_TIME
+
+        if not can_rebalance:
+            logger.info(f"⏰ SOLUTION 2: REBALANCE SKIPPED for {symbol} - Age: {age_seconds:.1f}s < {self.MIN_HOLD_TIME}s grace period")
+        else:
+            logger.debug(f"✅ SOLUTION 2: REBALANCE ALLOWED for {symbol} - Age: {age_seconds:.1f}s >= {self.MIN_HOLD_TIME}s")
+
+        return can_rebalance
 
     def log_status(self):
         """Registra el estado actual del portfolio"""

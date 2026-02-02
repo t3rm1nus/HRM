@@ -15,7 +15,6 @@ except ImportError:
     from backtesting_utils import TestMode, TestLevel, TestResult, L1Model
     from report_generator import ReportGenerator
     from getdata import BinanceDataCollector
-from core.portfolio_manager import update_portfolio_from_orders
 import asyncio
 from core.logging import logger
 

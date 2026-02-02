@@ -1,0 +1,12 @@
+# Asyncio RuntimeError Fix in L2 Tactical Signal Processor
+
+## Task Overview
+Fix the "asyncio.run() cannot be called from a running event loop" error in L2 tactical signal processing by implementing a synchronous wrapper for async FinRL calls.
+
+## Steps to Complete
+
+- [x] Analyze current problematic code (asyncio.run() call around line 947)
+- [x] Implement synchronous wrapper using ThreadPoolExecutor for FinRL calls
+- [x] Add proper error handling and logging
+- [x] Test the fix by running main.py and checking logs for elimination of asyncio errors
+- [x] Verify L2 autonomous signals are generated (not just HOLD signals)

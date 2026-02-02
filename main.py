@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-# main.py
+# main.py - VERSIÓN COMPLETAMENTE CORREGIDA CON FIXES CRÍTICOS
 
 import asyncio
 import sys
@@ -8,7 +8,9 @@ import json
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import Dict
+from typing import Dict, Optional
+import colorama
+from colorama import Fore, Style
 
 # Suppress TensorFlow warnings before any imports
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -17,17 +19,29 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.state_manager import initialize_state, validate_state_structure, log_cycle_data
-from core.portfolio_manager import update_portfolio_from_orders, save_portfolio_to_csv, PortfolioManager
-from core.technical_indicators import calculate_technical_indicators
-from core.feature_engineering import integrate_features_with_l2, debug_l2_features
+# Import SystemBootstrap for centralized system initialization
+from system.bootstrap import SystemBootstrap
+
+# Import MarketDataManager for centralized market data handling
+from system.market_data_manager import MarketDataManager
+
+# Import TradingPipelineManager for trading cycle orchestration
+from system.trading_pipeline_manager import TradingPipelineManager
+
+# Import modularized components
+from core.state_manager import log_cycle_data
+from core.data_validator import validate_market_data, _extract_current_price_safely
 from core.logging import logger
 from core.config import get_config
-from core.unified_validation import UnifiedValidator, validate_market_data_structure, validate_and_fix_market_data
-from core.error_handler import ErrorHandler, async_with_fallback
+from core.error_handler import ErrorHandler
 from core.incremental_signal_verifier import get_signal_verifier, start_signal_verification, stop_signal_verification
 from core.trading_metrics import get_trading_metrics
-from core.position_rotator import PositionRotator
+
+# Import StateCoordinator
+from system.state_coordinator import StateCoordinator
+
+# Import ErrorRecoveryManager
+from system.error_recovery_manager import ErrorRecoveryManager, RecoveryActionType
 
 from l1_operational.data_feed import DataFeed
 from l2_tactic.tactical_signal_processor import L2TacticProcessor
@@ -36,1336 +50,794 @@ from l2_tactic.risk_controls.manager import RiskControlManager
 from l1_operational.order_manager import OrderManager
 from l1_operational.binance_client import BinanceClient
 from l1_operational.realtime_loader import RealTimeDataLoader
-from l3_strategy.regime_classifier import ejecutar_estrategia_por_regimen
-from l3_strategy.decision_maker import make_decision
-from l3_strategy.sentiment_inference import download_reddit, download_news, infer_sentiment
 from l1_operational.bus_adapter import BusAdapterAsync
 
 from comms.config import config, APAGAR_L3
 from l2_tactic.config import L2Config
 from comms.message_bus import MessageBus
 
-def _extract_current_price_safely(symbol: str, market_data: Dict) -> float:
-    """
-    Safely extract current price from market data for validation and deployment.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTCUSDT')
-        market_data: Market data dictionary
-
-    Returns:
-        Current price as float, or 0.0 if extraction fails
-    """
-    try:
-        if not market_data or symbol not in market_data:
-            return 0.0
-
-        data = market_data[symbol]
-
-        if isinstance(data, dict):
-            if 'close' in data:
-                return float(data.get('close', 0.0))
-            elif 'price' in data:
-                return float(data.get('price', 0.0))
-        elif isinstance(data, pd.DataFrame):
-            if 'close' in data.columns and len(data) > 0:
-                return float(data['close'].iloc[-1])
-        elif isinstance(data, pd.Series) and len(data) > 0:
-            return float(data.iloc[-1])
-
-        return 0.0
-    except Exception as e:
-        logger.error(f"❌ Error extracting price for {symbol}: {e}")
-        return 0.0
-
-def validate_market_data(market_data: Dict) -> bool:
-    """Validate market data structure before deployment."""
-    required_symbols = ['BTCUSDT', 'ETHUSDT']
-
-    for symbol in required_symbols:
-        if symbol not in market_data:
-            logger.error(f"❌ Missing {symbol} in market_data")
-            return False
-
-        df = market_data[symbol]
-        if isinstance(df, pd.DataFrame):
-            if df.empty or 'close' not in df.columns:
-                logger.error(f"❌ Invalid DataFrame for {symbol}")
-                return False
-            price = df['close'].iloc[-1]
-        elif isinstance(df, dict):
-            if 'close' not in df:
-                logger.error(f"❌ Missing 'close' field in {symbol} dict")
-                return False
-            price = df['close']
-        else:
-            logger.error(f"❌ Unsupported data type for {symbol}: {type(df)}")
-            return False
-
-        if pd.isna(price) or price <= 0:
-            logger.error(f"❌ Invalid price for {symbol}: {price}")
-            return False
-
-    return True
+from fix_l3_dominance import (
+    should_l3_block_l2_signals,
+    should_trigger_rebalancing,
+    calculate_allocation_deviation,
+    L3DominanceFixConfig
+)
 
 # 🔄 AUTO-LEARNING SYSTEM INTEGRATION
 from integration_auto_learning import integrate_with_main_system
 
-def should_execute_with_l3_dominance(l2_signal, l3_info):
-    """
-    Decide if L2 signal should execute based on L3 dominance logic.
+# 🧹 SYSTEM CLEANUP
+try:
+    from system_cleanup import SystemCleanup
+    CLEANUP_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ SystemCleanup not available, skipping cleanup")
+    CLEANUP_AVAILABLE = False
 
-    Args:
-        l2_signal: Dict with L2 signal info (action, symbol, confidence, etc.)
-        l3_info: Dict with L3 regime info (regime, signal, confidence, allow_l2)
-
-    Returns:
-        tuple: (should_execute: bool, reason: str)
-    """
-    # Extraer datos clave
-    l3_regime = l3_info.get('regime', 'unknown')
-    l3_signal = l3_info.get('signal', 'hold')
-    l3_confidence = l3_info.get('confidence', 0.0)
-    l3_allow_l2 = l3_info.get('allow_l2', True)
-
-    l2_action = l2_signal.get('action', 'hold')
-    l2_confidence = l2_signal.get('confidence', 0.5)
-
-    # LOG DIAGNÓSTICO TEMPORAL
-    logger.info("="*80)
-    logger.info("SIGNAL EXECUTION DECISION")
-    logger.info(f"L3 Info: {l3_info}")
-    logger.info(f"L2 Signals: {l2_signal}")
-    logger.info("="*80)
-
-    # L3 tiene data válida?
-    if l3_regime == 'ERROR' or l3_confidence <= 0.0:
-        logger.warning(f"⚠️ L3 data invalid (regime={l3_regime}, confidence={l3_confidence}), allowing L2")
-        return True, "L3 data invalid, permissive mode"
-
-    # L3 permite explícitamente L2?
-    if l3_allow_l2:
-        return True, f"L3 allows L2 signals (allow_l2={l3_allow_l2})"
-
-    # L3 con confianza alta en HOLD bloquea todo
-    if l3_signal.lower() == 'hold' and l3_confidence > 0.50:
-        reason = f"L3 HOLD with {l3_confidence:.2f} confidence blocks L2 {l2_action}"
-        logger.warning(f"🚫 {reason}")
-        return False, reason
-
-    # L3 tiene señal diferente pero con confianza media, permitir con restricción
-    if l3_confidence < 0.70:
-        return True, f"L3 low confidence ({l3_confidence:.2f}), allowing L2"
-
-    # Por defecto permitir si L3 no tiene confianza suficiente para dominar
-    return True, "Default permissive - L3 confidence insufficient for dominance"
+# 📊 SENTIMENT ANALYSIS
+from sentiment.sentiment_manager import update_sentiment_texts
 
 async def main():
     """Main HRM system function."""
+    
+    # ================================================================
+    # CRITICAL VARIABLE DECLARATIONS
+    # ================================================================
+    state_coordinator: Optional[StateCoordinator] = None
+    portfolio_manager = None
+    order_manager = None
+    l2_processor = None
+    market_data_manager = None
+    trading_pipeline = None
+    error_recovery = None
+    
     try:
+        # ================================================================
+        # STEP 1: SYSTEM CLEANUP
+        # ================================================================
+        logger.info("🧹 Running system cleanup...")
+        if CLEANUP_AVAILABLE:
+            try:
+                cleanup = SystemCleanup()
+                cleanup_result = cleanup.perform_full_cleanup()
+                
+                if cleanup_result.get("success", False):
+                    logger.info(f"✅ Cleanup: {cleanup_result.get('deleted_files', 0)} files removed")
+                else:
+                    logger.warning("⚠️ Cleanup completed with warnings")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ Cleanup failed: {cleanup_error}")
+        else:
+            logger.info("⚠️ SystemCleanup not available, skipping")
+
+        # Paper trades cleanup
+        try:
+            from storage.paper_trade_logger import get_paper_logger
+            get_paper_logger(clear_on_init=True)
+            logger.info("✅ Paper trades cleared")
+        except Exception as e:
+            logger.warning(f"⚠️ Paper trades cleanup failed: {e}")
+
         logger.info("🚀 Starting HRM system")
 
-        # Check Binance operating mode
-        binance_mode = os.getenv("BINANCE_MODE", "TEST").upper()
-        logger.info(f"🏦 BINANCE MODE: {binance_mode}")
-
-        state = initialize_state(config["SYMBOLS"], 3000.0)
-        state = validate_state_structure(state)
-
-        # Initialize components
-        loader = RealTimeDataLoader(config)
-        data_feed = DataFeed(config)
-        bus_adapter = BusAdapterAsync(config, state)
-        binance_client = BinanceClient()
-
-        # Get environment configuration
-        env_config = get_config("live")  # Use "live" mode for now
-
-        # Setup based on binance_mode
-        if binance_mode == "LIVE":
-            # Live mode: sync mandatory with exchange
-            portfolio_mode = "live"
-            initial_balance = 0.0  # Will be synced from exchange
-            test_initial_balance = 0.0
-        else:
-            # Test mode: use simulated balance
-            portfolio_mode = "simulated"
-            test_initial_balance = 3000.0
-            initial_balance = test_initial_balance
-            logger.info(f"🧪 TESTING MODE: Using initial balance of {test_initial_balance} USDT (overriding config)")
-
-        # Initialize Portfolio Manager for persistence with new config system
-        portfolio_manager = PortfolioManager(
-            mode=portfolio_mode,
-            initial_balance=initial_balance,
-            client=binance_client,
-            symbols=env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"]),
-            enable_commissions=env_config.get("ENABLE_COMMISSIONS", True),
-            enable_slippage=env_config.get("ENABLE_SLIPPAGE", True)
-        )
-
-        # Initialize L1 Models
-        from l1_operational.trend_ai import models as l1_models
-        logger.info(f"✅ Loaded L1 AI Models: {list(l1_models.keys())}")
-
-        # Initialize L2
-        try:
-            # Quick fix: Disable synchronizer in PAPER mode for better performance
-            binance_mode = os.getenv("BINANCE_MODE", "TEST").upper()
-            if binance_mode != "LIVE":
-                logger.info("📝 PAPER/TEST MODE: Disabling BTC/ETH synchronizer")
-                os.environ['DISABLE_BTC_ETH_SYNC'] = 'true'
-
-            l2_config = L2Config()
-            l2_processor = L2TacticProcessor(l2_config, portfolio_manager=portfolio_manager, apagar_l3=APAGAR_L3)
-            risk_manager = RiskControlManager(l2_config)
-            logger.info("✅ L2 components initialized successfully")
-        except Exception as e:
-            logger.error(f"❌ Error initializing L2 components: {e}", exc_info=True)
-            raise
-
-        # Initialize incremental signal verifier (don't start loop yet)
-        signal_verifier = get_signal_verifier()
-
-        # Initialize trading metrics for performance monitoring
-        trading_metrics = get_trading_metrics()
-
-    # CRÍTICO: SINCRONIZACIÓN CON EXCHANGE PARA MODO PRODUCCIÓN
-        logger.info("🔄 Sincronizando con estado real de Binance...")
-        sync_success = await portfolio_manager.sync_with_exchange()
-
-        if sync_success:
-            logger.info("✅ Portfolio sincronizado con exchange real")
-            logger.info(f"   Estado actual: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
-        else:
-            # Fallback: cargar desde JSON local
-            logger.warning("⚠️ Falló sincronización con exchange, cargando estado local...")
-            loaded = portfolio_manager.load_from_json()
-
-            if not loaded:
-                logger.info("📄 No saved portfolio found, starting with clean state")
-            else:
-                logger.info(f"📂 Portfolio local cargado: BTC={portfolio_manager.get_balance('BTCUSDT'):.6f}, ETH={portfolio_manager.get_balance('ETHUSDT'):.3f}, USDT={portfolio_manager.get_balance('USDT'):.2f}")
-
-                # FOR TESTING: Force clean reset to start with initial balance
-                logger.info("🧪 TESTING MODE: Forcing clean portfolio reset for validation")
-                portfolio_manager.force_clean_reset()
-                logger.info("✅ Portfolio reset to clean state for testing")
-
-        # ========================================================================================
-        # L3 REGIME CLASSIFICATION WITH SETUP DETECTION
-        # ========================================================================================
-        from l3_strategy.regime_classifier import MarketRegimeClassifier
-
-        classifier = MarketRegimeClassifier()
-        regime_result = classifier.classify_market_regime(state.get("market_data", {}).get("BTCUSDT", pd.DataFrame()), "BTCUSDT")
-
-        logger.info(f"🧠 L3 Regime: {regime_result['primary_regime']} | Subtype: {regime_result['subtype']} | Confidence: {regime_result['confidence']:.2f}")
-
-        # Check for setup detection
-        setup_detected = regime_result['subtype'] in ['OVERSOLD_SETUP', 'OVERBOUGHT_SETUP']
-        setup_type = regime_result['subtype'].lower() if setup_detected else None
-
-        if setup_detected:
-            logger.info(f"🎯 TRADING SETUP DETECTED: {regime_result['subtype']}")
-
-        # ========================================================================================
-        # GENERATE L3 STRATEGY DECISION
-        # ========================================================================================
-        from l3_strategy.regime_classifier import _generate_strategy_from_regime
-
-        regime_strategy = _generate_strategy_from_regime(regime_result)
-
-        # DEBUG: Log regime strategy content
-        logger.info("-------------------------------------------------------------------------------------------------------------")
-        logger.info("🎯 REGIME STRATEGY DETAILS:")
-        logger.info(f"   Regime: {regime_strategy.get('regime')}")
-        logger.info(f"   Subtype: {regime_strategy.get('subtype')}")
-        logger.info(f"   Setup Type: {regime_strategy.get('setup_type')}")
-        logger.info(f"   Signal: {regime_strategy.get('signal')}")
-        logger.info(f"   Allow L2: {regime_strategy.get('allow_l2_signal')}")
-        logger.info("-------------------------------------------------------------------------------------------------------------")
-
-        # ========================================================================================
-        # L3 DECISION MAKER WITH SETUP HANDLING
-        # ========================================================================================
-        from l3_strategy.decision_maker import make_decision
-
-        l3_decision = make_decision(
-            inputs={},
-            portfolio_state=portfolio_manager.get_portfolio_state(),
-            market_data=state.get("market_data", {}),
-            regime_decision=regime_strategy
-        )
-
-        # 🔒 SINGLE SOURCE OF TRUTH: PortfolioManager is the authoritative source
-        # Remove duplicate sync calls - let PortfolioManager manage its own state
-
-        # 🧹 CLEANUP STALE ORDERS AFTER PORTFOLIO SYNC
-        logger.info("🧹 Performing startup cleanup of stale stop-loss and profit-taking orders...")
-        try:
-            # Get current portfolio positions for cleanup
-            current_positions = {}
-            for symbol in config["SYMBOLS"]:
-                if symbol != "USDT":
-                    current_positions[symbol] = portfolio_manager.get_balance(symbol)
-
-            # Initialize order manager first if not already done
-            order_manager = OrderManager(binance_client=binance_client, market_data=state.get("market_data", {}))
-
-            # Perform cleanup
-            cleanup_stats = order_manager.cleanup_stale_orders(current_positions)
-            logger.info(f"🧹 Startup cleanup completed: {cleanup_stats}")
-
-        except Exception as cleanup_error:
-            logger.error(f"❌ Error during startup cleanup: {cleanup_error}")
-            # Continue with system startup even if cleanup fails
-            order_manager = OrderManager(binance_client=binance_client, market_data=state.get("market_data", {}))
-
-        # Initialize L3 (will be called after market data is loaded)
-
-        order_manager = OrderManager(binance_client=binance_client, market_data=state.get("market_data", {}))
-
-        # Get initial data with centralized error handling and fallback
-        logger.info("🔄 Loading initial market data...")
-        initial_data, load_success = await ErrorHandler.load_market_data_with_fallback(
-            loader, data_feed, "initial_market_data_loading"
-        )
-
-        if not load_success or not initial_data:
-            raise RuntimeError("Could not get initial market data after retries and fallback attempts")
-
-        state["market_data"] = initial_data
-
+        # ================================================================
+        # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
+        # ================================================================
+        logger.info("🔧 Initializing StateCoordinator...")
+        state_coordinator = StateCoordinator()
         
-        # Validate required data is present
-        required_symbols = config["SYMBOLS"]
-        missing_symbols = [sym for sym in required_symbols if sym not in initial_data]
-        if missing_symbols:
-            logger.warning(f"⚠️ Missing data for symbols: {missing_symbols}")
+        # ✅ CRITICAL: Verify StateCoordinator is not None
+        if state_coordinator is None:
+            logger.critical("🚨 FATAL: StateCoordinator initialization returned None!")
+            raise RuntimeError("StateCoordinator initialization failed")
+        
+        # ✅ INJECT IMMEDIATELY
+        from core.state_manager import inject_state_coordinator
+        inject_state_coordinator(state_coordinator)
+        logger.info("✅ StateCoordinator injected globally")
 
-        # Sentiment analysis state and function
-        sentiment_texts_cache = []
-        last_sentiment_update = 0
-        SENTIMENT_UPDATE_INTERVAL = 2160  # Update sentiment every 2160 cycles (~6 hours, aligned with BERT cache expiration)
+        # ================================================================
+        # STEP 3: INITIALIZE SYSTEM BOOTSTRAP - WITH ERROR HANDLING
+        # ================================================================
+        logger.info("🔧 Running SystemBootstrap...")
+        components = {}
+        external_adapter = None
+        
+        try:
+            bootstrap = SystemBootstrap()
+            system_context = bootstrap.initialize_system()
+            
+            # Get components from bootstrap if available
+            if hasattr(system_context, 'components'):
+                components = system_context.components
+            
+            if hasattr(system_context, 'external_adapter'):
+                external_adapter = system_context.external_adapter
+            
+            # IMPORTANT: Re-inject StateCoordinator from bootstrap if different
+            if hasattr(system_context, 'state_coordinator') and system_context.state_coordinator is not None:
+                state_coordinator = system_context.state_coordinator
+                inject_state_coordinator(state_coordinator)
+                logger.info("✅ StateCoordinator from bootstrap re-injected")
+            
+            logger.info("✅ SystemBootstrap completed")
+            
+        except Exception as bootstrap_error:
+            logger.error(f"❌ SystemBootstrap failed: {bootstrap_error}")
+            logger.warning("⚠️ Using manual fallback initialization")
+            
+            # ✅ CRITICAL: Ensure state_coordinator is still valid even if bootstrap fails
+            if state_coordinator is None:
+                logger.info("🔧 Re-creating StateCoordinator after bootstrap failure")
+                state_coordinator = StateCoordinator()
+                inject_state_coordinator(state_coordinator)
 
-        async def update_sentiment_texts():
-            """Update sentiment texts from Reddit and News API"""
+        # ✅ FINAL VERIFICATION: StateCoordinator must exist
+        if state_coordinator is None:
+            logger.critical("🚨 FATAL: StateCoordinator is None after bootstrap!")
+            raise RuntimeError("StateCoordinator is None - cannot continue")
+
+        # ================================================================
+        # STEP 4: ENSURE CRITICAL COMPONENTS EXIST
+        # ================================================================
+        logger.info("🔧 Verifying critical components...")
+        
+        # Portfolio Manager - FIX ASYNC ISSUE
+        if 'portfolio_manager' not in components or components.get('portfolio_manager') is None:
+            from core.portfolio_manager import PortfolioManager
+            from l1_operational.binance_client import BinanceClient
+            
+            # ✅ CRITICAL FIX: Create BinanceClient for paper trading with testnet
+            binance_client = BinanceClient()
+            
+            # ✅ Create PortfolioManager with BinanceClient in simulated mode
+            portfolio_manager = PortfolioManager(client=binance_client, mode="simulated")
+            
+            # ✅ If PortfolioManager has async initialization, call it
+            if hasattr(portfolio_manager, 'initialize_async'):
+                try:
+                    await portfolio_manager.initialize_async()
+                    logger.info("✅ PortfolioManager initialized asynchronously")
+                except Exception as async_init_error:
+                    logger.warning(f"⚠️ Async initialization failed: {async_init_error}")
+            
+            components['portfolio_manager'] = portfolio_manager
+            logger.info("✅ PortfolioManager created with PaperExchangeAdapter")
+        else:
+            portfolio_manager = components['portfolio_manager']
+            logger.info("✅ PortfolioManager from bootstrap")
+            
+        # Order Manager
+        if 'order_manager' not in components or components.get('order_manager') is None:
+            from l1_operational.order_manager import OrderManager
+            order_manager = OrderManager()
+            components['order_manager'] = order_manager
+            logger.info("✅ OrderManager created manually")
+        else:
+            order_manager = components['order_manager']
+            logger.info("✅ OrderManager from bootstrap")
+            
+        # L2 Processor
+        if 'l2_processor' not in components or components.get('l2_processor') is None:
+            from l2_tactic.tactical_signal_processor import L2TacticProcessor
+            l2_processor = L2TacticProcessor()
+            components['l2_processor'] = l2_processor
+            logger.info("✅ L2TacticProcessor created manually")
+        else:
+            l2_processor = components['l2_processor']
+            logger.info("✅ L2TacticProcessor from bootstrap")
+
+        # ================================================================
+        # STEP 5: CRITICAL INJECTIONS - PORTFOLIO_MANAGER INTO ORDER_MANAGER
+        # ================================================================
+        logger.info("🔧 Injecting dependencies...")
+        
+        # Try multiple injection methods for OrderManager
+        injection_success = False
+        
+        # Method 1: set_portfolio_manager method
+        if hasattr(order_manager, 'set_portfolio_manager'):
             try:
-                logger.info("🔄 SENTIMENT: Iniciando descarga de datos de sentimiento...")
-                # Download Reddit data
-                df_reddit = await download_reddit()
-                logger.info(f"✅ SENTIMENT: Descargados {len(df_reddit)} posts de Reddit")
-
-                # Download news data
-                df_news = download_news()
-                logger.info(f"✅ SENTIMENT: Descargados {len(df_news)} artículos de noticias")
-
-                # Combine all texts
-                df_all = pd.concat([df_reddit, df_news], ignore_index=True)
-                df_all.dropna(subset=['text'], inplace=True)
-
-                if df_all.empty:
-                    logger.warning("⚠️ SENTIMENT: No se obtuvieron textos válidos")
-                    return []
-
-                texts_list = df_all['text'].tolist()
-                logger.info(f"📊 SENTIMENT: {len(texts_list)} textos recolectados para análisis")
-
-                # Perform sentiment inference on the texts
-                sentiment_results = infer_sentiment(texts_list)
-                logger.info(f"🧠 SENTIMENT: Análisis completado para {len(sentiment_results)} textos")
-
-                # Return the texts that were analyzed
-                return texts_list
-
+                order_manager.set_portfolio_manager(portfolio_manager)
+                logger.info("✅ Method 1: portfolio_manager injected via set_portfolio_manager()")
+                injection_success = True
             except Exception as e:
-                logger.error(f"❌ SENTIMENT: Error actualizando datos de sentimiento: {e}")
-                return []
-
-        # Initialize L3 now that we have market data
-        if APAGAR_L3:
-            # L3 is disabled - skip initialization and set default state
-            logger.info("-------------------------------------------------------------------------------------------------------------")
-            logger.info("\x1b[31m🔴 L3 MODULE DISABLED - SKIPPING L3 INITIALIZATION - ONLY L1+L2 WILL OPERATE\x1b[0m")
-            logger.info("-------------------------------------------------------------------------------------------------------------")
-            sentiment_texts_cache = []
+                logger.warning(f"⚠️ Method 1 failed: {e}")
+        
+        # Method 2: Direct attribute assignment
+        if not injection_success:
+            try:
+                order_manager.portfolio_manager = portfolio_manager
+                logger.info("✅ Method 2: portfolio_manager injected as direct attribute")
+                injection_success = True
+            except Exception as e:
+                logger.warning(f"⚠️ Method 2 failed: {e}")
+        
+        # Method 3: Check if OrderManager has a trading_cycle with position_manager
+        if not injection_success and hasattr(order_manager, 'trading_cycle'):
+            try:
+                if hasattr(order_manager.trading_cycle, 'position_manager'):
+                    order_manager.trading_cycle.position_manager.portfolio = portfolio_manager
+                    logger.info("✅ Method 3: portfolio_manager injected into trading_cycle.position_manager")
+                    injection_success = True
+            except Exception as e:
+                logger.warning(f"⚠️ Method 3 failed: {e}")
+        
+        # Method 4: Inject into OrderManager's internal state
+        if not injection_success:
+            try:
+                if hasattr(order_manager, '_portfolio_manager'):
+                    order_manager._portfolio_manager = portfolio_manager
+                    logger.info("✅ Method 4: portfolio_manager injected as _portfolio_manager")
+                    injection_success = True
+            except Exception as e:
+                logger.warning(f"⚠️ Method 4 failed: {e}")
+        
+        if not injection_success:
+            logger.error("❌ CRITICAL: Could not inject portfolio_manager into order_manager!")
+            logger.error("   OrderManager attributes: " + str(dir(order_manager)))
+        
+        # Additional injections
+        signal_verifier = get_signal_verifier()
+        trading_metrics = get_trading_metrics()
+        
+        # ================================================================
+        # STEP 6: GET INITIAL STATE - WITH NULL CHECK
+        # ================================================================
+        logger.info("🔧 Getting initial state...")
+        
+        # ✅ CRITICAL: Verify state_coordinator before using it
+        if state_coordinator is None:
+            logger.critical("🚨 FATAL: state_coordinator is None before get_state!")
+            raise RuntimeError("state_coordinator is None")
+        
+        try:
+            state = state_coordinator.get_state("current")
+            logger.info("✅ Initial state obtained")
+        except Exception as state_error:
+            logger.error(f"❌ Failed to get state: {state_error}")
+            # Create minimal fallback state
+            state = {
+                "market_data": {},
+                "total_value": 0.0,
+                "l3_output": {
+                    'regime': 'error',
+                    'signal': 'hold',
+                    'confidence': 0.0,
+                    'strategy_type': 'fallback',
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            }
+            logger.warning("⚠️ Using fallback state")
+        
+        # Initialize L3 components
+        if not APAGAR_L3:
+            sentiment_texts_cache = components.get('sentiment_texts', [])
+            if "l3_output" not in state:
+                state["l3_output"] = components.get('l3_output', {
+                    'regime': 'error',
+                    'signal': 'hold',
+                    'confidence': 0.0,
+                    'strategy_type': 'l3_error',
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+        else:
             state["l3_output"] = {
                 'regime': 'disabled',
                 'signal': 'hold',
                 'confidence': 0.0,
                 'strategy_type': 'l3_disabled',
-                'timestamp': pd.Timestamp.utcnow().isoformat()
+                'timestamp': datetime.utcnow().isoformat()
             }
-        else:
-            # L3 is enabled - run normal initialization
-            logger.info("-------------------------------------------------------------------------------------------------------------")
-            logger.info("\x1b[32m🟢 L3 MODULE ENABLED - FULL SYSTEM OPERATING WITH L1+L2+L3\x1b[0m")
-            logger.info("-------------------------------------------------------------------------------------------------------------")
-            try:
-                # Import required function (moved from top-level for import consistency)
-                from l3_strategy.l3_processor import generate_l3_output
+            sentiment_texts_cache = []
 
-                # Get initial sentiment data for L3
-                initial_sentiment_texts = await update_sentiment_texts()
-                sentiment_texts_cache = initial_sentiment_texts
+        # ✅ CRITICAL: Ensure l3_output has proper structure
+        if "l3_output" not in state or not state["l3_output"]:
+            state["l3_output"] = {
+                'regime': 'neutral',
+                'signal': 'hold',
+                'confidence': 0.5,  # Default medium confidence
+                'strategy_type': 'initial',
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            logger.warning("🔄 Fixed empty l3_output in state")
+        logger.info("🔧 Initializing position management...")
+        from core.position_rotator import PositionRotator, AutoRebalancer
+        
+        position_rotator = PositionRotator(portfolio_manager)
+        auto_rebalancer = AutoRebalancer(portfolio_manager)
+        logger.info("✅ Position managers ready")
 
-                l3_output = generate_l3_output(state, texts_for_sentiment=initial_sentiment_texts)  # Generate initial L3 output with market data and sentiment
-                state["l3_output"] = l3_output  # Store L3 output in state for L2 access
+        # ================================================================
+        # STEP 9: INITIALIZE TRADING PIPELINE MANAGER
+        # ================================================================
+        logger.info("🔧 Initializing TradingPipelineManager...")
+        trading_pipeline = TradingPipelineManager(
+            portfolio_manager=portfolio_manager,
+            order_manager=order_manager,
+            l2_processor=l2_processor,
+            position_rotator=position_rotator,
+            auto_rebalancer=auto_rebalancer,
+            signal_verifier=signal_verifier,
+            state_coordinator=state_coordinator,
+            config=config
+        )
+        logger.info("✅ TradingPipelineManager ready")
 
-                logger.debug("✅ L3 initialized successfully")
+        # ================================================================
+        # STEP 10: INITIALIZE ERROR RECOVERY
+        # ================================================================
+        logger.info("🔧 Initializing ErrorRecoveryManager...")
+        error_recovery = ErrorRecoveryManager()
+        logger.info("✅ ErrorRecoveryManager ready")
 
-                logger.info("✅ L3 initialized successfully with market data and sentiment analysis")
-            except Exception as e:
-                logger.error(f"❌ Error initializing L3: {e}", exc_info=True)
-
-        # CRITICAL FIX: Ensure portfolio is properly initialized and logged
+        # ================================================================
+        # STEP 11: INITIALIZE MARKET DATA MANAGER - CRITICAL FIX
+        # ================================================================
+        logger.info("🔧 Initializing MarketDataManager...")
+        try:
+            market_data_manager = MarketDataManager(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                fallback_enabled=True
+            )
+            logger.info("✅ MarketDataManager initialized successfully")
+        except Exception as mkt_error:
+            logger.error(f"❌ MarketDataManager initialization failed: {mkt_error}")
+            # CRITICAL: Create a minimal fallback MarketDataManager
+            market_data_manager = MarketDataManager(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                fallback_enabled=True
+            )
+            logger.warning("⚠️ Using fallback MarketDataManager initialization")
+    
+        # ✅ CRITICAL: Verify MarketDataManager is not None
+        if market_data_manager is None:
+            logger.critical("🚨 FATAL: MarketDataManager is None after initialization!")
+            raise RuntimeError("MarketDataManager cannot be None - trading loop cannot start")
+    
+        # ================================================================
+        # STEP 12: VERIFY INITIAL PORTFOLIO STATE
+        # ================================================================
         logger.info("🔍 INITIAL PORTFOLIO STATE:")
-        logger.info(f"   BTC Position: {portfolio_manager.get_balance('BTCUSDT'):.6f}")
-        logger.info(f"   ETH Position: {portfolio_manager.get_balance('ETHUSDT'):.3f}")
-        logger.info(f"   USDT Balance: {portfolio_manager.get_balance('USDT'):.2f}")
-        logger.info(f"   Total Value: {portfolio_manager.get_total_value():.2f}")
+        try:
+            btc_bal = portfolio_manager.get_balance('BTCUSDT')
+            eth_bal = portfolio_manager.get_balance('ETHUSDT')
+            usdt_bal = portfolio_manager.get_balance('USDT')
+            total_val = portfolio_manager.get_total_value()
+        
+            logger.info(f"   BTC: {btc_bal:.6f}")
+            logger.info(f"   ETH: {eth_bal:.3f}")
+            logger.info(f"   USDT: ${usdt_bal:.2f}")
+            logger.info(f"   Total: ${total_val:.2f}")
+        
+            # Store initial portfolio values for comparison
+            initial_portfolio = {
+                'btc_balance': btc_bal,
+                'eth_balance': eth_bal,
+                'usdt_balance': usdt_bal,
+                'total_value': total_val
+            }
+            logger.info("✅ Initial portfolio values stored for comparison")
+        except Exception as portfolio_error:
+            logger.error(f"❌ Error reading portfolio: {portfolio_error}")
+            initial_portfolio = None
 
-        # 🔄 SOLUTION 1: Corregir Timing del Initial Deployment - Cargar datos de mercado PRIMERO
-        logger.info("🔄 Loading market data for PositionRotator initialization...")
-        market_data = state.get("market_data", {})
-        if market_data:
-            logger.info(f"✅ Market data loaded: BTC=${market_data.get('BTCUSDT', {}).get('close', 'N/A') if isinstance(market_data.get('BTCUSDT'), dict) else _extract_current_price_safely('BTCUSDT', market_data)}")
-        else:
-            logger.error("❌ Failed to load market data for PositionRotator")
+        # ================================================================
+        # STEP 13: GET INITIAL MARKET DATA
+        # ================================================================
+        logger.info("🔄 Fetching initial market data...")
+        try:
+            market_data = await market_data_manager.get_data_with_fallback()
+        
+            if market_data and len(market_data) > 0:
+                state["market_data"] = market_data
+                logger.info(f"✅ Market data ready: {len(market_data)} symbols")
+            else:
+                logger.warning("⚠️ No market data available, but continuing with empty data")
+                market_data = {}
+        except Exception as data_error:
+            logger.error(f"❌ Market data fetch failed: {data_error}")
             market_data = {}
 
-        # 🔄 SOLUTION 3: Validación de Estructura de Datos - antes del deployment
+        # ================================================================
+        # STEP 14: INITIAL DEPLOYMENT
+        # ================================================================
         if validate_market_data(market_data):
-            # 2. LUEGO calcular deployment con datos disponibles
-            position_rotator = PositionRotator(portfolio_manager)
-            orders = position_rotator.calculate_initial_deployment(market_data)
-
-            # 3. Ejecutar órdenes
-            if orders:
-                processed_orders = await order_manager.execute_orders(orders)
-                # Update portfolio after initial deployment
-                await portfolio_manager.update_from_orders_async(processed_orders, market_data)
-                logger.info(f"✅ Initial deployment executed with {len(processed_orders)} orders")
-            else:
-                logger.info("⚠️ No initial deployment orders generated")
-                position_rotator = PositionRotator(portfolio_manager)  # Initialize for later use
+            logger.info("🔄 Calculating initial deployment...")
+            try:
+                orders = position_rotator.calculate_initial_deployment(market_data)
+                
+                if orders:
+                    processed_orders = await order_manager.execute_orders(orders)
+                    await portfolio_manager.update_from_orders_async(processed_orders, market_data)
+                    logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
+                else:
+                    logger.info("⚠️ No initial deployment needed")
+            except Exception as deploy_error:
+                logger.error(f"❌ Initial deployment failed: {deploy_error}")
         else:
-            logger.error("🚨 Cannot deploy - invalid market data")
-            position_rotator = PositionRotator(portfolio_manager)  # Initialize without deployment
+            logger.warning("⚠️ Skipping initial deployment - invalid market data")
 
-        # 🔄 INTEGRATE AUTO-LEARNING SYSTEM
+        # ================================================================
+        # STEP 15: INTEGRATE AUTO-LEARNING
+        # ================================================================
         logger.info("🤖 Integrating Auto-Learning System...")
-        auto_learning_system = integrate_with_main_system()
-        logger.info("✅ Auto-Learning System integrated - Models will improve automatically!")
+        try:
+            auto_learning_system = integrate_with_main_system()
+            logger.info("✅ Auto-Learning System integrated")
+        except Exception as learning_error:
+            logger.error(f"❌ Auto-Learning integration failed: {learning_error}")
 
-        # Main loop
+        # ================================================================
+        # STEP 16: MAIN TRADING LOOP
+        # ================================================================
+        logger.info("🔄 Starting main trading loop...")
+        logger.info("="*80)
+        
         cycle_id = 0
-
-        # Cumulative counters for all cycles
         total_signals_all_cycles = 0
         total_orders_all_cycles = 0
         total_rejected_all_cycles = 0
         total_cooldown_blocked_all_cycles = 0
+        
+        last_cycle_time = pd.Timestamp.utcnow()
 
         while True:
             cycle_id += 1
             start_time = pd.Timestamp.utcnow()
+            
+            # Enforce 3-second cycle timing
+            elapsed = (start_time - last_cycle_time).total_seconds()
+            if elapsed < 3.0:
+                wait_time = 3.0 - elapsed
+                logger.debug(f"⏱️ Waiting {wait_time:.2f}s for 3-second cycle")
+                await asyncio.sleep(wait_time)
+            
+            last_cycle_time = pd.Timestamp.utcnow()
 
-            # Initialize total_value to prevent reference before assignment errors
             try:
-                total_value = portfolio_manager.get_total_value(state.get("market_data", {}))
-            except Exception as tv_error:
-                logger.warning(f"Failed to get total_value, using default: {tv_error}")
-                total_value = portfolio_manager.get_total_value({})  # Default calculation with empty market data
-
-            try:
-                # Reset cooldown counter at start of each cycle
-                order_manager.cooldown_blocked_count = 0
-
-                # 1. Update market data with centralized validation
-                logger.info("🔄 Attempting to get realtime market data...")
-                market_data = await loader.get_realtime_data()
-                logger.info(f"📊 Realtime data result: type={type(market_data)}, keys={list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
-
-                is_valid, validation_msg = UnifiedValidator.validate_market_data_structure(market_data)
-
-                if not is_valid:
-                    logger.warning(f"⚠️ Failed to get realtime data: {validation_msg}, falling back to data feed")
-                    logger.info("🔄 Falling back to data_feed.get_market_data()...")
-                    market_data = await data_feed.get_market_data()
-                    logger.info(f"📊 Data feed result: type={type(market_data)}, keys={list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
-
-                    is_valid, validation_msg = UnifiedValidator.validate_market_data_structure(market_data)
-                    market_data = {} if not is_valid else market_data
-                
-                if is_valid:
-                    # Further validate required symbols with thorough type checking
-                    if not isinstance(market_data, dict):
-                        logger.error(f"❌ Invalid market_data type during validation: {type(market_data)}")
-                        raise ValueError(f"Invalid market_data type: {type(market_data)}")
-                        
-                    missing_symbols = [sym for sym in config["SYMBOLS"] if sym not in market_data]
-                    valid_data = {}
+                # ============================================================
+                # CYCLE STEP 1: GET FRESH MARKET DATA
+                # ============================================================
+                try:
+                    market_data = await market_data_manager.get_data_with_fallback()
                     
-                    for sym, data in market_data.items():
-                        if sym not in config["SYMBOLS"]:
-                            continue
-                            
-                        if not isinstance(data, (pd.DataFrame, dict)):
-                            logger.warning(f"⚠️ Invalid data type for {sym}: {type(data)}")
-                            continue
-                            
-                        valid_data[sym] = data
-                    
-                    if missing_symbols:
-                        logger.error(f"❌ Missing required symbols: {missing_symbols}")
-                        
-                    if valid_data:
-                        # Update state with validated data (single source)
-                        state["market_data"] = valid_data
-                        logger.info(f"✅ Market data updated for symbols: {list(valid_data.keys())}")
-                        
-                        if missing_symbols:
-                            logger.warning("⚠️ Some symbols missing, continuing with partial data")
-                    else:
-                        raise ValueError("No valid market data for required symbols")
-                else:
-                    raise RuntimeError(f"❌ Failed to get valid market data: {validation_msg}")
-                
-                # 🛡️ 2. MONITOR STOP-LOSS ORDERS ACTIVOS WITH VALIDATION
-                try:
-                    # Get current portfolio positions for stop-loss validation
-                    current_positions = {}
-                    for symbol in config["SYMBOLS"]:
-                        if symbol != "USDT":
-                            current_positions[symbol] = portfolio_manager.get_balance(symbol)
-
-                    # Monitorear y ejecutar stop-loss que se activen con validación de portfolio
-                    executed_stop_losses = await order_manager.monitor_and_execute_stop_losses_with_validation(
-                        state.get("market_data", {}), current_positions
-                    )
-
-                    if executed_stop_losses:
-                        # Actualizar portfolio con stop-loss ejecutados
-                        await portfolio_manager.update_from_orders_async(executed_stop_losses, state.get("market_data", {}))
-                        logger.info(f"🛡️ Ejecutados {len(executed_stop_losses)} stop-loss automáticos con validación")
-
-                except Exception as e:
-                    logger.error(f"❌ Error monitoreando stop-loss con validación: {e}")
-
-                # 3. Update L3 state and process signals
-                # ========================================================================================
-                # L3 REGIME INFO RETRIEVAL - ALWAYS FRESH, NO CACHE
-                # ========================================================================================
-
-                # 🔧 SOLUCIÓN INMEDIATA: Completamente sin cache - siempre calcular fresco
-                try:
-                    from l3_strategy.decision_maker import get_regime_info
-
-                    # Siempre obtener info fresca - NUNCA usar cache
-                    l3_info_fresh = get_regime_info(state.get("market_data", {}))
-
-                    # Preparar contexto para L2 con datos completamente frescos
-                    l3_regime_info = {
-                        'regime': l3_info_fresh.get('regime', 'unknown'),
-                        'subtype': l3_info_fresh.get('subtype', 'unknown'),
-                        'confidence': l3_info_fresh.get('confidence', 0.5),
-                        'signal': l3_info_fresh.get('signal', 'hold'),
-                        'allow_l2': l3_info_fresh.get('allow_l2_signal', True),
-                        'l3_output': l3_info_fresh
-                    }
-
-                except Exception as e:
-                    logger.warning(f"❌ Error obteniendo L3 regime info fresco: {e}")
-                    l3_regime_info = {
-                        'regime': 'unknown',
-                        'subtype': 'unknown',
-                        'confidence': 0.0,
-                        'signal': 'hold',
-                        'allow_l2': True
-                    }
-
-                # LOG VALIDATION
-                logger.info(f"✅ L3 Regime Info obtained: {l3_regime_info.get('regime', 'unknown')} (allow_l2: {l3_regime_info.get('allow_l2', True)})")
-
-                # VALIDAR que tiene datos (ahora siempre tiene datos válidos ya que usamos fallback)
-                # No es necesario validación adicional aquí ya que siempre retornamos un dict válido
-
-                # 🚨 SIGNAL HIERARCHY LOGIC: L3 HOLD signals with confidence > 40% block L2 BUY/SELL signals
-                l3_signal_blocks_l2 = False
-                l3_blocking_info = ""
-
-                if APAGAR_L3:
-                    # L3 is disabled - bypass all L3 processing
-                    logger.info("-------------------------------------------------------------------------------------------------------------")
-                    logger.info("\x1b[31m🔴 L3 MODULE DISABLED - ONLY L1+L2 WILL OPERATE\x1b[0m")
-                    logger.info("-------------------------------------------------------------------------------------------------------------")
-                    # Ensure L3 output is set to a default state for L2 compatibility
-                    if 'l3_context_cache' not in state:
-                        state['l3_context_cache'] = {}
-                    state['l3_context_cache']['last_output'] = {
-                        'regime': 'disabled',
-                        'signal': 'hold',
-                        'confidence': 0.0,
-                        'strategy_type': 'l3_disabled',
-                        'timestamp': pd.Timestamp.utcnow().isoformat()
-                    }
-                else:
-                    # L3 is enabled - run normal L3 processing
-                    logger.info("-------------------------------------------------------------------------------------------------------------")
-                    logger.info("\x1b[32m🟢 L3 MODULE ENABLED - FULL SYSTEM OPERATING WITH L1+L2+L3\x1b[0m")
-                    logger.info("-------------------------------------------------------------------------------------------------------------")
-                    try:
-                        # Update sentiment data periodically (every 50 cycles ~8-9 minutes)
-                        if cycle_id - last_sentiment_update >= SENTIMENT_UPDATE_INTERVAL:
-                            logger.info(f"🔄 SENTIMENT: Actualización periódica iniciada (ciclo {cycle_id}, cada {SENTIMENT_UPDATE_INTERVAL} ciclos)")
-                            sentiment_texts_cache = await update_sentiment_texts()
-                            last_sentiment_update = cycle_id
-                            logger.info(f"💬 SENTIMENT: Cache actualizado con {len(sentiment_texts_cache)} textos para análisis L3")
-
-                        # Use cached sentiment texts for L3 processing
-                        current_sentiment_texts = sentiment_texts_cache if sentiment_texts_cache else []
-
-                        # 🚀 INTEGRACIÓN DE ESTRATEGIAS POR RÉGIMEN DE MERCADO
-                        # Get regime-specific decision as the foundation
-                        regimen_resultado = ejecutar_estrategia_por_regimen(state.get("market_data", {}))
-
-                        # Always get fresh sentiment for L3 output consistency
-                        from l3_strategy.sentiment_inference import get_cached_sentiment_score
-                        # Get fresh sentiment score (reduced cache time for better sync)
-                        sentiment_score = get_cached_sentiment_score(max_age_hours=0.5)  # 30 minutes max age
-                        if sentiment_score is None:
-                            # Fallback to infer if cache miss
-                            from l3_strategy.l3_processor import predict_sentiment, load_sentiment_model
-                            tokenizer, sentiment_model = load_sentiment_model()
-                            if current_sentiment_texts:
-                                sentiment_score = predict_sentiment(current_sentiment_texts, tokenizer, sentiment_model)
-                            else:
-                                sentiment_score = 0.5  # Neutral default
-                        logger.info(f"🧠 L3 Sentiment Score: {sentiment_score:.4f}")
-
-                        # 🎯 PRIORITY DECISION MAKING: Regime-specific models take precedence
-                        if regimen_resultado and 'regime' in regimen_resultado:
-                            # Use DecisionMaker with regime-specific priority
-                            portfolio_state = state.get("portfolio", {})
-
-                            # Call DecisionMaker with regime_decision to prioritize regime-specific logic
-                            strategic_decision = make_decision(
-                                inputs={},  # Not using fallback L3 inputs anymore
-                                portfolio_state=portfolio_state,
-                                market_data=state.get("market_data", {}),
-                                regime_decision=regimen_resultado  # PRIORITY: Regime decision drives the output
-                            )
-
-                            # Create L3 output from strategic decision with regime-specific details
-                            l3_output = {
-                                'regime': regimen_resultado['regime'],
-                                'signal': regimen_resultado.get('signal', 'hold'),
-                                'confidence': regimen_resultado.get('confidence', 0.5),
-                                'strategy_type': 'regime_adaptive_priority',
-                                'sentiment_score': sentiment_score,
-                                'asset_allocation': strategic_decision.get('asset_allocation', {}),
-                                'risk_appetite': strategic_decision.get('risk_appetite', 'moderate'),
-                                'loss_prevention_filters': strategic_decision.get('loss_prevention_filters', {}),
-                                'winning_trade_rules': strategic_decision.get('winning_trade_rules', {}),
-                                'exposure_decisions': strategic_decision.get('exposure_decisions', {}),
-                                'strategic_guidelines': strategic_decision.get('strategic_guidelines', {}),
-                                'market_data_hash': hash(str(state.get("market_data", {}))),
-                                'timestamp': pd.Timestamp.utcnow().isoformat()
-                            }
-
-                            # Añadir datos específicos del régimen if available
-                            if regimen_resultado['regime'] == 'range':
-                                l3_output.update({
-                                    'profit_target': regimen_resultado.get('profit_target', 0.008),
-                                    'stop_loss': regimen_resultado.get('stop_loss', 0.015),
-                                    'max_position_time': regimen_resultado.get('max_position_time', 6)
-                                })
-                            elif regimen_resultado['regime'] in ['bull', 'bear']:
-                                l3_output.update({
-                                    'profit_target': regimen_resultado.get('profit_target', 0.025),
-                                    'stop_loss': regimen_resultado.get('stop_loss', 0.012),
-                                    'max_position_time': regimen_resultado.get('max_position_time', 12)
-                                })
-
-                            state["l3_output"] = l3_output
-
-                            logger.info(f"🎯 REGIME PRIORITY L3: {regimen_resultado['regime'].upper()} regime driving portfolio allocation with {regimen_resultado.get('confidence', 0.5):.2f} confidence")
-                        else:
-                            # Fallback to original L3 if regime detection fails
-                            logger.warning("⚠️ Regime detection failed, falling back to original L3")
-                            l3_output = generate_l3_output(state, texts_for_sentiment=current_sentiment_texts)
-                            # Ensure fallback L3 output has fresh sentiment
-                            if l3_output and 'sentiment_score' not in l3_output:
-                                l3_output['sentiment_score'] = sentiment_score
-                            state["l3_output"] = l3_output
-
-                    except Exception as e:
-                        logger.error(f"❌ L3 Error: {e}", exc_info=True)
-
-                # 🚨 SIGNAL HIERARCHY: L3 HOLD signals block L2 BUY/SELL when confidence > 40%
-                if not APAGAR_L3 and state.get("l3_output"):
-                    l3_output = state["l3_output"]
-                    l3_signal = l3_output.get('signal', 'hold').lower()
-                    l3_confidence = l3_output.get('confidence', 0.0)
-
-                    # ADD DIAGNOSTIC LOGGING - Trace where confidence is lost
-                    logger.info("="*80)
-                    logger.info("SIGNAL EXECUTION DECISION")
-                    logger.info(f"L3 Info: {l3_output}")
-                    logger.info(f"Initial L3 Decision: {l3_decision}")
-                    logger.info(f"L3 Signal: {l3_signal}, Confidence: {l3_confidence}")
-                    logger.info("="*80)
-
-                    if l3_signal == 'hold' and l3_confidence > 0.50:
-                        l3_signal_blocks_l2 = True
-                        l3_blocking_info = f"L3 HOLD signal with {l3_confidence:.2f} confidence blocks all L2 BUY/SELL signals"
-                        logger.warning(f"🚫 L3 DOMINANCE: {l3_blocking_info}")
-                    else:
-                        l3_signal_blocks_l2 = False
-                        l3_blocking_info = f"L3 signal: {l3_signal.upper()} ({l3_confidence:.2f} confidence) - L2 signals allowed"
-
-                # ========================================================================================
-                # SIGNAL PROCESSING WITH SETUP OVERRIDE
-                # ========================================================================================
-                setup_type = l3_decision.get('setup_type')
-                allow_l2_signals = l3_decision.get('allow_l2_signals', False)
-
-                if setup_type:
-                    logger.info(f"🎯 SETUP STRATEGY: {setup_type} setup allows controlled L2 signals")
-                    logger.info(f"📊 Max allocation for setup trades: {l3_decision['strategic_guidelines']['max_single_asset_exposure']:.1%}")
-
-                # ========================================================================================
-                # L2 SIGNAL GENERATION WITH L3 CONTEXT (SOLUCIÓN COMPLETA)
-                # ========================================================================================
-
-                # Pasar a L2
-                l2_signals = l2_processor.generate_signals(
-                    market_data=state.get("market_data", {}),
-                    l3_context=l3_regime_info  # Con validación
-                )
-
-                # Process L2 signals
-                try:
-                    l2_signals_before_filtering = 0
-                    # Use the l2_signals we just generated
-                    valid_signals = l2_signals if l2_signals else []
-                    l2_signals_before_filtering = len(valid_signals)
-
-                    # 🚨 APPLY L3 DOMINANCE: Filter L2 signals based on L3 regime context (SOLUCIÓN COMPLETA)
-                    if valid_signals:
-                        blocked_signals = 0
-                        filtered_signals = []
-
-                        for signal in valid_signals:
-                            # Convert TacticalSignal object to dict for should_execute_with_l3_dominance
-                            signal_dict = {
-                                'action': getattr(signal, 'side', 'hold'),  # side might be 'buy', 'sell', 'hold'
-                                'symbol': getattr(signal, 'symbol', 'UNKNOWN'),
-                                'confidence': getattr(signal, 'confidence', 0.5)
-                            }
-
-                            # Decide ejecuta based on L3 dominance
-                            should_execute, reason = should_execute_with_l3_dominance(signal_dict, l3_regime_info)
-
-                            if should_execute:
-                                filtered_signals.append(signal)  # Keep the original TacticalSignal object
-                            else:
-                                logger.warning(f"🚫 L3 DOMINANCE: {getattr(signal, 'symbol', 'Unknown')} {getattr(signal, 'side', 'hold').upper()} signal blocked - {reason}")
-                                blocked_signals += 1
-
-                        valid_signals = filtered_signals
-
-                        if blocked_signals > 0:
-                            logger.info(f"🚫 L3 DOMINANCE: Blocked {blocked_signals} L2 signals per regime analysis")
-
-                    # Submit signals for incremental verification
-                    for signal in valid_signals:
-                        try:
-                            # Create verification copy from TacticalSignal object
-                            verification_signal = TacticalSignal(
-                                symbol=getattr(signal, 'symbol', 'UNKNOWN'),
-                                strength=getattr(signal, 'strength', 0.5),
-                                confidence=getattr(signal, 'confidence', 0.5),
-                                side=getattr(signal, 'side', 'hold'),  # Changed from 'direction' to 'side'
-                                signal_type='setup_aware',
-                                source='l2_processor',
-                                timestamp=getattr(signal, 'timestamp', pd.Timestamp.now()),
-                                features=getattr(signal, 'features', {}),
-                                metadata=getattr(signal, 'metadata', {})
-                            )
-
-                            await signal_verifier.submit_signal_for_verification(
-                                verification_signal, state.get("market_data", {})
-                            )
-                        except Exception as verify_error:
-                            logger.warning(f"⚠️ Failed to submit signal for verification: {verify_error}")
-
-                except Exception as e:
-                    logger.error(f"❌ L2 Error: {e}", exc_info=True)
-                    valid_signals = []
-
-                # 3. Generate and execute orders with validation
-
-                # PRE-GENERATION CHECK: Filter signals if USDT balance too low for buy orders
-                min_order_usdt_balance = 500.0  # Minimum USDT to keep for trading
-                current_usdt_balance = portfolio_manager.get_balance("USDT")
-
-                if current_usdt_balance < min_order_usdt_balance:
-                    logger.warning(f"💰 USDT BALANCE TOO LOW: {current_usdt_balance:.2f} < {min_order_usdt_balance:.2f}, skipping buy orders")
-
-                    # Filter out buy signals to prevent "fondos insuficientes" errors
-                    buy_signals_to_skip = [s for s in valid_signals if getattr(s, 'side', None) == 'buy' or (hasattr(s, 'signal_type') and 'buy' in getattr(s, 'signal_type', '').lower())]
-                    if buy_signals_to_skip:
-                        logger.info(f"🚫 Skipping {len(buy_signals_to_skip)} buy signals due to low USDT balance")
-                        valid_signals = [s for s in valid_signals if s not in buy_signals_to_skip]
-
-                # ========================================================================================
-                # ORDER EXECUTION WITH SETUP-AWARE SIZING
-                # ========================================================================================
-                orders = await order_manager.generate_orders(state, valid_signals)
-
-                # Apply setup-aware sizing to trades
-                for order in orders:
-                    # Find corresponding signal for this order
-                    symbol = order.get('symbol', '')
-                    signal = None
-
-                    for sig in valid_signals:
-                        if isinstance(sig, dict) and sig.get('symbol') == symbol:
-                            signal = sig
-                            break
-
-                    if signal and signal.get('setup_trade', False):
-                        # Apply setup-specific risk management
-                        order['stop_loss_pct'] = 0.008  # Tighter stop for setup trades
-                        order['profit_target_pct'] = 0.015  # Tighter target for mean reversion
-                        order['max_hold_time'] = 4  # Max 4 hours for setup trades
-
-                        # Apply size multiplier if available
-                        size_multiplier = signal.get('size_multiplier', 0.50)
-                        if 'quantity' in order:
-                            order['quantity'] *= size_multiplier
-                            order['original_quantity'] = order['quantity'] / size_multiplier  # For logging
-
-                        logger.info(f"🎯 SETUP TRADE PARAMS for {symbol}: "
-                                   f"Stop: {order['stop_loss_pct']:.1%} | "
-                                   f"Target: {order['profit_target_pct']:.1%} | "
-                                   f"Max Hold: {order['max_hold_time']}h | "
-                                   f"Size: {size_multiplier:.0%}")
-
-                # Validate orders before execution using new validation method
-                validated_orders = []
-                for order in orders:
-                    if order.get("status") == "pending":  # Only validate pending orders
-                        symbol = order.get("symbol")
-                        quantity = order.get("quantity", 0.0)
-                        price = order.get("price", 0.0)
-                        portfolio = state.get("portfolio", {})
-
-                        # Additional check: Prevent buy orders if USDT balance insufficient for this specific order
-                        if order.get("side") == "buy":
-                            required_usdt = quantity * price
-                            available_usdt = portfolio_manager.get_balance("USDT")
-                            min_keep_usdt = 100.0  # Always keep minimum USDT
-
-                            if available_usdt <= min_keep_usdt:
-                                logger.warning(f"❌ BUY ORDER BLOCKED: Insufficient USDT balance ({available_usdt:.2f} <= {min_keep_usdt:.2f} minimum keep)")
-                                order["status"] = "rejected"
-                                order["validation_error"] = f"Insufficient USDT balance for buy order (balance: {available_usdt:.2f})"
-                                validated_orders.append(order)
-                                continue
-                            elif required_usdt > available_usdt - min_keep_usdt:
-                                logger.warning(f"❌ BUY ORDER BLOCKED: Required USDT ({required_usdt:.2f}) exceeds available ({available_usdt:.2f} - {min_keep_usdt:.2f} reserve)")
-                                order["status"] = "rejected"
-                                order["validation_error"] = f"Required USDT for buy order exceeds available balance"
-                                validated_orders.append(order)
-                                continue
-
-                        # Use new validation method
-                        validation_result = order_manager.validate_order_size(symbol, quantity, price, portfolio)
-
-                        if validation_result["valid"]:
-                            validated_orders.append(order)
-                            logger.info(f"✅ Order validated: {symbol} {order.get('side')} {quantity:.4f} @ ${price:.2f}")
-                        else:
-                            logger.warning(f"❌ Order rejected: {validation_result['reason']}")
-                            order["status"] = "rejected"
-                            order["validation_error"] = validation_result["reason"]
-                            validated_orders.append(order)  # Still add to track rejections
-                    else:
-                        validated_orders.append(order)  # Add non-pending orders as-is
-
-                processed_orders = await order_manager.execute_orders(validated_orders)
-
-                # 4. Update portfolio using PortfolioManager as single source of truth
-                await portfolio_manager.update_from_orders_async(processed_orders, state.get("market_data", {}))
-
-                # 🔒 SINGLE SOURCE OF TRUTH: PortfolioManager manages its own state
-                # Values are calculated on-demand from PortfolioManager to avoid sync issues
-
-                # Calculate total_value before using in trading metrics
-                total_value = portfolio_manager.get_total_value(state.get("market_data", {}))
-
-                # Update trading metrics with executed orders and portfolio value
-                trading_metrics.update_from_orders(processed_orders, total_value)
-
-                # =================================================================
-                # POSITION ROTATION - RE-ENABLED with enhanced price validation
-                # =================================================================
-                if position_rotator and True:  # RE-ENABLED after fixing price logging
-                    try:
-                        logger.info("🔄 Checking position rotation...")
-                        rotation_orders = await position_rotator.check_and_rotate_positions(state, market_data)
-                        if rotation_orders:
-                            # Execute rotation orders
-                            processed_rotations = await order_manager.execute_orders(rotation_orders)
-
-                            # Update portfolio with rotation results
-                            await portfolio_manager.update_from_orders_async(processed_rotations, market_data)
-                            rotation_count = len([o for o in processed_rotations if o.get('status') == 'filled'])
-                            logger.info(f"🔄 Executed {rotation_count} position rotations")
-
-                            if rotation_count > 0:
-                                portfolio_manager.save_state()  # Add this line
-
-                                # Refresh portfolio values for display
-                                btc_value = state["btc_balance"]
-                                eth_value = state["eth_balance"]
-                                total_value = portfolio_manager.get_total_value(market_data)
-
-                                logger.info(f"\n")
-                                logger.info("*"*100)
-                                logger.info(f"💰 Portfolio actualizado: Total={total_value:.2f} USDT, "
-                                           f"BTC={btc_value:.5f}, "
-                                           f"ETH={eth_value:.3f}, "
-                                           f"USDT={state['usdt_balance']:.2f}")
-                                logger.info("*"*100)
-
-                            # Force rebalance if stop-loss triggered after rotations
-                            if any(r.get('reason') == 'stop_loss_protection' for r in processed_rotations):
-                                logger.info("🔄 STOP-LOSS TRIGGERED - Forcing portfolio rebalance...")
-                                # TODO: Add forced rebalancing logic here
-
-                    except Exception as e:
-                        logger.error(f"❌ Position rotation failed: {e}")
-
-                # =================================================================
-                # FORCED REBALANCE AFTER STOP-LOSS ALIGNMENT
-                # =================================================================
-                # If we just had a stop-loss, force L3 alignment and rebalance
-                recent_stop_losses = [o for o in processed_orders if o.get('reward_type') == 'stop_loss_protection']
-                if recent_stop_losses:
-                    logger.info(f"🔄 FORCED REBALANCE: {len(recent_stop_losses)} stop-losses detected, aligning with L3 target...")
-
-                    # Get L3 target allocation
-                    l3_output = state.get("l3_output", {})
-                    target_alloc = l3_output.get("portfolio_allocation", {})
-
-                    if target_alloc and any(target_alloc.values()):
-                        logger.info(f"🎯 L3 Target Allocation: {target_alloc}")
-
-                        # Calculate current allocations and force rebalance if skewed
-                        total_value = portfolio_manager.get_total_value(market_data)
-                        current_btc_pct = (portfolio_manager.get_balance("BTCUSDT") * state.get("btc_price", 60000)) / total_value if total_value > 0 else 0
-                        current_eth_pct = (portfolio_manager.get_balance("ETHUSDT") * state.get("eth_price", 4000)) / total_value if total_value > 0 else 0
-                        current_usdt_pct = portfolio_manager.get_balance("USDT") / total_value if total_value > 0 else 0
-
-                        # Check if portfolio is imbalanced (>10% deviation from target)
-                        target_btc = target_alloc.get("BTC", 40) / 100
-                        target_eth = target_alloc.get("ETH", 30) / 100
-                        target_usdt = target_alloc.get("USDT", 30) / 100
-
-                        btc_deviation = abs(current_btc_pct - target_btc)
-                        eth_deviation = abs(current_eth_pct - target_eth)
-
-                        if btc_deviation > 0.10 or eth_deviation > 0.10:  # 10% deviation threshold
-                            logger.info(f"⚠️ PORTFOLIO IMBALANCED - Current: BTC={current_btc_pct*100:.1f}%, ETH={current_eth_pct*100:.1f}%, USDT={current_usdt_pct*100:.1f}%")
-                            logger.info(f"🎯 Target: BTC={target_btc*100:.1f}%, ETH={target_eth*100:.1f}%, USDT={target_usdt*100:.1f}%")
-
-                            # Generate rebalancing orders
-                            rebalance_orders = []
-                            # TODO: Implement rebalancing logic to bring portfolio back to target allocations
-
-                            # For now, ensure we have minimum USDT liquidity
-                            min_usdt_target = 800.0  # Minimum USDT to keep
-                            if portfolio_manager.get_balance("USDT") < min_usdt_target and total_value > min_usdt_target:
-                                # Sell portion of largest holding to reach minimum USDT
-                                if current_btc_pct > current_eth_pct:
-                                    sell_symbol = "BTCUSDT"
-                                    sell_quantity = min(0.01, portfolio_manager.get_balance("BTCUSDT") * 0.10)  # Max 10% or 0.01 BTC
-                                else:
-                                    sell_symbol = "ETHUSDT"
-                                    sell_quantity = min(0.1, portfolio_manager.get_balance("ETHUSDT") * 0.10)  # Max 10% or 0.1 ETH
-
-                                if sell_quantity > 0:
-                                    sell_price = state.get("btc_price", 60000) if sell_symbol == "BTCUSDT" else state.get("eth_price", 4000)
-                                    rebalance_order = {
-                                        "symbol": sell_symbol,
-                                        "side": "sell",
-                                        "type": "MARKET",
-                                        "quantity": sell_quantity,
-                                        "price": sell_price,
-                                        "reason": "forced_rebalance_after_sl",
-                                        "status": "pending"
-                                    }
-                                    rebalance_orders.append(rebalance_order)
-                                    logger.info(f"💰 FORCED REBALANCE: Selling {sell_quantity:.4f} {sell_symbol.replace('USDT', '')} for liquidity")
-
-                            if rebalance_orders:
-                                processed_rebalance = await order_manager.execute_orders(rebalance_orders)
-                                await portfolio_manager.update_from_orders_async(processed_rebalance, market_data)
-                                logger.info(f"✅ Executed {len(processed_rebalance)} rebalancing orders after stop-loss")
-                # try:
-                #     rotation_orders = await position_rotator.check_and_rotate_positions(state, state.get("market_data", {}))
-                #     if rotation_orders:
-                #         # Ejecutar órdenes de rotación
-                #         executed_rotations = await order_manager.execute_orders(rotation_orders)
-                #         # Actualizar portfolio con rotaciones ejecutadas
-                #         await portfolio_manager.update_from_orders_async(executed_rotations, state.get("market_data", {}))
-                #         # Re-sync state después de rotaciones
-                #         state["portfolio"] = portfolio_manager.get_portfolio_state()
-                #         state["total_value"] = portfolio_manager.get_total_value(state.get("market_data", {}))
-                #         state["usdt_balance"] = portfolio_manager.get_balance("USDT")
-                #         logger.info(f"🔄 Ejecutadas {len(executed_rotations)} órdenes de rotación automática")
-                # except Exception as rotation_error:
-                #     logger.error(f"❌ Error en position rotation: {rotation_error}")
-
-                # Save portfolio state periodically (every 5 cycles or when significant changes)
-                if cycle_id % 5 == 0:
-                    portfolio_manager.save_to_json()
-
-                # CRITICAL FIX: Refresh portfolio values directly from portfolio_manager to ensure up-to-date display
-                btc_balance = portfolio_manager.get_balance("BTCUSDT")
-                eth_balance = portfolio_manager.get_balance("ETHUSDT")
-                usdt_balance = portfolio_manager.get_balance("USDT")
-                total_value = portfolio_manager.get_total_value(state.get("market_data", {}))
-
-                # Sync state with current values
-                state["btc_balance"] = btc_balance
-                state["eth_balance"] = eth_balance
-                state["usdt_balance"] = usdt_balance
-                state["total_value"] = total_value
-
-                # Enhanced visual logging with color coding and borders
-                if total_value > 3000.0:
-                    # Green for profit
-                    logger.info(f"")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"\x1b[32m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"")
-                elif total_value < 3000.0:
-                    # Red for loss
-                    logger.info(f"")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"\x1b[31m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"")
-                else:
-                    # Blue for equal
-                    logger.info(f"")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"\x1b[34m\x1b[1m\x1b[2m💰 Portfolio actualizado: Total={total_value:.2f} USDT, BTC={btc_balance:.5f}, ETH={eth_balance:.3f}, USDT={usdt_balance:.2f}\x1b[0m")
-                    logger.info(f"********************************************************************************************")
-                    logger.info(f"")
-
-                # Log periodic trading metrics report
-                if cycle_id % 10 == 0:  # Every 10 cycles
-                    trading_metrics.log_periodic_report()
-
-                # ========================================================================================
-                # MONITORING: Log setup status every cycle
-                # ========================================================================================
-                if setup_detected:
-                    logger.info(f"📊 SETUP STATUS: {regime_result['subtype']} active")
-                    logger.info(f"📊 Setup Metrics: RSI={regime_result['metrics']['rsi']:.1f}, "
-                               f"ADX={regime_result['metrics']['adx']:.1f}, "
-                               f"BB_width={regime_result['metrics']['bb_width']:.2%}")
-                else:
-                    logger.info(f"📊 REGIME STATUS: {regime_result['primary_regime']} | "
-                               f"Subtype: {regime_result['subtype']} | "
-                               f"Confidence: {regime_result['confidence']:.2f}")
-
-                # Log cycle stats
-                valid_orders = [o for o in processed_orders if o.get("status") != "rejected"]
-                await log_cycle_data(state, cycle_id, start_time)
-
-                # Update cumulative counters
-                total_signals_all_cycles += len(valid_signals)
-                total_orders_all_cycles += len(valid_orders)
-                total_rejected_all_cycles += len(processed_orders) - len(valid_orders)
-                total_cooldown_blocked_all_cycles += order_manager.cooldown_blocked_count
-
-                # Include L3 blocking info in cycle logging
-                l3_block_display = ""
-                if l3_signal_blocks_l2 and 'l2_signals_before_filtering' in locals() and l2_signals_before_filtering > len(valid_signals):
-                    blocked_count = l2_signals_before_filtering - len(valid_signals)
-                    l3_block_display = f" | L3 Blocked: {blocked_count}"
-
-                logger.info(
-                    f"📊 Cycle {cycle_id} | "
-                    f"Time: {(pd.Timestamp.utcnow() - start_time).total_seconds():.1f}s | "
-                    f"Signals: {len(valid_signals)} | "
-                    f"Orders: {len(valid_orders)} | "
-                    f"Rejected: {len(processed_orders) - len(valid_orders)} | "
-                    f"Cooldown: {order_manager.cooldown_blocked_count}{l3_block_display}"
-                )
-
-                # Log cumulative totals every 5 cycles
-                if cycle_id % 5 == 0:
-                    logger.info(
-                        f"📈 CUMULATIVE TOTALS (Cycles 1-{cycle_id}) | "
-                        f"Total Signals: {total_signals_all_cycles} | "
-                        f"Total Orders: {total_orders_all_cycles} | "
-                        f"Total Rejected: {total_rejected_all_cycles} | "
-                        f"Total Cooldown: {total_cooldown_blocked_all_cycles} | "
-                        f"Avg Signals/Cycle: {total_signals_all_cycles/cycle_id:.1f} | "
-                        f"Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.1f}"
-                    )
-
-                await asyncio.sleep(10)
-                
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Cycle error: {error_msg}")
-                # Don't use exc_info=True to avoid the AttributeError in logging
-                
-                # Handle specific error types using centralized validation
-                if "No hay market_data en el estado" in error_msg or "truth value of a DataFrame is ambiguous" in error_msg:
-                    cycle_key = f"validation_attempts_{cycle_id}"
-                    validation_attempts = state.get(cycle_key, 0)
-
-                    if validation_attempts > 2:  # Allow max 3 attempts per cycle
-                        logger.warning("⚠️ Maximum validation attempts reached for cycle")
-                        try:
-                            # Attempt full data refresh
-                            fresh_data = await loader.get_realtime_data()
-                            valid_data, validation_msg = validate_market_data_structure(fresh_data)
-
-                            if valid_data:
-                                state["market_data"] = fresh_data
-                                logger.info("✅ Successfully refreshed market data")
-                            else:
-                                logger.error(f"❌ Failed to refresh data: {validation_msg}")
-                                state["market_data"] = {}  # Reset for next cycle
-                        except Exception as refresh_error:
-                            logger.error(f"Failed to refresh data: {refresh_error}")
-
-                        await asyncio.sleep(10)
-                        state[cycle_key] = 0  # Reset counter
+                    if not market_data or len(market_data) == 0:
+                        logger.warning(f"⚠️ Cycle {cycle_id}: No market data, skipping")
+                        await asyncio.sleep(3.0)
                         continue
-
-                    state[cycle_key] = validation_attempts + 1
-                    valid_market_data, validation_msg = UnifiedValidator.validate_and_fix_market_data(state, config)
-
-                    if valid_market_data:
-                        # Update state with validated data (single source)
-                        state["market_data"] = valid_market_data
-                        logger.info(f"✅ Validated market data: {validation_msg}")
-
-                        # Clear validation counter on success
-                        state[cycle_key] = 0
-                    else:
-                        logger.error(f"❌ No valid market data after validation: {validation_msg}")
-                        state["market_data"] = {}  # Force refresh next cycle
-
-                    await asyncio.sleep(5)
-
-                elif isinstance(e, (ValueError, RuntimeError)):
-                    # Data quality or availability issues
-                    await asyncio.sleep(5)
-
-                    # Handle data quality errors with thorough validation
-                    try:
-                        fresh_data = await loader.get_realtime_data()
-                        valid_market_data, validation_msg = UnifiedValidator.validate_and_fix_market_data(state, config)
-
-                        if valid_market_data:
-                            # Ensure consistent DataFrame format
-                            normalized_data = {}
-                            for symbol, data in valid_market_data.items():
-                                if isinstance(data, dict):
-                                    try:
-                                        df = pd.DataFrame(data)
-                                        if not df.empty and df.shape[1] >= 5:
-                                            normalized_data[symbol] = df
-                                    except Exception as conv_error:
-                                        logger.warning(f"Failed to convert {symbol} data: {conv_error}")
-                                elif isinstance(data, pd.DataFrame) and not data.empty:
-                                    normalized_data[symbol] = data
-
-                            if normalized_data:
-                                state["market_data"] = normalized_data
-                                logger.info(f"✅ Market data refreshed: {validation_msg}")
-                            else:
-                                logger.error("❌ No valid data after normalization")
-                        else:
-                            logger.error(f"❌ No valid market data from refresh: {validation_msg}")
-                    except Exception as refresh_error:
-                        logger.error(f"Failed to refresh market data: {refresh_error}")
-
-                elif ("tf referenced before assignment" in error_msg
-                      or "tensorflow" in error_msg.lower()
-                      or "truth value of a DataFrame is ambiguous" in error_msg):
-                    # ML framework errors (TensorFlow, PyTorch, pandas)
-                    await asyncio.sleep(10)
-                    try:
-                        # Clean up existing resources
-                        cleanup_models()
-                        import gc
-                        gc.collect()
-
-                        # Initialize frameworks with proper settings in isolated scope
-                        tf = None  # Declare in outer scope
-                        try:
-                            def init_tensorflow():
-                                """Initialize TensorFlow with proper GPU settings"""
-                                try:
-                                    import tensorflow as tf
-
-                                    # Clear any existing sessions
-                                    tf.keras.backend.clear_session()
-
-                                    # Configure GPU settings
-                                    gpus = tf.config.list_physical_devices('GPU')
-                                    if gpus:
-                                        for gpu in gpus:
-                                            try:
-                                                tf.config.experimental.set_memory_growth(gpu, True)
-                                                logger.info(f"Enabled memory growth for GPU: {gpu}")
-                                            except RuntimeError as e:
-                                                logger.warning(f"Error configuring GPU {gpu}: {e}")
-
-                                    # Verify TensorFlow is working
-                                    tf.constant([1.0])
-                                    return tf
-                                except ImportError:
-                                    logger.warning("TensorFlow not available")
-                                    return None
-                                except Exception as e:
-                                    logger.error(f"Error initializing TensorFlow: {e}")
-                                    return None
-
-                            # Initialize TensorFlow with error handling
-                            try:
-                                tf = init_tensorflow()
-                                if tf is not None:
-                                    logger.info("✅ TensorFlow initialized with memory growth enabled")
-                                else:
-                                    logger.warning("⚠️ TensorFlow initialization skipped")
-                            except Exception as tf_error:
-                                logger.error(f"Failed to initialize TensorFlow: {tf_error}")
-                                tf = None
-
-                            # PyTorch settings for FinRL (independent of TF)
-                            import torch
-                            if torch.cuda.is_available():
-                                torch.backends.cuda.matmul.allow_tf32 = True
-                                torch.backends.cudnn.allow_tf32 = True
-                                logger.info("✅ PyTorch CUDA optimizations enabled")
-                            else:
-                                logger.info("PyTorch running in CPU mode")
-
-                        except Exception as framework_error:
-                            logger.error(f"Failed to initialize ML frameworks: {framework_error}")
-
-                        # Get fresh market data with validation
-                        try:
-                            fresh_data = await loader.get_realtime_data()
-                            if fresh_data is None or not isinstance(fresh_data, dict):
-                                logger.error(f"❌ Invalid fresh data type: {type(fresh_data)}")
-                                fresh_data = {}
-
-                            valid_market_data, validation_msg = UnifiedValidator.validate_and_fix_market_data(state, config)
-
-                            if valid_market_data:
-                                # Ensure DataFrame conversions are complete
-                                for symbol, data in valid_market_data.items():
-                                    if isinstance(data, dict):
-                                        valid_market_data[symbol] = pd.DataFrame(data)
-
-                                state["market_data"] = valid_market_data
-                                logger.info("✅ Fresh market data loaded and validated")
-                        except Exception as data_error:
-                            logger.error(f"Failed to refresh market data: {data_error}")
-
-                        # Reinitialize with clean state and proper framework settings
-                        from l3_strategy.l3_processor import generate_l3_output
-                        l3_output = generate_l3_output(state)
-                        state["l3_output"] = l3_output  # Store L3 output in state
-                        logger.info("🔄 L3 components reinitialized successfully")
-
-                    except Exception as reinit_error:
-                        logger.error(f"Failed to reinitialize L3: {reinit_error}")
-                        if any(x in str(reinit_error).lower() for x in ["tensorflow", "torch", "cuda"]):
-                            logger.warning("⚠️ ML framework initialization failed, will retry next cycle")
-                            # Force cleanup and reset
-                            cleanup_models()
-                            gc.collect()
-                            await asyncio.sleep(30)  # Longer wait after failed initialization
+                    
+                    # Update state with fresh data
+                    state["market_data"] = market_data
+                    
+                except Exception as data_error:
+                    logger.error(f"❌ Cycle {cycle_id}: Market data error: {data_error}")
+                    await asyncio.sleep(3.0)
+                    continue
                 
-                else:
-                    # Other errors - wait longer
-                    await asyncio.sleep(30)
+                # ============================================================
+                # CYCLE STEP 2: PROCESS TRADING CYCLE
+                # ============================================================
+                cycle_result = await trading_pipeline.process_trading_cycle(
+                    state=state,
+                    market_data=market_data  # ✅ CRITICAL: Pass market_data explicitly
+                )
                 
-                # Always validate and repair state with thorough type checking
+                # Update state from cycle result
+                state["total_value"] = cycle_result.portfolio_value
+                
+                # Update cumulative counters
+                total_signals_all_cycles += cycle_result.signals_generated
+                total_orders_all_cycles += cycle_result.orders_executed
+                total_rejected_all_cycles += cycle_result.orders_rejected
+                total_cooldown_blocked_all_cycles += cycle_result.cooldown_blocked
+                
+                # ============================================================
+                # CYCLE STEP 3: LOG SUMMARY (every 5 cycles)
+                # ============================================================
+                if cycle_id % 5 == 0:
+                    logger.info("="*80)
+                    logger.info(f"📊 CYCLE {cycle_id} SUMMARY")
+                    logger.info(f"   Signals: {cycle_result.signals_generated}")
+                    logger.info(f"   Orders Executed: {cycle_result.orders_executed}")
+                    logger.info(f"   Orders Rejected: {cycle_result.orders_rejected}")
+                    logger.info(f"   Cooldown Blocked: {cycle_result.cooldown_blocked}")
+                    logger.info(f"   Portfolio Value: ${cycle_result.portfolio_value:.2f}")
+                    logger.info(f"   L3 Regime: {cycle_result.l3_regime}")
+                    logger.info("="*80)
+                    
+                    # Cumulative stats
+                    logger.info(f"📈 CUMULATIVE (Cycles 1-{cycle_id})")
+                    logger.info(f"   Total Signals: {total_signals_all_cycles}")
+                    logger.info(f"   Total Orders: {total_orders_all_cycles}")
+                    logger.info(f"   Total Rejected: {total_rejected_all_cycles}")
+                    logger.info(f"   Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.2f}")
+                    logger.info("="*80)
+                
+                # ============================================================
+                # CYCLE STEP 4: PORTFOLIO COMPARISON LOG (every cycle)
+                # ============================================================
+                await log_portfolio_comparison(
+                    portfolio_manager=portfolio_manager,
+                    initial_portfolio=initial_portfolio,
+                    cycle_id=cycle_id,
+                    market_data=market_data
+                )
+
+            except Exception as cycle_error:
+                logger.error(f"❌ Cycle {cycle_id} error: {cycle_error}")
+                
+                # Use ErrorRecoveryManager for intelligent recovery
                 try:
-                    if not isinstance(state, dict):
-                        logger.error(f"❌ Invalid state type: {type(state)}")
-                        state = initialize_state(config["SYMBOLS"], 3000.0)
-                    else:
-                        state = validate_state_structure(state)
-                    
-                    # Validate and repair market data
-                    from comms.data_validation import fix_market_data
-                    
-                    if not isinstance(state, dict):
-                        logger.error("❌ State is not a dictionary after validation")
-                        state = {"market_data": {}}
-                    elif "market_data" not in state:
-                        logger.warning("Missing market_data in state, initializing empty")
-                        state["market_data"] = {}
-                    elif not isinstance(state["market_data"], dict):
-                        logger.warning(f"Invalid market_data type: {type(state['market_data'])}, fixing")
-                        fixed_data = fix_market_data(state["market_data"])
-                        if fixed_data:
-                            state["market_data"] = fixed_data
-                        else:
-                            state["market_data"] = {}
-
-                    # Validate market data is properly structured (single source)
-                    data = state["market_data"]
-                    for symbol, symbol_data in list(data.items()):
-                        if not isinstance(symbol_data, (dict, pd.DataFrame)):
-                            logger.warning(f"Invalid data type for {symbol} in market_data: {type(symbol_data)}")
-                            del data[symbol]
+                    if error_recovery is not None:
+                        recovery_action = await error_recovery.handle_cycle_error(
+                            error=cycle_error,
+                            state=state,
+                            cycle_id=cycle_id
+                        )
                         
-                except Exception as state_error:
-                    logger.error(f"Failed to validate state: {state_error}")
-                    state = initialize_state(config["SYMBOLS"], 3000.0)  # Reset to initial state
-                    logger.info("State reset to initial values")
+                        if recovery_action.action == RecoveryActionType.SHUTDOWN:
+                            logger.critical("🛑 Unrecoverable error - shutting down")
+                            break
+                        
+                        if recovery_action.action == RecoveryActionType.RESET_COMPONENT:
+                            logger.warning(f"🔄 Resetting component...")
+                            for step in recovery_action.recovery_steps_taken:
+                                logger.info(f"  ✓ {step}")
+                        
+                        await asyncio.sleep(recovery_action.wait_seconds)
+        
+                    else:
+                        logger.warning("⚠️ ErrorRecovery not available, using default wait")
+                        await asyncio.sleep(10.0)
+                    
+                except Exception as recovery_error:
+                    logger.error(f"❌ Recovery failed: {recovery_error}")
+                    await asyncio.sleep(10.0)
+                
+                continue
+
+        # ================================================================
+        # STEP 13: INITIAL DEPLOYMENT
+        # ================================================================
+        if validate_market_data(market_data):
+            logger.info("🔄 Calculating initial deployment...")
+            try:
+                orders = position_rotator.calculate_initial_deployment(market_data)
+                
+                if orders:
+                    processed_orders = await order_manager.execute_orders(orders)
+                    await portfolio_manager.update_from_orders_async(processed_orders, market_data)
+                    logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
+                else:
+                    logger.info("⚠️ No initial deployment needed")
+            except Exception as deploy_error:
+                logger.error(f"❌ Initial deployment failed: {deploy_error}")
+        else:
+            logger.warning("⚠️ Skipping initial deployment - invalid market data")
+
+        # ================================================================
+        # STEP 14: INTEGRATE AUTO-LEARNING
+        # ================================================================
+        logger.info("🤖 Integrating Auto-Learning System...")
+        try:
+            auto_learning_system = integrate_with_main_system()
+            logger.info("✅ Auto-Learning System integrated")
+        except Exception as learning_error:
+            logger.error(f"❌ Auto-Learning integration failed: {learning_error}")
+
+        # ================================================================
+        # STEP 15: APPLY FUNDAMENTAL RULE - CRITICAL FIX
+        # ================================================================
+        logger.info("🛡️ Applying FUNDAMENTAL RULE for simulated mode...")
+        try:
+            from core.state_manager import enforce_fundamental_rule
+            enforce_fundamental_rule()
+            logger.info("✅ FUNDAMENTAL RULE applied successfully")
+        except Exception as rule_error:
+            logger.error(f"❌ FUNDAMENTAL RULE failed: {rule_error}")
+            # Continue anyway - this is not a critical failure
+        
+        # ================================================================
+        # STEP 16: MAIN TRADING LOOP
+        # ================================================================
+        logger.info("🔄 Starting main trading loop...")
+        logger.info("="*80)
+        
+        cycle_id = 0
+        total_signals_all_cycles = 0
+        total_orders_all_cycles = 0
+        total_rejected_all_cycles = 0
+        total_cooldown_blocked_all_cycles = 0
+        
+        last_cycle_time = pd.Timestamp.utcnow()
+
+        while True:
+            cycle_id += 1
+            start_time = pd.Timestamp.utcnow()
+            
+            # Enforce 3-second cycle timing
+            elapsed = (start_time - last_cycle_time).total_seconds()
+            if elapsed < 3.0:
+                wait_time = 3.0 - elapsed
+                logger.debug(f"⏱️ Waiting {wait_time:.2f}s for 3-second cycle")
+                await asyncio.sleep(wait_time)
+            
+            last_cycle_time = pd.Timestamp.utcnow()
+
+            try:
+                # ============================================================
+                # CYCLE STEP 1: GET FRESH MARKET DATA
+                # ============================================================
+                try:
+                    market_data = await market_data_manager.get_data_with_fallback()
+                    
+                    if not market_data or len(market_data) == 0:
+                        logger.warning(f"⚠️ Cycle {cycle_id}: No market data, skipping")
+                        await asyncio.sleep(3.0)
+                        continue
+                    
+                    # Update state with fresh data
+                    state["market_data"] = market_data
+                    
+                except Exception as data_error:
+                    logger.error(f"❌ Cycle {cycle_id}: Market data error: {data_error}")
+                    await asyncio.sleep(3.0)
+                    continue
+                
+                # ============================================================
+                # CYCLE STEP 2: PROCESS TRADING CYCLE
+                # ============================================================
+                cycle_result = await trading_pipeline.process_trading_cycle(
+                    state=state,
+                    market_data=market_data  # ✅ CRITICAL: Pass market_data explicitly
+                )
+                
+                # Update state from cycle result
+                state["total_value"] = cycle_result.portfolio_value
+                
+                # Update cumulative counters
+                total_signals_all_cycles += cycle_result.signals_generated
+                total_orders_all_cycles += cycle_result.orders_executed
+                total_rejected_all_cycles += cycle_result.orders_rejected
+                total_cooldown_blocked_all_cycles += cycle_result.cooldown_blocked
+                
+                # ============================================================
+                # CYCLE STEP 3: LOG SUMMARY (every 5 cycles)
+                # ============================================================
+                if cycle_id % 5 == 0:
+                    logger.info("="*80)
+                    logger.info(f"📊 CYCLE {cycle_id} SUMMARY")
+                    logger.info(f"   Signals: {cycle_result.signals_generated}")
+                    logger.info(f"   Orders Executed: {cycle_result.orders_executed}")
+                    logger.info(f"   Orders Rejected: {cycle_result.orders_rejected}")
+                    logger.info(f"   Cooldown Blocked: {cycle_result.cooldown_blocked}")
+                    logger.info(f"   Portfolio Value: ${cycle_result.portfolio_value:.2f}")
+                    logger.info(f"   L3 Regime: {cycle_result.l3_regime}")
+                    logger.info("="*80)
+                    
+                    # Cumulative stats
+                    logger.info(f"📈 CUMULATIVE (Cycles 1-{cycle_id})")
+                    logger.info(f"   Total Signals: {total_signals_all_cycles}")
+                    logger.info(f"   Total Orders: {total_orders_all_cycles}")
+                    logger.info(f"   Total Rejected: {total_rejected_all_cycles}")
+                    logger.info(f"   Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.2f}")
+                    logger.info("="*80)
+                
+                # ============================================================
+                # CYCLE STEP 4: PORTFOLIO COMPARISON LOG (every cycle)
+                # ============================================================
+                await log_portfolio_comparison(
+                    portfolio_manager=portfolio_manager,
+                    initial_portfolio=initial_portfolio,
+                    cycle_id=cycle_id,
+                    market_data=market_data
+                )
+
+            except Exception as cycle_error:
+                logger.error(f"❌ Cycle {cycle_id} error: {cycle_error}")
+                
+                # Use ErrorRecoveryManager for intelligent recovery
+                try:
+                    if error_recovery is not None:
+                        recovery_action = await error_recovery.handle_cycle_error(
+                            error=cycle_error,
+                            state=state,
+                            cycle_id=cycle_id
+                        )
+                        
+                        if recovery_action.action == RecoveryActionType.SHUTDOWN:
+                            logger.critical("🛑 Unrecoverable error - shutting down")
+                            break
+                        
+                        if recovery_action.action == RecoveryActionType.RESET_COMPONENT:
+                            logger.warning(f"🔄 Resetting component...")
+                            for step in recovery_action.recovery_steps_taken:
+                                logger.info(f"  ✓ {step}")
+                        
+                        await asyncio.sleep(recovery_action.wait_seconds)
+        
+                    else:
+                        logger.warning("⚠️ ErrorRecovery not available, using default wait")
+                        await asyncio.sleep(10.0)
+                    
+                except Exception as recovery_error:
+                    logger.error(f"❌ Recovery failed: {recovery_error}")
+                    await asyncio.sleep(10.0)
+                
+                continue
                 
     except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        # Save final portfolio state before shutdown
+        logger.info("🛑 Shutting down gracefully...")
         try:
-            portfolio_manager.save_to_json()
-            logger.info("💾 Final portfolio state saved")
+            if portfolio_manager:
+                portfolio_manager.save_to_json()
+                logger.info("💾 Portfolio state saved")
         except Exception as save_error:
-            logger.error(f"❌ Error saving final portfolio state: {save_error}")
+            logger.error(f"❌ Error saving portfolio: {save_error}")
+            
+    except Exception as fatal_error:
+        logger.critical(f"🚨 FATAL ERROR: {fatal_error}")
+        import traceback
+        logger.critical(traceback.format_exc())
+            
     finally:
         # Cleanup
+        logger.info("🧹 Cleaning up...")
         try:
             await stop_signal_verification()
-            logger.info("🛑 Signal verification stopped")
-        except Exception as verify_cleanup_error:
-            logger.warning(f"⚠️ Error stopping signal verification: {verify_cleanup_error}")
+            logger.info("✓ Signal verification stopped")
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Cleanup error: {cleanup_error}")
+        
+        logger.info("👋 HRM System shutdown complete")
 
-        for component in [loader, data_feed, bus_adapter, binance_client]:
-            if hasattr(component, "close"):
-                await component.close()
+async def log_portfolio_comparison(portfolio_manager, initial_portfolio, cycle_id, market_data):
+    """Log portfolio comparison with colored output every cycle"""
+    try:
+        if initial_portfolio is None:
+            logger.warning("⚠️ Initial portfolio not available for comparison")
+            return
+        
+        # Get current portfolio values
+        current_btc = portfolio_manager.get_balance('BTCUSDT')
+        current_eth = portfolio_manager.get_balance('ETHUSDT')
+        current_usdt = portfolio_manager.get_balance('USDT')
+        current_total = portfolio_manager.get_total_value(market_data)
+        
+        # Calculate differences
+        btc_diff = current_btc - initial_portfolio['btc_balance']
+        eth_diff = current_eth - initial_portfolio['eth_balance']
+        usdt_diff = current_usdt - initial_portfolio['usdt_balance']
+        total_diff = current_total - initial_portfolio['total_value']
+        
+        # Determine color based on total portfolio performance
+        if total_diff >= 0:
+            # Portfolio value increased or stayed the same - GREEN
+            color_start = Fore.GREEN
+            color_end = Style.RESET_ALL
+            status = "PROFIT"
+        else:
+            # Portfolio value decreased - RED
+            color_start = Fore.RED
+            color_end = Style.RESET_ALL
+            status = "LOSS"
+        
+        # Create 80-character colored border
+        border = color_start + "=" * 80 + color_end
+        
+        # Log the comparison with colored borders
+        print(border)  # Print border above
+        logger.info(f"{color_start}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} ({status}){color_end}")
+        logger.info(f"{color_start}   BTC: {current_btc:.6f} ({'+' if btc_diff >= 0 else ''}{btc_diff:.6f}){color_end}")
+        logger.info(f"{color_start}   ETH: {current_eth:.3f} ({'+' if eth_diff >= 0 else ''}{eth_diff:.3f}){color_end}")
+        logger.info(f"{color_start}   USDT: ${current_usdt:.2f} ({'+' if usdt_diff >= 0 else ''}${usdt_diff:.2f}){color_end}")
+        logger.info(f"{color_start}   TOTAL: ${current_total:.2f} ({'+' if total_diff >= 0 else ''}${total_diff:.2f}){color_end}")
+        print(border)  # Print border below
+        
+    except Exception as e:
+        logger.error(f"❌ Error in portfolio comparison: {e}")
+
 
 if __name__ == "__main__":
     load_dotenv()

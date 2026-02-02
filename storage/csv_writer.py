@@ -3,6 +3,7 @@ import os
 import logging
 from core.logging import logger
 logger.info("HRM")
+from typing import Dict, Optional, List, Any
 
 FILE_PATH = os.path.join("data", "historico.csv")
 

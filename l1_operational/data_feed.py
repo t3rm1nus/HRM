@@ -9,9 +9,9 @@ except ImportError:
     BinanceClient = None
 
 class DataFeed:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.symbols = config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
+    def __init__(self, config: Dict[str, Any] = None):
+        self.config = config or {}
+        self.symbols = self.config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
         self.binance_client = None
         self.ccxt_exchange = None
         self._closed = False
@@ -23,9 +23,9 @@ class DataFeed:
         if not self.binance_client:
             try:
                 import ccxt.async_support as ccxt
-                api_key = config.get('BINANCE_API_KEY', '')
-                api_secret = config.get('BINANCE_API_SECRET', '')
-                use_testnet = config.get('USE_TESTNET', False)
+                api_key = self.config.get('BINANCE_API_KEY', '')
+                api_secret = self.config.get('BINANCE_API_SECRET', '')
+                use_testnet = self.config.get('USE_TESTNET', False)
 
                 options = {
                     'apiKey': api_key,

@@ -7,9 +7,54 @@ Separate signal generator classes for different HRM path modes:
 - FullL3DominanceGenerator (PATH3)
 
 Each generator encapsulates its specific signal processing logic.
+
+SIGNAL QUALITY FILTERS IMPLEMENTATION:
+
+This module implements comprehensive signal quality filters to prevent low-quality signals
+from reaching the trading layer. The filters ensure that only actionable signals with
+statistical advantage are passed downstream.
+from typing import Dict, Optional, List, Any
+
+FILTERS IMPLEMENTED:
+1. NEUTRAL ZONE FILTER: RSI (45-55) blocks BUY/SELL signals → forces HOLD
+   - RSI in neutral zone indicates market indecision, preventing false signals
+   - Converts actionable signals to HOLD to allow L2 conscious HOLD decisions
+
+2. WEAK TREND STRENGTH FILTER: ADX < 20 reduces confidence by 20%
+   - Low ADX indicates weak trend strength, reducing signal reliability
+   - Confidence penalty applied rather than blocking to maintain trend-following
+
+3. CONTRADICTORY INDICATORS FILTER: Checks momentum consensus
+   - Analyzes MACD, Momentum, Williams %R, and Stochastic for agreement
+   - If proposed signal contradicts majority momentum, confidence reduced by 40%
+   - Prevents signals when technical indicators are conflicting
+
+4. LOW CONFIDENCE FILTER: Confidence < 0.5 converts BUY/SELL to HOLD
+   - Ensures minimum quality threshold for actionable signals
+   - Allows L2 to make conscious HOLD decisions instead of weak trades
+
+5. EXTREME CONDITIONS OVERRIDE: RSI ≤30 (BUY) or ≥70 (SELL) boosts confidence
+   - Extreme oversold/overbought conditions override contradictory filters
+   - Allows strong signals in extreme market conditions
+
+WHEN INDICATORS JUSTIFY ACTION:
+- RSI < 30: Extreme oversold - BUY justified despite other conditions
+- RSI > 70: Extreme overbought - SELL justified despite other conditions
+- RSI outside 45-55 neutral zone: Clear directional bias
+- ADX > 20: Sufficient trend strength for confidence
+- Momentum consensus: Multiple indicators agree on direction
+- Confidence > 0.5: Meets minimum quality threshold
+
+WHEN TO ABSTAIN (HOLD):
+- RSI in 45-55 neutral zone: Market indecision
+- Confidence < 0.5: Insufficient signal quality
+- Contradictory momentum indicators: Conflicting technical signals
+- ADX < 20: Weak trend strength reduces reliability
+
+RESULT: Fewer raw signals, higher precision per trade, HOLD emerges naturally in L2.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from abc import ABC, abstractmethod
 from core.logging import logger
 from l2_tactic.models import TacticalSignal
@@ -26,6 +71,12 @@ class BaseSignalGenerator(ABC):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.name = self.__class__.__name__
+
+        # Signal quality thresholds
+        self.neutral_rsi_min = self.config.get('neutral_rsi_min', 45.0)
+        self.neutral_rsi_max = self.config.get('neutral_rsi_max', 55.0)
+        self.adx_min_threshold = self.config.get('adx_min_threshold', 20.0)  # Below this = weak trend
+        self.min_confidence_threshold = self.config.get('min_confidence_threshold', 0.5)
 
     @abstractmethod
     async def generate_signal(self, symbol: str, market_data: Dict[str, Any],
@@ -65,6 +116,113 @@ class BaseSignalGenerator(ABC):
         signal.reason = reason  # Add reason attribute
         return signal
 
+    def _apply_signal_quality_filters(self, symbol: str, market_data: Dict[str, Any],
+                                    proposed_side: str, proposed_confidence: float,
+                                    source: str) -> Tuple[str, float, str]:
+        """
+        Apply quality filters to proposed signals based on technical indicators.
+
+        SIGNAL QUALITY FILTERS:
+        1. NEUTRAL ZONE: RSI (45-55) → NO signal → HOLD upstream
+        2. WEAK TREND: ADX < threshold → market without strength
+        3. CONTRADICTORY INDICATORS: Block BUY/SELL when momentum is weak
+        4. LOW CONFIDENCE: Emit "NO_SIGNAL" or confidence < 0.5
+
+        Args:
+            symbol: Trading symbol
+            market_data: Market data with technical indicators
+            proposed_side: Proposed signal side ('buy', 'sell', 'hold')
+            proposed_confidence: Proposed confidence level
+            source: Signal source for logging
+
+        Returns:
+            Tuple of (filtered_side, filtered_confidence, filter_reason)
+        """
+        try:
+            # Extract latest technical indicators
+            indicators = market_data.get('indicators', {})
+            if not indicators or symbol not in indicators:
+                logger.warning(f"⚠️ No indicators available for {symbol} - allowing signal with reduced confidence")
+                return proposed_side, min(proposed_confidence, 0.6), "insufficient_indicators"
+
+            latest_indicators = indicators[symbol].iloc[-1] if hasattr(indicators[symbol], 'iloc') else indicators[symbol]
+
+            # Extract key indicators
+            rsi = latest_indicators.get('rsi', 50.0)
+            adx = latest_indicators.get('adx', 25.0)
+            macd = latest_indicators.get('macd', 0.0)
+            macd_signal = latest_indicators.get('macd_signal', 0.0)
+            momentum_5 = latest_indicators.get('momentum_5', 0.0)
+            williams_r = latest_indicators.get('williams_r', -50.0)
+            stoch_k = latest_indicators.get('stoch_k', 50.0)
+            stoch_d = latest_indicators.get('stoch_d', 50.0)
+
+            logger.debug(f"🎯 QUALITY FILTERS ({symbol}): RSI={rsi:.1f}, ADX={adx:.1f}, MACD={macd:.3f}, Momentum={momentum_5:.3f}")
+
+            # FILTER 1: NEUTRAL ZONE - RSI between 45-55 blocks actionable signals
+            if self.neutral_rsi_min <= rsi <= self.neutral_rsi_max:
+                logger.info(f"🛡️ NEUTRAL ZONE FILTER ({symbol}): RSI {rsi:.1f} in [{self.neutral_rsi_min}-{self.neutral_rsi_max}] range - converting to HOLD")
+                return 'hold', min(proposed_confidence * 0.7, 0.4), f"rsi_neutral_zone_{rsi:.1f}"
+
+            # FILTER 2: WEAK TREND STRENGTH - ADX below threshold indicates weak market
+            if adx < self.adx_min_threshold:
+                logger.info(f"🛡️ WEAK TREND FILTER ({symbol}): ADX {adx:.1f} < {self.adx_min_threshold} - reducing confidence")
+                proposed_confidence *= 0.8  # Reduce confidence by 20%
+
+            # FILTER 3: CONTRADICTORY INDICATORS - Check for conflicting momentum signals
+            momentum_signals = []
+
+            # MACD vs Signal line
+            macd_trend = 'bull' if macd > macd_signal else 'bear' if macd < macd_signal else 'neutral'
+            momentum_signals.append(macd_trend)
+
+            # Momentum indicator
+            momentum_trend = 'bull' if momentum_5 > 0 else 'bear'
+            momentum_signals.append(momentum_trend)
+
+            # Williams %R
+            williams_trend = 'bull' if williams_r > -50 else 'bear'  # Above -50 is bullish
+            momentum_signals.append(williams_trend)
+
+            # Stochastic
+            stoch_trend = 'bull' if stoch_k > stoch_d else 'bear'
+            momentum_signals.append(stoch_trend)
+
+            # Count bullish vs bearish signals
+            bull_count = momentum_signals.count('bull')
+            bear_count = momentum_signals.count('bear')
+
+            # If proposed signal contradicts majority of momentum indicators
+            if proposed_side == 'buy' and bear_count > bull_count:
+                logger.warning(f"🛡️ CONTRADICTORY INDICATORS ({symbol}): BUY proposed but momentum mostly bearish (bull:{bull_count}, bear:{bear_count})")
+                proposed_confidence *= 0.6  # Significant reduction
+            elif proposed_side == 'sell' and bull_count > bear_count:
+                logger.warning(f"🛡️ CONTRADICTORY INDICATORS ({symbol}): SELL proposed but momentum mostly bullish (bull:{bull_count}, bear:{bear_count})")
+                proposed_confidence *= 0.6  # Significant reduction
+
+            # FILTER 4: MINIMUM CONFIDENCE THRESHOLD
+            if proposed_confidence < self.min_confidence_threshold:
+                if proposed_side in ['buy', 'sell']:
+                    logger.info(f"🛡️ LOW CONFIDENCE FILTER ({symbol}): {proposed_confidence:.3f} < {self.min_confidence_threshold} - converting actionable signal to HOLD")
+                    return 'hold', proposed_confidence, f"low_confidence_{proposed_confidence:.3f}"
+                else:
+                    logger.debug(f"✅ LOW CONFIDENCE ACCEPTED ({symbol}): HOLD signal with confidence {proposed_confidence:.3f}")
+
+            # FILTER 5: EXTREME OVERSOLD/OVERBOUGHT - Allow signals despite contradictory indicators
+            if rsi <= 30 and proposed_side == 'buy':
+                logger.info(f"✅ EXTREME OVERSOLD OVERRIDE ({symbol}): RSI {rsi:.1f} <= 30 - allowing BUY despite filters")
+                proposed_confidence = max(proposed_confidence, 0.7)  # Boost confidence
+            elif rsi >= 70 and proposed_side == 'sell':
+                logger.info(f"✅ EXTREME OVERBOUGHT OVERRIDE ({symbol}): RSI {rsi:.1f} >= 70 - allowing SELL despite filters")
+                proposed_confidence = max(proposed_confidence, 0.7)  # Boost confidence
+
+            return proposed_side, proposed_confidence, "quality_filters_passed"
+
+        except Exception as e:
+            logger.error(f"❌ Error in signal quality filters for {symbol}: {e}")
+            # On error, reduce confidence but don't block signal entirely
+            return proposed_side, min(proposed_confidence, 0.6), f"filter_error_{str(e)[:50]}"
+
 
 class PureTrendFollowingGenerator(BaseSignalGenerator):
     """
@@ -85,55 +243,48 @@ class PureTrendFollowingGenerator(BaseSignalGenerator):
 
             # PURE TREND FOLLOWING DECISIONS
             if l3_regime.lower() in ['bull', 'bullish']:
-                return self._create_signal(
-                    symbol=symbol,
-                    side='buy',
-                    confidence=min(0.9, l3_confidence),
-                    strength=0.8,
-                    source='pure_trend_following',
-                    reason=f'Bull trend following (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH1',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'bullish',
-                        'l3_confidence': l3_confidence,
-                        'ignores_l1_l2': True
-                    }
-                )
+                proposed_side = 'buy'
+                proposed_confidence = min(0.9, l3_confidence)
+                proposed_reason = f'Bull trend following (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
 
             elif l3_regime.lower() in ['bear', 'bearish']:
-                return self._create_signal(
-                    symbol=symbol,
-                    side='sell',
-                    confidence=min(0.9, l3_confidence),
-                    strength=0.8,
-                    source='pure_trend_following',
-                    reason=f'Bear trend following (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH1',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'bearish',
-                        'l3_confidence': l3_confidence,
-                        'ignores_l1_l2': True
-                    }
-                )
+                proposed_side = 'sell'
+                proposed_confidence = min(0.9, l3_confidence)
+                proposed_reason = f'Bear trend following (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
 
             else:  # Neutral, range, unknown
-                return self._create_signal(
-                    symbol=symbol,
-                    side='hold',
-                    confidence=0.6,
-                    strength=0.4,
-                    source='pure_trend_following',
-                    reason=f'Neutral/range regime - no trend to follow (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH1',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'neutral',
-                        'l3_confidence': l3_confidence,
-                        'ignores_l1_l2': True
-                    }
-                )
+                proposed_side = 'hold'
+                proposed_confidence = 0.6
+                proposed_reason = f'Neutral/range regime - no trend to follow (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
+
+            # Apply quality filters to the proposed signal
+            filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                symbol, market_data, proposed_side, proposed_confidence, 'pure_trend_following'
+            )
+
+            # Update reason if filters were applied
+            if filter_reason != "quality_filters_passed":
+                final_reason = f"{proposed_reason} | FILTERED: {filter_reason}"
+            else:
+                final_reason = proposed_reason
+
+            return self._create_signal(
+                symbol=symbol,
+                side=filtered_side,
+                confidence=filtered_confidence,
+                strength=0.8 if filtered_side != 'hold' else 0.4,
+                source='pure_trend_following',
+                reason=final_reason,
+                features={
+                    'path_mode': 'PATH1',
+                    'l3_regime': l3_regime,
+                    'trend_direction': 'bullish' if proposed_side == 'buy' else 'bearish' if proposed_side == 'sell' else 'neutral',
+                    'l3_confidence': l3_confidence,
+                    'ignores_l1_l2': True,
+                    'quality_filter_applied': filter_reason != "quality_filters_passed",
+                    'filter_reason': filter_reason
+                }
+            )
 
         except Exception as e:
             logger.error(f"❌ Error in PureTrendFollowingGenerator for {symbol}: {e}")
@@ -199,7 +350,7 @@ class HybridModeGenerator(BaseSignalGenerator):
                 )
             else:
                 # Neutral/range regime - rely on L1/L2 with caution
-                final_signal = self._process_neutral_regime(symbol, l3_regime, l3_confidence, l1_l2_signal)
+                final_signal = self._process_neutral_regime(symbol, l3_regime, l3_confidence, l1_l2_signal, market_data)
 
             return final_signal
 
@@ -269,20 +420,32 @@ class HybridModeGenerator(BaseSignalGenerator):
         if l1_l2_side == regime_trend:
             # Agreement - full confidence
             combined_confidence = min(0.95, (l3_confidence + l1_l2_confidence) / 2)
+
+            # Apply quality filters to the proposed signal
+            filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                symbol, market_data, regime_trend, combined_confidence, 'hybrid_agreement'
+            )
+
+            # Update reason if filters were applied
+            base_reason = f'L1/L2 agrees with {regime_trend} trend (L3_conf: {l3_confidence:.3f}, L1/L2_conf: {l1_l2_confidence:.3f})'
+            final_reason = f"{base_reason} | FILTERED: {filter_reason}" if filter_reason != "quality_filters_passed" else base_reason
+
             return self._create_signal(
                 symbol=symbol,
-                side=regime_trend,
-                confidence=combined_confidence,
-                strength=0.9,
+                side=filtered_side,
+                confidence=filtered_confidence,
+                strength=0.9 if filtered_side != 'hold' else 0.5,
                 source='hybrid_agreement',
-                reason=f'L1/L2 agrees with {regime_trend} trend (L3_conf: {l3_confidence:.3f}, L1/L2_conf: {l1_l2_confidence:.3f})',
+                reason=final_reason,
                 features={
                     'path_mode': 'PATH2',
                     'agreement': True,
                     'regime_trend': regime_trend,
                     'l3_confidence': l3_confidence,
                     'l1_l2_confidence': l1_l2_confidence,
-                    'max_contra_allocation': self.max_contra_allocation
+                    'max_contra_allocation': self.max_contra_allocation,
+                    'quality_filter_applied': filter_reason != "quality_filters_passed",
+                    'filter_reason': filter_reason
                 }
             )
 
@@ -291,13 +454,23 @@ class HybridModeGenerator(BaseSignalGenerator):
             if l1_l2_confidence > self.max_contra_allocation:
                 # Strong disagreement - allow limited contra-allocation
                 contra_confidence = self.max_contra_allocation
+
+                # Apply quality filters to contra-allocation signal
+                filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                    symbol, market_data, l1_l2_side, contra_confidence, 'hybrid_contra_limited'
+                )
+
+                # Update reason if filters were applied
+                base_reason = f'Limited contra-allocation vs {regime_trend} trend (L3_conf: {l3_confidence:.3f}, limited to {self.max_contra_allocation:.1%})'
+                final_reason = f"{base_reason} | FILTERED: {filter_reason}" if filter_reason != "quality_filters_passed" else base_reason
+
                 return self._create_signal(
                     symbol=symbol,
-                    side=l1_l2_side,  # Allow contra-allocation
-                    confidence=contra_confidence,
-                    strength=0.6,
+                    side=filtered_side,  # Allow contra-allocation
+                    confidence=filtered_confidence,
+                    strength=0.6 if filtered_side != 'hold' else 0.4,
                     source='hybrid_contra_limited',
-                    reason=f'Limited contra-allocation vs {regime_trend} trend (L3_conf: {l3_confidence:.3f}, limited to {self.max_contra_allocation:.1%})',
+                    reason=final_reason,
                     features={
                         'path_mode': 'PATH2',
                         'agreement': False,
@@ -305,19 +478,31 @@ class HybridModeGenerator(BaseSignalGenerator):
                         'l3_confidence': l3_confidence,
                         'l1_l2_confidence': l1_l2_confidence,
                         'max_contra_allocation': self.max_contra_allocation,
-                        'contra_allocation_applied': True
+                        'contra_allocation_applied': True,
+                        'quality_filter_applied': filter_reason != "quality_filters_passed",
+                        'filter_reason': filter_reason
                     }
                 )
             else:
                 # Weak disagreement - allow but reduce confidence
                 contra_confidence = l1_l2_confidence * (1 - self.max_contra_allocation)
+
+                # Apply quality filters to contra-allocation signal
+                filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                    symbol, market_data, l1_l2_side, contra_confidence, 'hybrid_contra_allowed'
+                )
+
+                # Update reason if filters were applied
+                base_reason = f'Contra-allocation within limits vs {regime_trend} trend'
+                final_reason = f"{base_reason} | FILTERED: {filter_reason}" if filter_reason != "quality_filters_passed" else base_reason
+
                 return self._create_signal(
                     symbol=symbol,
-                    side=l1_l2_side,  # Allow contra-allocation
-                    confidence=contra_confidence,
-                    strength=0.6,
+                    side=filtered_side,  # Allow contra-allocation
+                    confidence=filtered_confidence,
+                    strength=0.6 if filtered_side != 'hold' else 0.4,
                     source='hybrid_contra_allowed',
-                    reason=f'Contra-allocation within limits vs {regime_trend} trend',
+                    reason=final_reason,
                     features={
                         'path_mode': 'PATH2',
                         'agreement': False,
@@ -325,48 +510,75 @@ class HybridModeGenerator(BaseSignalGenerator):
                         'l3_confidence': l3_confidence,
                         'l1_l2_confidence': l1_l2_confidence,
                         'max_contra_allocation': self.max_contra_allocation,
-                        'contra_allocation_applied': True
+                        'contra_allocation_applied': True,
+                        'quality_filter_applied': filter_reason != "quality_filters_passed",
+                        'filter_reason': filter_reason
                     }
                 )
         else:
             # L1/L2 unclear - follow trend with reduced confidence
+            trend_confidence = l3_confidence * 0.8
+
+            # Apply quality filters to trend-following signal
+            filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                symbol, market_data, regime_trend, trend_confidence, 'hybrid_trend_default'
+            )
+
+            # Update reason if filters were applied
+            base_reason = f'Following {regime_trend} trend (L1/L2 unclear, L3_conf: {l3_confidence:.3f})'
+            final_reason = f"{base_reason} | FILTERED: {filter_reason}" if filter_reason != "quality_filters_passed" else base_reason
+
             return self._create_signal(
                 symbol=symbol,
-                side=regime_trend,
-                confidence=l3_confidence * 0.8,
-                strength=0.7,
+                side=filtered_side,
+                confidence=filtered_confidence,
+                strength=0.7 if filtered_side != 'hold' else 0.4,
                 source='hybrid_trend_default',
-                reason=f'Following {regime_trend} trend (L1/L2 unclear, L3_conf: {l3_confidence:.3f})',
+                reason=final_reason,
                 features={
                     'path_mode': 'PATH2',
                     'agreement': 'unclear',
                     'regime_trend': regime_trend,
                     'l3_confidence': l3_confidence,
                     'l1_l2_confidence': l1_l2_confidence,
-                    'max_contra_allocation': self.max_contra_allocation
+                    'max_contra_allocation': self.max_contra_allocation,
+                    'quality_filter_applied': filter_reason != "quality_filters_passed",
+                    'filter_reason': filter_reason
                 }
             )
 
     def _process_neutral_regime(self, symbol: str, l3_regime: str, l3_confidence: float,
-                               l1_l2_signal: Dict) -> TacticalSignal:
+                               l1_l2_signal: Dict, market_data: Dict[str, Any]) -> TacticalSignal:
         """Process signal in neutral/range regime"""
 
         l1_l2_side = l1_l2_signal.get('side', 'hold')
         l1_l2_confidence = l1_l2_signal.get('confidence', 0.5)
+        neutral_confidence = l1_l2_confidence * 0.9  # Reduce confidence in neutral regime
+
+        # Apply quality filters to neutral regime signal
+        filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+            symbol, market_data, l1_l2_side, neutral_confidence, 'hybrid_neutral_l1_l2'
+        )
+
+        # Update reason if filters were applied
+        base_reason = f'L1/L2 signal in neutral regime {l3_regime} (L1/L2_conf: {l1_l2_confidence:.3f})'
+        final_reason = f"{base_reason} | FILTERED: {filter_reason}" if filter_reason != "quality_filters_passed" else base_reason
 
         return self._create_signal(
             symbol=symbol,
-            side=l1_l2_side,
-            confidence=l1_l2_confidence * 0.9,  # Reduce confidence in neutral regime
-            strength=0.7,
+            side=filtered_side,
+            confidence=filtered_confidence,
+            strength=0.7 if filtered_side != 'hold' else 0.4,
             source='hybrid_neutral_l1_l2',
-            reason=f'L1/L2 signal in neutral regime {l3_regime} (L1/L2_conf: {l1_l2_confidence:.3f})',
+            reason=final_reason,
             features={
                 'path_mode': 'PATH2',
                 'regime': l3_regime,
                 'l3_confidence': l3_confidence,
                 'l1_l2_confidence': l1_l2_confidence,
-                'neutral_regime': True
+                'neutral_regime': True,
+                'quality_filter_applied': filter_reason != "quality_filters_passed",
+                'filter_reason': filter_reason
             }
         )
 
@@ -394,58 +606,49 @@ class FullL3DominanceGenerator(BaseSignalGenerator):
 
             # FULL L3 DOMINANCE DECISIONS - NO COMPROMISE
             if l3_regime.lower() in ['bull', 'bullish']:
-                return self._create_signal(
-                    symbol=symbol,
-                    side='buy',
-                    confidence=min(0.95, l3_confidence),
-                    strength=1.0,  # Maximum strength
-                    source='full_l3_dominance',
-                    reason=f'FULL L3 DOMINANCE - Bull regime forces BUY (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH3',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'bullish',
-                        'l3_confidence': l3_confidence,
-                        'blocks_opposing_signals': True,
-                        'dominance_level': 'full'
-                    }
-                )
+                proposed_side = 'buy'
+                proposed_confidence = min(0.95, l3_confidence)
+                proposed_reason = f'FULL L3 DOMINANCE - Bull regime forces BUY (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
 
             elif l3_regime.lower() in ['bear', 'bearish']:
-                return self._create_signal(
-                    symbol=symbol,
-                    side='sell',
-                    confidence=min(0.95, l3_confidence),
-                    strength=1.0,  # Maximum strength
-                    source='full_l3_dominance',
-                    reason=f'FULL L3 DOMINANCE - Bear regime forces SELL (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH3',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'bearish',
-                        'l3_confidence': l3_confidence,
-                        'blocks_opposing_signals': True,
-                        'dominance_level': 'full'
-                    }
-                )
+                proposed_side = 'sell'
+                proposed_confidence = min(0.95, l3_confidence)
+                proposed_reason = f'FULL L3 DOMINANCE - Bear regime forces SELL (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
 
             else:  # Neutral, range, unknown - HOLD with high conviction
-                return self._create_signal(
-                    symbol=symbol,
-                    side='hold',
-                    confidence=0.7,  # Higher confidence than other paths
-                    strength=0.8,  # Higher strength
-                    source='full_l3_dominance',
-                    reason=f'FULL L3 DOMINANCE - Neutral/range holds all positions (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})',
-                    features={
-                        'path_mode': 'PATH3',
-                        'l3_regime': l3_regime,
-                        'trend_direction': 'neutral',
-                        'l3_confidence': l3_confidence,
-                        'blocks_opposing_signals': True,
-                        'dominance_level': 'full'
-                    }
-                )
+                proposed_side = 'hold'
+                proposed_confidence = 0.7  # Higher confidence than other paths
+                proposed_reason = f'FULL L3 DOMINANCE - Neutral/range holds all positions (L3_regime: {l3_regime}, confidence: {l3_confidence:.3f})'
+
+            # Apply quality filters even in full dominance mode - quality comes first
+            filtered_side, filtered_confidence, filter_reason = self._apply_signal_quality_filters(
+                symbol, market_data, proposed_side, proposed_confidence, 'full_l3_dominance'
+            )
+
+            # Update reason if filters were applied
+            if filter_reason != "quality_filters_passed":
+                final_reason = f"{proposed_reason} | FILTERED: {filter_reason}"
+            else:
+                final_reason = proposed_reason
+
+            return self._create_signal(
+                symbol=symbol,
+                side=filtered_side,
+                confidence=filtered_confidence,
+                strength=1.0 if filtered_side != 'hold' else 0.8,  # Maximum strength for trades, high for hold
+                source='full_l3_dominance',
+                reason=final_reason,
+                features={
+                    'path_mode': 'PATH3',
+                    'l3_regime': l3_regime,
+                    'trend_direction': 'bullish' if proposed_side == 'buy' else 'bearish' if proposed_side == 'sell' else 'neutral',
+                    'l3_confidence': l3_confidence,
+                    'blocks_opposing_signals': True,
+                    'dominance_level': 'full',
+                    'quality_filter_applied': filter_reason != "quality_filters_passed",
+                    'filter_reason': filter_reason
+                }
+            )
 
         except Exception as e:
             logger.error(f"❌ Error in FullL3DominanceGenerator for {symbol}: {e}")

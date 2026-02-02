@@ -16,7 +16,17 @@ class RealTimeDataLoader:
     async def _init_binance(self):
         """Inicializa el cliente de Binance de forma segura"""
         if not self.binance_client:
-            self.binance_client = BinanceClient(self.config)
+            # ✅ CRITICAL: Market Data SIEMPRE desde mainnet o feed externo
+            # Configurar cliente para datos de mercado en mainnet (sin API keys)
+            market_data_config = self.config.copy()
+            market_data_config.update({
+                'BINANCE_API_KEY': None,      # No requiere API keys
+                'BINANCE_API_SECRET': None,   # No requiere API keys
+                'USE_TESTNET': False          # SIEMPRE FALSE para datos de mercado
+            })
+            
+            self.binance_client = BinanceClient(market_data_config)
+            logger.info("✅ Cliente de datos de mercado configurado en mainnet (sin API keys)")
             
     async def close(self):
         """Cierra apropiadamente las conexiones"""

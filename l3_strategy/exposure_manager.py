@@ -1,116 +1,178 @@
-# l3_strategy/exposure_manager.py
 import logging
 import pandas as pd
 from core.logging import logger
+from typing import Dict, Optional, List, Any
 
+class ExposureManager:
+    """Gestión de exposición con sincronización real del portfolio."""
+
+    def __init__(self, market_data_provider=None):
+        """
+        Initialize ExposureManager.
+
+        Args:
+            market_data_provider: Provider for market data access
+        """
+        self.market_data_provider = market_data_provider
+
+    def calculate_rebalancing(self, portfolio_manager, target_allocations: dict) -> dict:
+        """
+        Calcular rebalanceo basado en POSICIONES REALES del portfolio.
+        Unifica exposición entre portfolio_state_real y portfolio_state_simulated.
+
+        Args:
+            portfolio_manager: Manager con posiciones actuales (FUENTE ÚNICA DE VERDAD)
+            target_allocations: {'BTCUSDT': 0.2, 'ETHUSDT': 0.15, 'USDT': 0.65}
+
+        Returns:
+            Dict con decisiones de rebalanceo
+        """
+        try:
+            # ========================================================================================
+            # CRÍTICO: USAR PORTFOLIO_MANAGER COMO FUENTE ÚNICA DE VERDAD
+            # ========================================================================================
+            # ✅ OBTENER POSICIONES REALES DESDE PORTFOLIO_MANAGER
+            btc_position = portfolio_manager.get_balance('BTC')
+            eth_position = portfolio_manager.get_balance('ETH')
+            usdt_balance = portfolio_manager.get_balance('USDT')
+
+            # ✅ OBTENER PRECIOS ACTUALES PARA CALCULAR VALORES
+            btc_price = self._get_current_price('BTCUSDT')
+            eth_price = self._get_current_price('ETHUSDT')
+
+            # ========================================================================================
+            # CRÍTICO: UNIFICAR CÁLCULO DE EXPOSICIÓN - NINGÚN "0% ALLOCATION" CUANDO HAY POSICIONES
+            # ========================================================================================
+            # ✅ CALCULAR VALORES REALES EN USDT
+            btc_value = btc_position * btc_price if btc_position > 0 else 0.0
+            eth_value = eth_position * eth_price if eth_position > 0 else 0.0
+            total_value = btc_value + eth_value + usdt_balance
+
+            # ✅ CALCULAR ALLOCATIONS ACTUALES REALES
+            # NUNCA mostrar 0% si hay posiciones reales
+            current_btc_pct = (btc_value / total_value * 100) if total_value > 0 and btc_position > 0 else 0.0
+            current_eth_pct = (eth_value / total_value * 100) if total_value > 0 and eth_position > 0 else 0.0
+            current_usdt_pct = (usdt_balance / total_value * 100) if total_value > 0 else 0.0
+
+            logger.info(f"📊 PORTFOLIO STATE REAL (unificado):")
+            logger.info(f"   BTC: {btc_position:.6f} units (${btc_value:.2f}) = {current_btc_pct:.1f}%")
+            logger.info(f"   ETH: {eth_position:.6f} units (${eth_value:.2f}) = {current_eth_pct:.1f}%")
+            logger.info(f"   USDT: ${usdt_balance:.2f} = {current_usdt_pct:.1f}%")
+            logger.info(f"   TOTAL VALUE: ${total_value:.2f}")
+
+            # ✅ CALCULAR TARGETS EN USDT
+            target_btc_value = total_value * target_allocations.get('BTCUSDT', 0.2)
+            target_eth_value = total_value * target_allocations.get('ETHUSDT', 0.15)
+            target_usdt_value = total_value * target_allocations.get('USDT', 0.65)
+
+            logger.info(f"📊 TARGET ALLOCATIONS:")
+            logger.info(f"   BTC: {target_allocations.get('BTCUSDT', 0.2)*100:.1f}% (${target_btc_value:.2f})")
+            logger.info(f"   ETH: {target_allocations.get('ETHUSDT', 0.15)*100:.1f}% (${target_eth_value:.2f})")
+            logger.info(f"   USDT: {target_allocations.get('USDT', 0.65)*100:.1f}% (${target_usdt_value:.2f})")
+
+            # ✅ CALCULAR AJUSTES NECESARIOS
+            btc_adjustment_value = target_btc_value - btc_value
+            eth_adjustment_value = target_eth_value - eth_value
+            usdt_adjustment_value = target_usdt_value - usdt_balance
+
+            # ✅ DETERMINAR ACCIONES
+            rebalancing = {
+                'BTCUSDT': {
+                    'current_position': btc_position,
+                    'current_value': btc_value,
+                    'target_value': target_btc_value,
+                    'adjustment_value': btc_adjustment_value,
+                    'adjustment_units': btc_adjustment_value / btc_price if btc_price > 0 else 0,
+                    'action': self._determine_action(btc_adjustment_value)
+                },
+                'ETHUSDT': {
+                    'current_position': eth_position,
+                    'current_value': eth_value,
+                    'target_value': target_eth_value,
+                    'adjustment_value': eth_adjustment_value,
+                    'adjustment_units': eth_adjustment_value / eth_price if eth_price > 0 else 0,
+                    'action': self._determine_action(eth_adjustment_value)
+                },
+                'USDT': {
+                    'current_balance': usdt_balance,
+                    'target_balance': target_usdt_value,
+                    'adjustment': usdt_adjustment_value,
+                    'action': 'rebalance_source' if usdt_adjustment_value > 0 else 'hold'
+                }
+            }
+
+            # ✅ LOG DETALLADO
+            logger.info(f"📊 REBALANCING DECISIONS:")
+            logger.info(f"   BTC: {rebalancing['BTCUSDT']['action']} {abs(btc_adjustment_value):.2f} USDT")
+            logger.info(f"   ETH: {rebalancing['ETHUSDT']['action']} {abs(eth_adjustment_value):.2f} USDT")
+            logger.info(f"   USDT: Need {usdt_adjustment_value:.2f} USDT")
+
+            return rebalancing
+
+        except Exception as e:
+            logger.error(f"❌ Error calculating rebalancing: {e}", exc_info=True)
+            return {}
+
+    def _determine_action(self, adjustment_value: float, threshold: float = 50.0) -> str:
+        """
+        Determinar acción basada en ajuste necesario.
+
+        Args:
+            adjustment_value: Ajuste en USDT (+ = comprar, - = vender)
+            threshold: Threshold mínimo para actuar ($50)
+
+        Returns:
+            'buy', 'sell', o 'hold'
+        """
+        if abs(adjustment_value) < threshold:
+            return 'hold'
+        elif adjustment_value > 0:
+            return 'buy'
+        else:
+            return 'sell'
+
+    def _get_current_price(self, symbol: str) -> float:
+        """Obtener precio actual del símbolo."""
+        try:
+            # Obtener desde market_data o exchange
+            # Implementación específica según tu setup
+            if self.market_data_provider:
+                return self.market_data_provider.get_price(symbol)
+            else:
+                # Fallback a precios hardcodeados
+                price_map = {
+                    'BTCUSDT': 50000.0,
+                    'ETHUSDT': 4327.46
+                }
+                return price_map.get(symbol, 0.0)
+        except Exception as e:
+            logger.error(f"❌ Error getting price for {symbol}: {e}")
+            return 0.0
+
+# Mantener compatibilidad con código existente
 def gestionar_exposicion(universo, portfolio_state, market_data, regime):
     """
-    Gestiona la exposición del portfolio basado en capital disponible real,
-    régimen de mercado y datos de mercado.
-    Mantiene liquidez mínima y permite rebalanceo dinámico.
+    Legacy function para compatibilidad. Deprecated - usar ExposureManager en su lugar.
     """
-    try:
-        # Obtener estado actual del portfolio
-        total_value = portfolio_state.get("total_value", 0.0)
-        usdt_balance = portfolio_state.get("usdt_balance", 0.0)
-        btc_balance = portfolio_state.get("btc_balance", 0.0)
-        eth_balance = portfolio_state.get("eth_balance", 0.0)
+    logger.debug("⚠️ gestionar_exposicion está deprecated. Usar ExposureManager.calculate_rebalancing en su lugar.")
 
-        # Obtener precios actuales - CRITICAL FIX: Extract scalar values properly from DataFrames/Series
-        btc_data = market_data.get("BTCUSDT", {})
-        if isinstance(btc_data, pd.DataFrame):
-            btc_price = float(btc_data["close"].iloc[-1]) if not btc_data.empty and "close" in btc_data.columns else 50000.0
-        elif isinstance(btc_data, dict):
-            btc_close = btc_data.get("close", 50000.0)
-            if isinstance(btc_close, list):
-                btc_price = float(btc_close[-1]) if btc_close else 50000.0
-            else:
-                btc_price = float(btc_close)
-        else:
-            btc_price = 50000.0
+    # Crear una instancia temporal para compatibilidad
+    exposure_manager = ExposureManager()
 
-        eth_data = market_data.get("ETHUSDT", {})
-        if isinstance(eth_data, pd.DataFrame):
-            eth_price = float(eth_data["close"].iloc[-1]) if not eth_data.empty and "close" in eth_data.columns else 4327.46
-        elif isinstance(eth_data, dict):
-            eth_close = eth_data.get("close", 4327.46)
-            if isinstance(eth_close, list):
-                eth_price = float(eth_close[-1]) if eth_close else 4327.46
-            else:
-                eth_price = float(eth_close)
-        else:
-            eth_price = 4327.46
+    # Convertir inputs antiguos al nuevo formato
+    class LegacyPortfolioManager:
+        def get_balance(self, asset):
+            asset_key = f"{asset.lower()}_balance"
+            return portfolio_state.get(asset_key, 0.0)
 
-        # Calcular valores actuales de posiciones
-        btc_value = btc_balance * btc_price
-        eth_value = eth_balance * eth_price
+    fake_portfolio_manager = LegacyPortfolioManager()
 
-        # Definir porcentajes de asignación según régimen
-        if regime.lower() == "bear":
-            # En bear market: reducir exposición, aumentar liquidez
-            target_btc_pct = 0.20  # 20% BTC
-            target_eth_pct = 0.20  # 20% ETH
-            target_usdt_pct = 0.60  # 60% liquidez
-            logger.info("🐻 Régimen bajista: exposición reducida, liquidez aumentada al 60%")
-        elif regime.lower() == "bull":
-            # En bull market: aumentar exposición
-            target_btc_pct = 0.60  # 60% BTC
-            target_eth_pct = 0.30  # 30% ETH
-            target_usdt_pct = 0.10  # 10% liquidez
-            logger.info("🚀 Régimen alcista: exposición aumentada")
-        else:
-            # Neutral: asignación balanceada
-            target_btc_pct = 0.50  # 50% BTC
-            target_eth_pct = 0.30  # 30% ETH
-            target_usdt_pct = 0.20  # 20% liquidez
+    # Definir target allocations basado en régimen
+    if regime.lower() == "bear":
+        target_allocations = {'BTCUSDT': 0.20, 'ETHUSDT': 0.20, 'USDT': 0.60}
+    elif regime.lower() == "bull":
+        target_allocations = {'BTCUSDT': 0.60, 'ETHUSDT': 0.30, 'USDT': 0.10}
+    else:
+        target_allocations = {'BTCUSDT': 0.50, 'ETHUSDT': 0.30, 'USDT': 0.20}
 
-        # Calcular valores objetivo para cada activo
-        btc_target_value = total_value * target_btc_pct
-        eth_target_value = total_value * target_eth_pct
-        usdt_target_value = total_value * target_usdt_pct
-
-        # Calcular cantidades objetivo
-        btc_target_qty = btc_target_value / btc_price if btc_price > 0 else 0.0
-        eth_target_qty = eth_target_value / eth_price if eth_price > 0 else 0.0
-
-        # Calcular ajustes necesarios (diferencia entre objetivo y actual)
-        btc_adjustment = btc_target_qty - btc_balance
-        eth_adjustment = eth_target_qty - eth_balance
-        usdt_adjustment = usdt_target_value - usdt_balance
-
-        # Determinar acciones basadas en ajustes
-        exposure_decisions = {
-            "BTCUSDT": {
-                "current_position": btc_balance,
-                "current_value": btc_value,
-                "target_position": btc_target_qty,
-                "target_value": btc_target_value,
-                "adjustment": btc_adjustment,
-                "action": "buy" if btc_adjustment > 0.0001 else "sell" if btc_adjustment < -0.0001 else "hold"
-            },
-            "ETHUSDT": {
-                "current_position": eth_balance,
-                "current_value": eth_value,
-                "target_position": eth_target_qty,
-                "target_value": eth_target_value,
-                "adjustment": eth_adjustment,
-                "action": "buy" if eth_adjustment > 0.0001 else "sell" if eth_adjustment < -0.0001 else "hold"
-            },
-            "USDT": {
-                "current_balance": usdt_balance,
-                "target_balance": usdt_target_value,
-                "adjustment": usdt_adjustment,
-                "min_liquidity_pct": target_usdt_pct,
-                "is_liquidity": True
-            }
-        }
-
-        logger.info(f"📊 Rebalanceo calculado - BTC: {btc_balance:.6f} → {btc_target_qty:.6f} ({btc_adjustment:+.6f})")
-        logger.info(f"📊 Rebalanceo calculado - ETH: {eth_balance:.3f} → {eth_target_qty:.3f} ({eth_adjustment:+.3f})")
-        logger.info(f"📊 Rebalanceo calculado - USDT: {usdt_balance:.2f} → {usdt_target_value:.2f} (liquidez {target_usdt_pct*100:.0f}%)")
-
-        return exposure_decisions
-
-    except Exception as e:
-        logger.error(f"❌ Error en gestión de exposición: {e}")
-        return {}
+    return exposure_manager.calculate_rebalancing(fake_portfolio_manager, target_allocations)

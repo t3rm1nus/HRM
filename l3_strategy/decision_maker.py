@@ -11,10 +11,16 @@ from datetime import datetime
 from .regime_classifier import clasificar_regimen_mejorado as clasificar_regimen
 from .exposure_manager import gestionar_exposicion
 from core.logging import logger
+from typing import Dict, Optional, List, Any
+
+import numpy as np  # Needed for generate_strategic_signal
 
 # Directorio de inferencias
 INFER_DIR = "data/datos_inferencia"
 OUTPUT_FILE = os.path.join(INFER_DIR, "strategic_decision.json")
+
+# WEAK SIGNALS BLOCKED - New threshold logic
+WEAK_THRESHOLD = 0.55
 
 
 def ensure_dir(directory: str):
@@ -38,26 +44,411 @@ def load_inputs():
     return results
 
 
-def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict = None, regime_decision: dict = None):
+def _check_real_balances(state: Dict) -> bool:
+    """
+    Check if real balances are available in the portfolio.
+    FIX: Check both legacy fields and portfolio structure.
+    CRITICAL: This must check the SAME state that was updated by sync_balances.
+    """
+    portfolio = state.get('portfolio', {})
+    
+    # CRITICAL FIX: Also check direct state keys as backup
+    btc_balance = portfolio.get('btc_balance', 0)
+    eth_balance = portfolio.get('eth_balance', 0)
+    usdt_balance = portfolio.get('usdt_balance', 0)
+    
+    if btc_balance == 0 and eth_balance == 0:
+        btc_balance = state.get('btc_balance', 0)
+        eth_balance = state.get('eth_balance', 0)
+        usdt_balance = state.get('usdt_balance', 0)
+        
+        if btc_balance > 0 or eth_balance > 0:
+            portfolio = {
+                'btc_balance': btc_balance,
+                'eth_balance': eth_balance,
+                'usdt_balance': usdt_balance
+            }
+            state['portfolio'] = portfolio
+    btc = portfolio.get('btc_balance', state.get('btc_balance', 0))
+    eth = portfolio.get('eth_balance', state.get('eth_balance', 0))
+    usdt = portfolio.get('usdt_balance', state.get('usdt_balance', 0))
+    
+    has_crypto = btc > 0 or eth > 0
+    has_traded = usdt < 3000.0
+    has_valid_portfolio = has_crypto or has_traded
+    
+    # DEBUG: Log what we're checking
+    logger.debug(f"🔍 _check_real_balances - portfolio: {portfolio}")
+    logger.debug(f"🔍 _check_real_balances - legacy fields: btc={state.get('btc_balance', 0)}, eth={state.get('eth_balance', 0)}, usdt={state.get('usdt_balance', 0)}")
+    logger.debug(f"🔍 _check_real_balances - has_crypto: {has_crypto}, has_traded: {has_traded}, result: {has_valid_portfolio}")
+    
+    return has_valid_portfolio
+
+
+def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict = None, regime_decision: dict = None, state: dict = None):
     """
     Combina todos los outputs de L3 en una decisión estratégica.
-    ENHANCED: Now handles oversold/overbought setups within range regimes.
-    
+    SOLUCIÓN CRÍTICA: SAFE FALLBACK ≠ REBALANCE
+
     PRIORITY HIERARCHY:
-    1. Regime-specific decisions (including setups)
-    2. Sentiment adjustments
-    3. Risk management overlays
+    1. BALANCES SYNC CHECK - Skip L3 if no real balances available
+    2. Regime-specific decisions with STRATEGIC CAPITAL PRESERVATION
+    3. Confidence-based HOLD overrides (< 0.7 forces HOLD)
+    4. Setup detection for controlled L2 signals
+    5. Sentiment adjustments
+    6. Risk management overlays
+
+    SEPARACIÓN CRÍTICA: OPINIÓN vs ORDEN
+    - opinion: Lo que L3 "piensa" del mercado
+    - order: Lo que L3 ORDENA hacer (solo cuando puede ver balances)
     """
+
     # ========================================================================================
-    # PRIORITY 1: REGIME-SPECIFIC DECISIONS WITH SETUP DETECTION
+    # CRÍTICO: SYSTEM STATE CHECK - PRIORITY 1 - USE STATE COORDINATOR SOURCE OF TRUTH
+    # ========================================================================================
+    # FIX: Use SystemState from StateCoordinator as the ONLY source of truth
+    if state and state.get('system_state_type') != 'NORMAL':
+        logger.warning(f"🚨 SYSTEM STATE {state.get('system_state_type')}: L3 decisions blocked - not in NORMAL state")
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "market_regime": "unknown_no_sync",
+            "regime_subtype": None,
+            "setup_detected": False,
+            "setup_type": None,
+            "setup_active": False,
+            "market_opinion": "hold",
+            "opinion_confidence": 0.0,
+            "market_bias": "neutral",
+            "bias": "hold",
+            "allow_l2_signals": False,
+            "strategic_hold_active": True,
+            "strategic_hold_reason": "SYSTEM_BLIND - L3 cannot issue orders without balance visibility",
+            "sentiment_score": 0.0,
+            "asset_allocation": None,
+            "risk_appetite": "low",
+            "macro_context": {},
+            "exposure_decisions": {},
+            "loss_prevention_filters": {
+                "max_loss_per_trade_pct": 0.01,
+                "require_strong_signal": True,
+                "avoid_weak_sentiment": True,
+                "bear_market_restriction": True,
+                "high_volatility_block": True,
+                "preserve_high_conf_l2": False,
+                "allow_setup_trades": False,
+                "setup_type": None
+            },
+            "winning_trade_rules": {
+                "allow_profit_running": False,
+                "trailing_stop_activation": 0.005,
+                "take_profit_levels": [0.01],
+                "scale_out_profits": False,
+                "hold_winners_longer": False,
+                "momentum_boost": False,
+                "early_exit_weak_signals": True,
+                "profit_lock_in": 0.005,
+            },
+            "strategic_control": {
+                'allow_l2_signals': False,
+                'strategic_hold_active': True,
+                'strategic_hold_type': 'SYSTEM_BLIND',
+                'strategic_hold_reason': 'L3 cannot issue orders without balance visibility',
+                'capital_preservation_mode': True,
+                'l2_signals_blocked': True,
+                'block_autorebalancer': True,
+                'freeze_positions': True,
+                'allow_only_stop_loss': True,
+                'blind_mode_active': True,
+                'force_hold_signals': True
+            },
+            "strategic_guidelines": {
+                "rebalance_frequency": "never",
+                "max_single_asset_exposure": 0.0,
+                "volatility_target": 0.05,
+                "liquidity_requirement": "maximum",
+                "btc_max_exposure": 0.0,
+                "usdt_min_liquidity": 1.0,
+                "max_loss_per_trade_pct": 0.01,
+                "require_stop_loss": True,
+                "profit_taking_strategy": "immediate",
+                "setup_trading_enabled": False
+            },
+            "blind_mode": True
+        }
+    
+    # If state is NORMAL or not provided, proceed with normal L3 logic
+    balances_synced = True
+
+    if not balances_synced:
+        logger.warning("🚨 L3 DECISION SKIPPED: System state not NORMAL - cannot make strategic decisions")
+        logger.warning("📊 L3 will return BLIND MODE - opinion only, no orders")
+
+        # Return BLIND MODE decision - OPINIÓN PERO NO ÓRDENES
+        blind_decision = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "market_regime": "unknown_no_sync",
+            "regime_subtype": None,
+            "setup_detected": False,
+            "setup_type": None,
+            "setup_active": False,
+            # OPINIÓN: L3 puede tener opinión del mercado PERO EN BLIND MODE = NEUTRAL/HOLD
+            "market_opinion": "hold",  # CRÍTICO: En BLIND MODE opinión = HOLD
+            "opinion_confidence": 0.0,  # Sin confianza en BLIND MODE
+            "market_bias": "neutral",  # Neutral en BLIND MODE
+            # ÓRDENES: Pero NO ORDENA NADA (blind mode)
+            "bias": "hold",  # SAFE FALLBACK = HOLD ABSOLUTO
+            "allow_l2_signals": False,  # CRITICAL: Block all L2 signals when blind
+            "strategic_hold_active": True,
+            "strategic_hold_reason": "SYSTEM_BLIND - L3 cannot issue orders without balance visibility",
+            "sentiment_score": 0.0,
+            "asset_allocation": None,  # CRITICAL FIX: No allocation when blind
+            "risk_appetite": "low",
+            "macro_context": {},
+            "exposure_decisions": {},
+            "loss_prevention_filters": {
+                "max_loss_per_trade_pct": 0.01,
+                "require_strong_signal": True,
+                "avoid_weak_sentiment": True,
+                "bear_market_restriction": True,
+                "high_volatility_block": True,
+                "preserve_high_conf_l2": False,
+                "allow_setup_trades": False,
+                "setup_type": None
+            },
+            "winning_trade_rules": {
+                "allow_profit_running": False,
+                "trailing_stop_activation": 0.005,
+                "take_profit_levels": [0.01],
+                "scale_out_profits": False,
+                "hold_winners_longer": False,
+                "momentum_boost": False,
+                "early_exit_weak_signals": True,
+                "profit_lock_in": 0.005,
+            },
+            "strategic_control": {
+                'allow_l2_signals': False,
+                'strategic_hold_active': True,
+                'strategic_hold_type': 'SYSTEM_BLIND',
+                'strategic_hold_reason': 'L3 cannot issue orders without balance visibility',
+                'capital_preservation_mode': True,
+                'l2_signals_blocked': True,  # CRÍTICO: Bloquear AutoRebalancer
+                'block_autorebalancer': True,  # CRÍTICO: Bloquear AutoRebalancer
+                'freeze_positions': True,  # CRÍTICO: Congelar posiciones
+                'allow_only_stop_loss': True,  # Solo stop losses permitidos
+                'blind_mode_active': True,  # FLAG EXPLÍCITO PARA BLIND MODE
+                'force_hold_signals': True  # FORZAR HOLD EN TODOS LOS NIVELES
+            },
+            "strategic_guidelines": {
+                "rebalance_frequency": "never",
+                "max_single_asset_exposure": 0.0,
+                "volatility_target": 0.05,
+                "liquidity_requirement": "maximum",
+                "btc_max_exposure": 0.0,
+                "usdt_min_liquidity": 1.0,
+                "max_loss_per_trade_pct": 0.01,
+                "require_stop_loss": True,
+                "profit_taking_strategy": "immediate",
+                "setup_trading_enabled": False
+            }
+        }
+        
+        # FIX EXTRA - BLIND MODE HANDLING
+        # Asegurar que blind_mode esté presente en la decisión
+        blind_decision['blind_mode'] = True
+
+        logger.info("🛡️ SYSTEM_BLIND MODE: L3 can have market opinion but issues no orders")
+        logger.info("BLIND MODE: keeping current portfolio allocation unchanged")
+        return blind_decision
+
+    # Initialize variables that may be used outside the regime_decision block
+    setup_active = False
+    regime = 'neutral'
+    subtype = None
+    regime_signal = 'hold'
+    regime_confidence = 0.5
+    setup_type = None
+    allow_l2_signal = False
+    risk_appetite = 'moderate'
+    portfolio = {'BTCUSDT': 0.20, 'ETHUSDT': 0.15, 'USDT': 0.65}  # Default portfolio
+    strategic_hold_reason = None
+    strategic_hold_type = None
+    l3_dominance_state = {
+        'allow_l2_signals': False,
+        'strategic_hold_active': False,
+        'strategic_hold_type': None,
+        'strategic_hold_reason': None,
+        'capital_preservation_mode': False,
+        'l2_signals_blocked': True
+    }
+
+    # ========================================================================================
+    # PRIORITY 1: REGIME-SPECIFIC STRATEGIC DECISIONS WITH CAPITAL PRESERVATION
     # ========================================================================================
     if regime_decision and isinstance(regime_decision, dict):
         regime = regime_decision.get('regime', 'neutral')
         subtype = regime_decision.get('subtype', None)
         regime_signal = regime_decision.get('signal', 'hold')
-        regime_confidence = regime_decision.get('confidence', 0.5)
+        regime_confidence = float(np.clip(regime_decision.get('confidence', 0.5), 0.0, 1.0))
         setup_type = regime_decision.get('setup_type', None)
+        setup_active = setup_type is not None  # True when setup is detected
         allow_l2_signal = regime_decision.get('allow_l2_signal', False)
+
+        # ========================================================================================
+        # PRELIMINARY LOSS PREVENTION FILTERS FOR STRATEGIC HOLD LOGIC
+        # ========================================================================================
+        # Initialize basic loss_prevention_filters for strategic hold decision
+        preliminary_loss_filters = {
+            "allow_setup_trades": setup_type is not None,
+            "setup_type": setup_type
+        }
+
+        # EXPLICIT TIGHT_RANGE DETECTION: Set loss_prevention_filters dynamically by regime
+        if regime == "RANGE" and subtype == "TIGHT_RANGE":
+            preliminary_loss_filters["allow_setup_trades"] = True
+            preliminary_loss_filters["setup_type"] = "mean_reversion"
+
+        # ========================================================================================
+        # ÚNICA FUENTE DE VERDAD PARA L3 DOMINANCE STATE
+        # ========================================================================================
+        # Estado persistente del ciclo - se evalúa UNA sola vez
+        l3_dominance_state = {
+            'allow_l2_signals': False,  # Default: bloqueado
+            'strategic_hold_active': False,  # Default: no bloqueo estratégico
+            'strategic_hold_type': None,
+            'strategic_hold_reason': None,
+            'capital_preservation_mode': False,
+            'l2_signals_blocked': True  # Default: bloqueado
+        }
+
+        # ========================================================================================
+        # EVALUACIÓN DE DOMINANCIA L3 - UNA SOLA VEZ POR CICLO
+        # ========================================================================================
+        # RULE GOLD: TRENDING regime with confidence < 0.5 should NEVER block setups
+        if regime == "TRENDING" and regime_confidence < 0.5:
+            logger.info(f"🎯 TRENDING LOW CONFIDENCE RULE: confidence {regime_confidence:.2f} < 0.5 - treating as UNCERTAIN, allowing setup trades")
+            l3_dominance_state.update({
+                'allow_l2_signals': True,
+                'strategic_hold_active': False,
+                'strategic_hold_reason': f"TRENDING regime confidence {regime_confidence:.2f} < 0.5 threshold - allowing setups",
+                'strategic_hold_type': None,
+                'l2_signals_blocked': False,
+                'allow_setup_trades': True,
+                'low_confidence_trending': True
+            })
+
+        # TIGHT_RANGE = MEAN REVERSION OPPORTUNITY (no bloqueo)
+        elif regime == 'RANGE' and subtype == 'TIGHT_RANGE':
+            logger.info(f"🎯 TIGHT RANGE MEAN REVERSION: Enabling L2 signals for mean reversion in tight range")
+            # Configurar para permitir mean reversion
+            setup_type = 'mean_reversion'  # Update global setup_type
+            l3_dominance_state.update({
+                'allow_l2_signals': True,
+                'strategic_hold_active': False,
+                'l2_signals_blocked': False,
+                'mean_reversion_mode': True,
+                'allow_setup_trades': True,
+                'setup_type': 'mean_reversion'
+            })
+        else:
+            # RULE 1: HOLD strategic = complete L2 blockade (no "relax dominance")
+            if regime_signal == 'hold':
+                l3_dominance_state.update({
+                    'allow_l2_signals': False,
+                    'strategic_hold_active': True,
+                    'strategic_hold_reason': f"Strategic HOLD active - L2 signals blocked",
+                    'strategic_hold_type': "HOLD_L3_STRATEGIC",
+                    'l2_signals_blocked': True
+                })
+                logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - blocking all L2 signals (no relax dominance)")
+
+            # RULE 2: WEAK SIGNALS BLOCKED - Apply WEAK_THRESHOLD logic
+            elif regime_confidence < WEAK_THRESHOLD:
+                # WEAK_THRESHOLD: Block signals when confidence < 0.55
+                l3_dominance_state.update({
+                    'allow_l2_signals': False,
+                    'strategic_hold_active': True,
+                    'strategic_hold_reason': f"WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} threshold",
+                    'strategic_hold_type': "HOLD_L3_WEAK_SIGNALS_BLOCKED",
+                    'capital_preservation_mode': True,
+                    'l2_signals_blocked': True
+                })
+                regime_signal = 'hold'
+                logger.warning(f"🚨 WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} - FORCING HOLD")
+
+            # RULE 2B: RANGE regime capital preservation (only when confidence >= WEAK_THRESHOLD)
+            elif regime == 'RANGE':
+                if regime_confidence < 0.7:
+                    # CONFIDENCE OVERRIDE: Force HOLD when confidence < 0.7 in RANGE (but >= WEAK_THRESHOLD)
+                    l3_dominance_state.update({
+                        'allow_l2_signals': False,
+                        'strategic_hold_active': True,
+                        'strategic_hold_reason': f"RANGE regime confidence {regime_confidence:.2f} < 0.7 threshold (but >= {WEAK_THRESHOLD})",
+                        'strategic_hold_type': "HOLD_L3_CONFIDENCE_OVERRIDE",
+                        'capital_preservation_mode': True,
+                        'l2_signals_blocked': True
+                    })
+                    regime_signal = 'hold'
+                    logger.warning(f"🚨 STRATEGIC HOLD: RANGE regime confidence {regime_confidence:.2f} < 0.7 - FORCING HOLD (L3 dominance)")
+
+            # RULE 3: RANGE regime strategic hold logic - follows user's exact requirement
+                else:
+                    # Apply user's strategic hold logic: if RANGE and not allow_setup_trades, then strategic_hold = True
+                    if regime == "RANGE" and not preliminary_loss_filters["allow_setup_trades"]:
+                        strategic_hold = True
+                        l3_dominance_state.update({
+                            'allow_l2_signals': False,
+                            'strategic_hold_active': True,
+                            'strategic_hold_reason': "RANGE regime default - blocking weak signals",
+                            'strategic_hold_type': "HOLD_L3_RANGE_DEFAULT",
+                            'l2_signals_blocked': True
+                        })
+                        logger.info(f"🔒 STRATEGIC CONTROL: RANGE regime detected - allow_l2_signals = False (except when setup_active or allow_setup_trades)")
+                    else:
+                        strategic_hold = False
+                        logger.info(f"🔓 RANGE SETUP ALLOWED: allow_setup_trades={preliminary_loss_filters['allow_setup_trades']} - skipping strategic hold")
+
+            # RULE 4: Allow signals in clear directional regimes with high confidence
+            elif regime in ['BULL', 'BEAR'] and regime_confidence >= 0.8:
+                l3_dominance_state.update({
+                    'allow_l2_signals': True,
+                    'strategic_hold_active': False,
+                    'l2_signals_blocked': False
+                })
+                logger.info(f"✅ L3 ALLOWANCE: {regime} regime with high confidence ({regime_confidence:.2f}) - L2 signals allowed")
+
+            # RULE 5: Default - block weak signals
+            else:
+                l3_dominance_state.update({
+                    'allow_l2_signals': False,
+                    'strategic_hold_active': False,
+                    'strategic_hold_reason': f"Weak signals blocked in {regime} regime",
+                    'l2_signals_blocked': True
+                })
+                logger.info(f"🔒 WEAK SIGNALS BLOCKED: L3 blocking weak signals in {regime} regime")
+
+        # ========================================================================================
+        # SETUP OVERRIDE: Allow controlled L2 signals for documented setups
+        # ========================================================================================
+        if setup_type in ['oversold', 'overbought']:
+            l3_dominance_state.update({
+                'allow_l2_signals': True,
+                'strategic_hold_active': False,
+                'strategic_hold_reason': None,
+                'strategic_hold_type': None,
+                'l2_signals_blocked': False,
+                'allow_setup_trades': True,
+                'setup_type': setup_type
+            })
+            logger.info(f"🎯 SETUP EXCEPTION: Allowing L2 signals for {setup_type} setup despite {regime} regime")
+            if l3_dominance_state.get('strategic_hold_type'):
+                logger.warning(f"⚠️ SETUP OVERRIDE: {setup_type} setup overrides strategic HOLD ({l3_dominance_state['strategic_hold_type']})")
+
+        # ========================================================================================
+        # ACTUALIZAR VARIABLES GLOBALES CON FUENTE ÚNICA DE VERDAD
+        # ========================================================================================
+        allow_l2_signal = l3_dominance_state['allow_l2_signals']
+        strategic_hold_reason = l3_dominance_state.get('strategic_hold_reason')
+        strategic_hold_type = l3_dominance_state.get('strategic_hold_type')
 
         # Get current prices for allocation calculations
         current_btc_price = None
@@ -199,6 +590,15 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     # ========================================================================================
     # LOSS PREVENTION FILTERS WITH SETUP OVERRIDES
     # ========================================================================================
+    # Initialize with basic values
+    allow_setup_trades_final = setup_type is not None
+    setup_type_final = setup_type
+
+    # EXPLICIT TIGHT_RANGE DETECTION: Set loss_prevention_filters dynamically by regime
+    if regime == "RANGE" and subtype == "TIGHT_RANGE":
+        allow_setup_trades_final = True
+        setup_type_final = "mean_reversion"
+
     loss_prevention_filters = {
         "max_loss_per_trade_pct": 0.035,
         "require_strong_signal": False,
@@ -206,8 +606,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         "bear_market_restriction": False,
         "high_volatility_block": False,
         "preserve_high_conf_l2": True,
-        "allow_setup_trades": setup_type is not None,  # NEW: Allow trades on setups
-        "setup_type": setup_type  # NEW: Pass setup type to L2
+        "allow_setup_trades": allow_setup_trades_final,  # Use the computed value
+        "setup_type": setup_type_final  # Use the computed value
     }
 
     # Check volatility
@@ -241,7 +641,7 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         winning_trade_rules["profit_lock_in"] = 0.012
 
     # ========================================================================================
-    # FINAL DECISION STRUCTURE
+    # FINAL DECISION STRUCTURE WITH STRATEGIC HOLD TRACKING
     # ========================================================================================
     decision = {
         "timestamp": datetime.utcnow().isoformat(),
@@ -249,7 +649,10 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         "regime_subtype": subtype,
         "setup_detected": setup_type is not None,
         "setup_type": setup_type,
+        "setup_active": setup_active,  # L2 bridge: explicit setup_active flag
+        "bias": regime_signal,  # L2 bridge: directional bias from regime
         "allow_l2_signals": allow_l2_signal or (setup_type is not None),
+        "strategic_hold_active": l3_dominance_state.get("strategic_hold_active", False),
         "sentiment_score": sentiment,
         "asset_allocation": portfolio,
         "risk_appetite": risk_appetite,
@@ -257,6 +660,7 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         "exposure_decisions": exposure_decisions,
         "loss_prevention_filters": loss_prevention_filters,
         "winning_trade_rules": winning_trade_rules,
+        "strategic_control": l3_dominance_state,
         "strategic_guidelines": {
             "rebalance_frequency": "daily" if regime == "volatile" else "weekly",
             "max_single_asset_exposure": max_single_exposure,
@@ -267,16 +671,70 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
             "max_loss_per_trade_pct": loss_prevention_filters["max_loss_per_trade_pct"],
             "require_stop_loss": True,
             "profit_taking_strategy": "scaled" if winning_trade_rules["scale_out_profits"] else "single_target",
-            "setup_trading_enabled": setup_type is not None
+            "setup_trading_enabled": True
         }
     }
     
-    # Log key decision points
-    if setup_type:
+    # ========================================================================================
+    # STRATEGIC HOLD LOGGING: Differentiate HOLD_L2 vs HOLD_L3
+    # ========================================================================================
+    if strategic_hold_type:
+        logger.info(f"🛡️ STRATEGIC HOLD ACTIVE: {strategic_hold_type} - {strategic_hold_reason}")
+        logger.info(f"📊 L3 DOMINANCE: allow_l2_signals={allow_l2_signal}, regime={regime}, confidence={regime_confidence:.2f}")
+        if regime == 'RANGE':
+            logger.info(f"🎯 CAPITAL PRESERVATION: RANGE regime - L3 blocking weak signals, HOLD is strategic imperative")
+    elif regime == 'RANGE' and not setup_type:
+        logger.info(f"🛡️ RANGE REGIME HOLD: HOLD_L3_RANGE_DEFAULT - Blocking L2 signals in sideways market")
+    elif setup_type:
         logger.info(f"✅ SETUP STRATEGY ACTIVE: {setup_type} setup allows controlled L2 signals")
         logger.info(f"📊 Setup allocation: BTC {portfolio.get('BTCUSDT', 0):.1%}, ETH {portfolio.get('ETHUSDT', 0):.1%}, USDT {portfolio.get('USDT', 0):.1%}")
-    
+
     return decision
+
+
+def generate_strategic_signal(regime: str, confidence: float, sentiment: float, price_change: float) -> str:
+    """
+    Generate strategic signal with HOLD as dominant decision.
+
+    FUNDAMENTAL RULE: HOLD is the default unless overwhelming statistical evidence.
+    No more over-trading - only signal when confidence is extremely high (>= 0.80).
+    """
+
+    # ========================================================================================
+    # FUNDAMENTAL RULE: HOLD IS DOMINANT - ONLY SIGNAL WITH EXTREME CONFIDENCE
+    # ========================================================================================
+
+    # TRENDING regime: Require confidence >= 0.80 (not 0.55) to avoid over-trading
+    if regime == 'TRENDING' and confidence >= 0.80:
+        # Even with high confidence, validate trend direction
+        if price_change > 0.3:  # Clear uptrend
+            if sentiment > 0.6:  # Sentiment confirmation
+                logger.info(f"✅ TRENDING BUY: conf={confidence:.3f}, price_change={price_change:.3f}, sentiment={sentiment:.3f}")
+                return 'buy'
+            else:
+                logger.info(f"⏸️ TRENDING HOLD: uptrend detected but sentiment weak ({sentiment:.3f} < 0.6)")
+                return 'hold'
+        elif price_change < -0.3:  # Clear downtrend
+            logger.info(f"✅ TRENDING SELL: conf={confidence:.3f}, price_change={price_change:.3f}")
+            return 'sell'
+        else:
+            logger.info(f"⏸️ TRENDING HOLD: trend unclear (price_change={price_change:.3f})")
+            return 'hold'
+
+    # RANGE regime: HOLD dominant - only allow setups, never force directional signals
+    elif regime == 'RANGE':
+        logger.info(f"🛡️ RANGE HOLD: HOLD dominant in ranging markets (conf={confidence:.3f})")
+        return 'hold'  # Never generate directional signals in range
+
+    # VOLATILE regime: Always HOLD to avoid whipsaws
+    elif regime == 'VOLATILE':
+        logger.info(f"🛡️ VOLATILE HOLD: Avoiding trading in high volatility (conf={confidence:.3f})")
+        return 'hold'
+
+    # Default: HOLD - no clear statistical advantage
+    else:
+        logger.info(f"⏸️ DEFAULT HOLD: No clear statistical advantage (regime={regime}, conf={confidence:.3f})")
+        return 'hold'
 
 
 def get_regime_info(market_data: dict):
@@ -305,6 +763,160 @@ def get_regime_info(market_data: dict):
         }
 
 
+def strategic_override_processor(l2_signal: str, l3_confidence: float, regime_info: dict = None, market_indicators: dict = None) -> dict:
+    """
+    PARTE 5 — L3 (decision_maker.py)
+    🎯 PRINCIPIO ESTRATÉGICO FINAL - HOLD INVARIANT
+
+    🛡️ L3 HOLD INVARIANT (NO NEGOCIABLE):
+    L3 NEVER overrides when L2 signal is HOLD.
+
+    ✅ ÚNICA CONDICIÓN VÁLIDA PARA OVERRIDE (when L2 is not HOLD):
+    if (
+        l3_confidence >= 0.80
+        and regime_strength == "STRONG"
+        and not risk_filters_blocking
+    ):
+        allow_override()
+    else:
+        respect_l2_signal()
+
+    🧠 FRASE GUÍA (PARA LA IA)
+    L3 no está para actuar más,
+    está para impedir malas acciones.
+
+    Args:
+        l2_signal: Signal from L2 ("BUY", "SELL", "HOLD")
+        l3_confidence: L3 confidence score (0.0 to 1.0)
+        regime_info: Optional regime information dict
+        market_indicators: Optional market indicators dict
+
+    Returns:
+        dict: Decision result with final_signal, confidence, override flag, reason, source
+    """
+
+    # ========================================================================================
+    # CRITICAL: NORMALIZE CONFIDENCE TO PREVENT VALUES > 1.0
+    # ========================================================================================
+    l3_confidence = float(np.clip(l3_confidence, 0.0, 1.0))
+
+    # ========================================================================================
+    # 🔴 HOLD INVARIANT - L3 NEVER OVERRIDES WHEN L2 IS HOLD (NO NEGOCIABLE)
+    # ========================================================================================
+    if l2_signal.upper() == "HOLD":
+        # L3 NEVER overrides when L2 is HOLD - this is the fundamental invariant
+        result = {
+            "final_signal": "HOLD",
+            "confidence": l3_confidence,
+            "override": False,
+            "reason": "L3 HOLD invariant: never override when L2=HOLD",
+            "allow_l2": True,
+            "source": "L3_STRATEGIC"
+        }
+
+        # ========================================================================================
+        # 🛡️ DEFENSIVE ASSERT - L3 HOLD INVARIANT (NO NEGOCIABLE)
+        # ========================================================================================
+        override_applied = result.get("override", False)
+        assert not (
+            l2_signal.upper() == "HOLD" and override_applied
+        ), "L3 violated HOLD invariant"
+
+        return result
+
+    # ========================================================================================
+    # ✅ OVERRIDE ONLY WHEN L2 IS NOT HOLD - Check exceptional conditions
+    # ========================================================================================
+    l3_high_confidence = l3_confidence >= 0.80
+
+    # Determine regime strength
+    regime = regime_info.get('regime', 'UNKNOWN') if regime_info else 'UNKNOWN'
+    regime_strength_strong = regime.upper() in ['BULL', 'BEAR']  # Only clear directional regimes are "STRONG"
+
+    # Check risk filters
+    risk_filters_blocking = False
+    if market_indicators:
+        # Check for momentum exhaustion signals
+        rsi = market_indicators.get('rsi', 50)
+        macd_divergence = market_indicators.get('macd_divergence', False)
+        volume_spike = market_indicators.get('volume_spike', False)
+
+        # RSI extreme + divergence + volume spike = momentum exhausted
+        if rsi > 75 or rsi < 25:
+            if macd_divergence and volume_spike:
+                risk_filters_blocking = True
+
+        # RSI extreme without pullback = unfavorable risk
+        has_pullback = market_indicators.get('has_pullback', False)
+        if (rsi > 75 or rsi < 25) and not has_pullback:
+            risk_filters_blocking = True
+
+    # ========================================================================================
+    # ✅ EXCEPCIONAL OVERRIDE CONDITION - ALL MUST BE TRUE (when L2 is not HOLD)
+    # ========================================================================================
+    if l3_high_confidence and regime_strength_strong and not risk_filters_blocking:
+        # ALL exceptional conditions met - allow override
+        result = {
+            "final_signal": l2_signal.upper(),  # Keep L2 signal (since L2 is not HOLD)
+            "confidence": l3_confidence,
+            "override": True,
+            "reason": f"Exceptional override: L2={l2_signal.upper()}, L3={l3_confidence:.2f}, regime={regime.upper()}, no_risk_filters",
+            "allow_l2": False,  # L3 taking control
+            "source": "L3_STRATEGIC"
+        }
+
+        # ========================================================================================
+        # 🛡️ DEFENSIVE ASSERT - L3 HOLD INVARIANT (NO NEGOCIABLE)
+        # ========================================================================================
+        override_applied = result.get("override", False)
+        assert not (
+            l2_signal.upper() == "HOLD" and override_applied
+        ), "L3 violated HOLD invariant"
+
+        return result
+
+    # ========================================================================================
+    # 🔴 RESPECT L2 SIGNAL - Exceptional conditions not met
+    # ========================================================================================
+    else:
+        reason_parts = []
+        if not l3_high_confidence:
+            reason_parts.append(f"L3 confidence {l3_confidence:.2f} < 0.80")
+        if not regime_strength_strong:
+            reason_parts.append(f"Regime {regime.upper()} not STRONG")
+        if risk_filters_blocking:
+            reason_parts.append("Risk filters blocking")
+
+        reason = "respect_l2: " + ", ".join(reason_parts) if reason_parts else "respect_l2: conditions not exceptional"
+
+        result = {
+            "final_signal": l2_signal.upper(),
+            "confidence": l3_confidence,
+            "override": False,
+            "reason": reason,
+            "allow_l2": True,
+            "source": "L3_STRATEGIC"
+        }
+
+        # ========================================================================================
+        # 🛡️ DEFENSIVE ASSERT - L3 HOLD INVARIANT (NO NEGOCIABLE)
+        # ========================================================================================
+        override_applied = result.get("override", False)
+        assert not (
+            l2_signal.upper() == "HOLD" and override_applied
+        ), "L3 violated HOLD invariant"
+
+        return result
+
+    # ========================================================================================
+    # 🛡️ DEFENSIVE ASSERT - L3 HOLD INVARIANT (NO NEGOCIABLE) - CHECK ALL RETURNS
+    # ========================================================================================
+    # This assert should trigger if we ever override when L2 is HOLD
+    # According to the user's requirement, this should NEVER happen
+    # But our current logic allows it under exceptional conditions
+    # The assert will help catch any violations of this invariant
+
+
 def save_decision(data: dict, output_path: str):
     """Guarda la decisión estratégica en JSON"""
     with open(output_path, "w") as f:
@@ -317,7 +929,7 @@ if __name__ == "__main__":
     ensure_dir(INFER_DIR)
 
     inputs = load_inputs()
-    decision = make_decision(inputs)
+    decision = make_decision(inputs, balances_synced=True)  # Assume synced for standalone execution
     save_decision(decision, OUTPUT_FILE)
 
     print("📊 Resumen Decision Maker:")

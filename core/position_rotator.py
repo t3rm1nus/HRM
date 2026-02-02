@@ -190,3 +190,276 @@ class PositionRotator:
         """
         # TODO: Implement actual position rotation logic
         return []
+
+
+class AutoRebalancer:
+    """
+    Sistema automático de rebalanceo de portfolio.
+
+    Monitorea el portfolio y ejecuta rebalanceos automáticos para:
+    - Mantener las asignaciones objetivo de L3
+    - Rebalancear cuando las desviaciones superan umbrales
+    - Liberar capital en condiciones de riesgo excesivo
+    """
+
+    def __init__(self, portfolio_manager):
+        self.portfolio_manager = portfolio_manager
+        self.logger = logger
+
+    async def check_and_execute_rebalance(self, market_data: Dict[str, Any], l3_active: bool = False,
+                                        l3_asset_allocation: Dict[str, float] = None,
+                                        l3_decision: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Check if portfolio rebalancing is needed and generate rebalance orders.
+
+        SOLUCIÓN CRÍTICA: AutoRebalancer filtro obligatorio
+        - Sistema global de estados (NORMAL, DEGRADED, BLIND, PANIC)
+        - Distingue fallback vs decisión estratégica real
+        - Distingue balance stale vs balance synced
+
+        Args:
+            market_data: Current market data for all symbols
+            l3_active: Whether L3 strategy is active
+            l3_asset_allocation: Asset allocation from L3 strategy
+            l3_decision: Full L3 decision object with strategic_control metadata
+
+        Returns:
+            List of orders to execute for rebalancing, or empty list if no rebalancing needed
+        """
+        try:
+            # ========================================================================================
+            # FIX 4 - AutoRebalancer permitido en simulated mode
+            # ========================================================================================
+            # Check if we're in simulated mode and allow rebalancing regardless of other restrictions
+            from core.config import get_config
+            try:
+                config = get_config("live")
+                system_mode = getattr(config, 'mode', 'unknown')
+            except Exception:
+                system_mode = 'unknown'
+
+            if system_mode == "simulated":
+                logger.info("🛡️ FIX 4: Modo simulated detectado - AutoRebalancer habilitado en paper trading")
+                # En modo simulated, permitir rebalancing incluso con baja confianza
+                allow_rebalance = True
+            else:
+                allow_rebalance = False
+
+            # ========================================================================================
+            # CRÍTICO: SISTEMA GLOBAL DE ESTADOS - PRIORITY 1
+            # ========================================================================================
+            from core.state_manager import get_system_state, can_system_rebalance
+
+            current_system_state = get_system_state()
+            if not can_system_rebalance() and not allow_rebalance:
+                logger.warning(f"🚫 SYSTEM STATE {current_system_state}: AutoRebalancer DISABLED - rebalancing not allowed in {current_system_state} state")
+                return []
+
+            # ========================================================================================
+            # RULE 3: GLOBAL COOLDOWN POST-TRADE - AutoRebalancer skips if trade happened recently
+            # ========================================================================================
+            # Check if any trade happened in the last 30 seconds (prevents thrashing)
+            current_time = time.time()
+            last_trade_time = getattr(self.portfolio_manager, 'last_trade_timestamp', 0) if hasattr(self.portfolio_manager, 'last_trade_timestamp') else 0
+
+            if last_trade_time > 0:
+                time_since_last_trade = current_time - last_trade_time
+                cooldown_seconds = 30  # 30 second cooldown after any trade
+
+                if time_since_last_trade < cooldown_seconds:
+                    logger.info(f"⏰ RULE 3 COOLDOWN: Skipping AutoRebalancer - {time_since_last_trade:.1f}s since last trade (wait {cooldown_seconds - time_since_last_trade:.1f}s)")
+                    return []
+
+                logger.debug(f"✅ RULE 3 COOLDOWN: {time_since_last_trade:.1f}s since last trade - AutoRebalancer allowed")
+
+            # ========================================================================================
+            # SOLUCIÓN CRÍTICA: AutoRebalancer filtro obligatorio
+            # ========================================================================================
+            # FILTER 1: Check L3 decision origin - if fallback, NO rebalancing
+            if l3_decision:
+                strategic_control = l3_decision.get('strategic_control', {})
+                l3_mode = strategic_control.get('l3_mode')
+                decision_origin = strategic_control.get('decision_origin', 'strategic')
+
+                # CRÍTICO: If L3 is in BLIND mode or fallback, NO rebalancing
+                if l3_mode == 'BLIND' or decision_origin == 'fallback':
+                    logger.warning(f"🚫 L3 {l3_mode} MODE: AutoRebalancer DISABLED - L3 in blind/fallback mode (decision_origin: {decision_origin})")
+                    return []
+
+                # FILTER 2: Check if L3 explicitly blocks AutoRebalancer
+                if strategic_control.get('block_autorebalancer', False):
+                    logger.warning("🚫 L3 BLOCKS AUTOREBALANCER: L3 strategic_control.block_autorebalancer = True")
+                    return []
+
+                # FILTER 3: Check freeze_positions flag
+                if strategic_control.get('freeze_positions', False):
+                    logger.warning("🚫 POSITIONS FROZEN: L3 strategic_control.freeze_positions = True")
+                    return []
+
+            # FILTER 4: Check L3 active status (legacy compatibility)
+            if l3_active:
+                logger.info("🚫 L3 ACTIVE: AutoRebalancer disabled - L3 has absolute control over allocations")
+                return []
+
+            # Get current portfolio allocations
+            total_value = self.portfolio_manager.get_total_value(market_data)
+
+            if total_value <= 0:
+                logger.warning("⚠️ Cannot rebalance: Invalid total portfolio value")
+                return []
+
+            # Get current balances and calculate percentages
+            btc_balance = self.portfolio_manager.get_balance("BTCUSDT")
+            eth_balance = self.portfolio_manager.get_balance("ETHUSDT")
+            usdt_balance = self.portfolio_manager.get_balance("USDT")
+
+            # Get current prices
+            btc_price = _extract_current_price("BTCUSDT", market_data)
+            eth_price = _extract_current_price("ETHUSDT", market_data)
+
+            if not btc_price or not eth_price:
+                logger.warning("⚠️ Cannot rebalance: Missing price data")
+                return []
+
+            # Calculate current allocations as percentages
+            btc_value = btc_balance * btc_price
+            eth_value = eth_balance * eth_price
+            usdt_value = usdt_balance
+
+            current_btc_pct = btc_value / total_value
+            current_eth_pct = eth_value / total_value
+            current_usdt_pct = usdt_value / total_value
+
+            # ========================================================================================
+            # CRÍTICO FIX 3: Use L3 asset allocation if provided, otherwise use defaults
+            # ========================================================================================
+            if l3_asset_allocation:
+                target_btc_pct = l3_asset_allocation.get('BTCUSDT', 0.40)
+                target_eth_pct = l3_asset_allocation.get('ETHUSDT', 0.30)
+                target_usdt_pct = l3_asset_allocation.get('USDT', 0.30)
+                logger.info("🎯 Using L3 asset allocation targets")
+            else:
+                # Default target allocations
+                target_btc_pct = 0.40  # 40% BTC
+                target_eth_pct = 0.30  # 30% ETH
+                target_usdt_pct = 0.30  # 30% USDT
+
+            # Check for rebalancing needs (deviation > 5%)
+            btc_deviation = abs(current_btc_pct - target_btc_pct)
+            eth_deviation = abs(current_eth_pct - target_eth_pct)
+            usdt_deviation = abs(current_usdt_pct - target_usdt_pct)
+
+            max_deviation = max(btc_deviation, eth_deviation, usdt_deviation)
+
+            if max_deviation < 0.05:  # Less than 5% deviation
+                logger.debug("🔄 Rebalance not needed: All allocations within tolerance")
+                return []
+
+            logger.info("🔄 PORTFOLIO IMBALANCED - Starting rebalance:")
+            logger.info(f"📊 Current: BTC={current_btc_pct*100:.1f}%, ETH={current_eth_pct*100:.1f}%, USDT={current_usdt_pct*100:.1f}%")
+            logger.info(f"🎯 Target: BTC={target_btc_pct*100:.1f}%, ETH={target_eth_pct*100:.1f}%, USDT={target_usdt_pct*100:.1f}%")
+            # Generate rebalancing orders
+            orders = []
+
+            # Calculate target values for each asset
+            target_btc_value = total_value * target_btc_pct
+            target_eth_value = total_value * target_eth_pct
+            target_usdt_value = total_value * target_usdt_pct
+
+            # ========================================================================================
+            # SOLUTION 2: Rebalance Grace Period - Skip if position too new
+            # ========================================================================================
+            # BTC adjustments
+            if btc_deviation >= 0.05:
+                btc_adjustment = target_btc_value - btc_value
+                if abs(btc_adjustment) >= 10.0:  # Minimum trade size
+                    # SOLUTION 2: Check position age before rebalancing
+                    if btc_adjustment > 0:  # Need to buy BTC
+                        if target_btc_pct > 0:  # Target is not 0%
+                            # SOLUTION 2: For BUY orders, check if position can be rebalanced
+                            if self.portfolio_manager.can_rebalance_position("BTCUSDT"):
+                                quantity = btc_adjustment / btc_price
+                                order = {
+                                    "symbol": "BTCUSDT",
+                                    "side": "buy",
+                                    "type": "MARKET",
+                                    "quantity": quantity,
+                                    "price": btc_price,
+                                    "reason": "auto_rebalance",
+                                    "status": "pending",
+                                    "allocation_target": target_btc_pct
+                                }
+                                orders.append(order)
+                                logger.info(f"📈 REBALANCE ORDER: BUY {quantity:.4f} BTC (${btc_adjustment:.2f})")
+                            else:
+                                logger.info(f"⏰ SOLUTION 2: BTC BUY REBALANCE SKIPPED - Position too new")
+                        else:
+                            logger.debug(f"🔄 BTC target is 0%, skipping buy")
+                    elif btc_adjustment < 0:  # Need to sell BTC
+                        # SOLUTION 2: For SELL orders, always allow (no age restriction)
+                        quantity = abs(btc_adjustment) / btc_price
+                        order = {
+                            "symbol": "BTCUSDT",
+                            "side": "sell",
+                            "type": "MARKET",
+                            "quantity": quantity,
+                            "price": btc_price,
+                            "reason": "auto_rebalance",
+                            "status": "pending",
+                            "allocation_target": target_btc_pct
+                        }
+                        orders.append(order)
+                        logger.info(f"📉 REBALANCE ORDER: SELL {quantity:.4f} BTC (${abs(btc_adjustment):.2f})")
+
+            # ETH adjustments
+            if eth_deviation >= 0.05:
+                eth_adjustment = target_eth_value - eth_value
+                if abs(eth_adjustment) >= 10.0:  # Minimum trade size
+                    # SOLUTION 2: Check position age before rebalancing
+                    if eth_adjustment > 0:  # Need to buy ETH
+                        if target_eth_pct > 0:  # Target is not 0%
+                            # SOLUTION 2: For BUY orders, check if position can be rebalanced
+                            if self.portfolio_manager.can_rebalance_position("ETHUSDT"):
+                                quantity = eth_adjustment / eth_price
+                                order = {
+                                    "symbol": "ETHUSDT",
+                                    "side": "buy",
+                                    "type": "MARKET",
+                                    "quantity": quantity,
+                                    "price": eth_price,
+                                    "reason": "auto_rebalance",
+                                    "status": "pending",
+                                    "allocation_target": target_eth_pct
+                                }
+                                orders.append(order)
+                                logger.info(f"📈 REBALANCE ORDER: BUY {quantity:.2f} ETH (${eth_adjustment:.2f})")
+                            else:
+                                logger.info(f"⏰ SOLUTION 2: ETH BUY REBALANCE SKIPPED - Position too new")
+                        else:
+                            logger.debug(f"🔄 ETH target is 0%, skipping buy")
+                    elif eth_adjustment < 0:  # Need to sell ETH
+                        # SOLUTION 2: For SELL orders, always allow (no age restriction)
+                        quantity = abs(eth_adjustment) / eth_price
+                        order = {
+                            "symbol": "ETHUSDT",
+                            "side": "sell",
+                            "type": "MARKET",
+                            "quantity": quantity,
+                            "price": eth_price,
+                            "reason": "auto_rebalance",
+                            "status": "pending",
+                            "allocation_target": target_eth_pct
+                        }
+                        orders.append(order)
+                        logger.info(f"📉 REBALANCE ORDER: SELL {quantity:.2f} ETH (${abs(eth_adjustment):.2f})")
+
+            if orders:
+                logger.info(f"✅ AutoRebalance: Generated {len(orders)} orders to restore balance")
+            else:
+                logger.debug("🔄 AutoRebalance: No orders needed after threshold check")
+
+            return orders
+
+        except Exception as e:
+            logger.error(f"❌ Error in auto rebalancing: {e}")
+            return []

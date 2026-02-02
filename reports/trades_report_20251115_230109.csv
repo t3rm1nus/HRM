@@ -1,0 +1,4 @@
+timestamp,symbol,side,quantity,price,filled_price,commission,pnl,status,order_id,cycle_id,strategy,reason
+2025-11-15 23:00:40.285993,BTCUSDT,buy,0.001,50000.0,50000.0,0.05,0.0,filled,test_1,100,test_strategy,
+2025-11-15 23:00:40.286991,ETHUSDT,buy,0.01,3000.0,3000.0,0.03,0.0,filled,test_2,101,test_strategy,
+2025-11-15 23:00:40.287988,BTCUSDT,sell,0.001,51000.0,51000.0,0.051,0.0,filled,test_3,102,test_strategy,

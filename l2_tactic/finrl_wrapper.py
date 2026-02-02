@@ -104,8 +104,12 @@ class FinRLProcessorWrapper:
             logger.error(f"❌ Error preparando observación para {self.model_name}: {e}")
             return None
 
-    async def generate_signal(self, market_data: dict, symbol: str, indicators: dict = None):
+    async def generate_signal(self, market_data: dict, symbol: str, indicators: dict = None, l3_context: dict = None):
         """
+        PRIORITY 2: Make DeepSeek truly aggressive
+        - Accept l3_context parameter for aggressive behavior in setups
+        - Apply BUY logit scaling and HOLD penalization
+
         Genera señal usando generate_signal como método principal
         """
         try:
@@ -136,6 +140,10 @@ class FinRLProcessorWrapper:
                             combined_data[key] = safe_float(value) if value is not None else 0.0
 
                 signal = self.processor.generate_signal(symbol, market_data=combined_data)
+
+                # PRIORITY 2: Apply aggressive post-processing for DeepSeek in setup conditions
+                if signal and self.model_name.lower() == "deepseek" and l3_context:
+                    signal = self._apply_aggressive_postprocessing(signal, symbol, l3_context)
 
                 # Debug logging para Grok
                 if self.model_name == "grok":
@@ -219,3 +227,90 @@ class FinRLProcessorWrapper:
                 timestamp=pd.Timestamp.utcnow(),
                 features={'error': str(e)}
             )
+
+    def _apply_aggressive_postprocessing(self, signal, symbol: str, l3_context: dict):
+        """
+        PRIORITY 2: Apply aggressive post-processing to DeepSeek signals in setup conditions
+
+        - Scale BUY logits (boost confidence for BUY signals)
+        - Penalize HOLD in setup conditions
+        - Reduce punishment for short drawdown
+        """
+        try:
+            if not signal or not l3_context:
+                return signal
+
+            # Extract signal properties
+            side = getattr(signal, 'side', 'hold')
+            confidence = getattr(signal, 'confidence', 0.5)
+            strength = getattr(signal, 'strength', 0.5)
+
+            # Check if we're in setup condition
+            setup_type = l3_context.get('setup_type')
+            allow_setup_trades = l3_context.get('allow_setup_trades', False) or l3_context.get('setup_active', False)
+            l3_signal = l3_context.get('signal', 'hold')
+            l3_regime = l3_context.get('regime', 'unknown')
+
+            is_setup_condition = (
+                allow_setup_trades or
+                setup_type in ['oversold', 'overbought'] or
+                (l3_signal == 'buy' and l3_regime in ['TRENDING', 'BREAKOUT']) or
+                l3_regime == 'RANGE'  # Be more aggressive in range for mean reversion
+            )
+
+            if not is_setup_condition:
+                # No aggressive processing needed
+                return signal
+
+            logger.info(f"🚀 DEEPSEEK AGGRESSIVE MODE: Processing {symbol} {side} in setup condition")
+
+            # AGGRESSIVE BUY SCALING: Boost confidence for BUY signals
+            if side == "buy":
+                original_confidence = confidence
+                confidence = min(0.95, confidence * 1.3)  # Scale up by 30%
+                strength = min(0.9, strength * 1.2)     # Scale up by 20%
+                logger.info(f"🚀 DEEPSEEK BUY SCALING: {symbol} confidence {original_confidence:.2f} → {confidence:.2f}")
+
+            # PENALIZE HOLD: Convert weak HOLD signals to BUY/SELL in setup conditions
+            elif side == "hold" and confidence < 0.7:
+                logger.warning(f"🚨 DEEPSEEK HOLD PENALTY: Converting weak HOLD to BUY in setup condition")
+
+                # Convert HOLD to BUY in setup conditions (bias towards action)
+                side = "buy"
+                confidence = 0.55  # Moderate confidence for forced decision
+                strength = 0.5
+
+                # Update signal metadata to reflect the change
+                if hasattr(signal, 'metadata'):
+                    signal.metadata = signal.metadata or {}
+                    signal.metadata.update({
+                        'original_side': 'hold',
+                        'converted_by_aggressive_mode': True,
+                        'setup_condition': True,
+                        'priority_2_activated': True
+                    })
+
+            # Update signal with aggressive adjustments
+            signal.side = side
+            signal.confidence = confidence
+            signal.strength = strength
+
+            # Add aggressive mode metadata
+            if hasattr(signal, 'features'):
+                signal.features = signal.features or {}
+                signal.features.update({
+                    'aggressive_mode_applied': True,
+                    'setup_condition': is_setup_condition,
+                    'l3_regime': l3_regime,
+                    'l3_signal': l3_signal
+                })
+
+            # Update signal type to reflect aggressive processing
+            signal.signal_type = 'finrl_aggressive_deepseek'
+
+            logger.info(f"✅ DEEPSEEK AGGRESSIVE RESULT: {symbol} {side.upper()} (conf={confidence:.2f}, strength={strength:.2f})")
+            return signal
+
+        except Exception as e:
+            logger.error(f"❌ Error in aggressive post-processing for {symbol}: {e}")
+            return signal

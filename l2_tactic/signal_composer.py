@@ -1107,3 +1107,32 @@ class SignalComposer:
         except Exception as e:
             logger.error(f"❌ Error calculating base position size for {symbol}: {e}")
             return 0.01  # Minimum fallback quantity
+
+    def compose_signals_with_rebalance_awareness(
+        self,
+        l2_signals: list,
+        l3_context: dict,
+        portfolio_state: dict
+    ) -> list:
+        """
+        Componer señales con awareness de necesidad de rebalanceo.
+        """
+        # Verificar si portfolio necesita liquidez urgente
+        usdt_pct = portfolio_state.get('usdt_percentage', 0)
+        target_usdt_pct = l3_context.get('asset_allocation', {}).get('USDT', 0.65)
+
+        if usdt_pct < 0.05 and target_usdt_pct > 0.50:
+            logger.warning(f"🚨 CRITICAL LIQUIDITY: {usdt_pct*100:.1f}% << {target_usdt_pct*100:.1f}%")
+            logger.warning("🔄 FORCING SELL SIGNALS for rebalance")
+
+            # Forzar señales SELL para recuperar liquidez
+            for signal in l2_signals:
+                if signal['symbol'] in ['BTCUSDT', 'ETHUSDT']:
+                    # Convertir a SELL si tiene posición
+                    if portfolio_state.get(f"{signal['symbol']}_position", 0) > 0:
+                        signal['action'] = 'sell'
+                        signal['confidence'] = 0.75  # Alta confianza para rebalanceo
+                        signal['reason'] = 'forced_rebalance_liquidity'
+                        logger.info(f"💰 FORCED SELL: {signal['symbol']} for liquidity recovery")
+
+        return l2_signals

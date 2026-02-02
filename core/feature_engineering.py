@@ -2,6 +2,7 @@
 import pandas as pd
 from core.logging import logger
 import json
+from typing import Dict, Optional, List, Any
 
 
 def integrate_features_with_l2(technical_indicators: dict, l3_context: dict) -> dict:

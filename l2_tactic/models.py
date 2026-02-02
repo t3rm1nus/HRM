@@ -33,6 +33,7 @@ class TacticalSignal:
                  features: dict = None,
                  timestamp = None,
                  metadata: dict = None,
+                 intent: str = None,  # ENTRY/EXIT intent to prevent semantic violations
                  **kwargs):
         self.symbol = symbol
         self.strength = strength
@@ -52,6 +53,13 @@ class TacticalSignal:
             self.features = {}
         self.timestamp = pd.Timestamp.now() if timestamp is None else pd.to_datetime(timestamp)
         self.metadata = metadata or {}
+
+        # Set intent based on side if not provided
+        if intent is None:
+            self.intent = 'ENTRY' if side.lower() == 'buy' else 'EXIT'
+        else:
+            self.intent = intent.upper()  # Normalize to uppercase
+
         for key, value in kwargs.items():
             # Don't overwrite features if it's being set via kwargs
             if key != 'features':

@@ -541,115 +541,22 @@ def predict_regime(features: pd.DataFrame, model):
         return "neutral"  # Valor por defecto seguro
 
 def predict_sentiment(texts: list, tokenizer, model):
-    # 🔄 CRITICAL FIX: Check cache FIRST before any processing
+    # 🚨 CRITICAL FIX: predict_sentiment in L3 processor should ONLY use cache
+    # This function should NEVER perform fresh sentiment analysis
+    # Fresh analysis should only happen in main.py's controlled update_sentiment_texts()
+
     try:
         from .sentiment_inference import get_cached_sentiment_score
-        cached_sentiment = get_cached_sentiment_score(max_age_hours=1.0)  # More aggressive caching
+        cached_sentiment = get_cached_sentiment_score(max_age_hours=6.0)  # Consistent 6-hour caching
         if cached_sentiment is not None:
             log.info(f"🎉 SENTIMENT CACHE HIT! Usando sentimiento precalculado: {cached_sentiment:.4f} - EVITANDO REPROCESAMIENTO")
             return cached_sentiment
+        else:
+            log.info("📅 Sentiment cache expired but refresh blocked by cooldown (expected behavior) - using neutral default (0.0)")
+            return 0.0  # Neutral default when no cache available
     except Exception as cache_error:
-        log.debug(f"Cache check failed, proceeding with normal analysis: {cache_error}")
-
-    # Check if transformers is available and models are loaded
-    if not TRANSFORMERS_AVAILABLE or tokenizer is None or model is None:
-        log.warning("Transformers not available or sentiment models not loaded, returning neutral sentiment")
-        return 0.0
-
-    try:
-        import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Validate and prepare texts
-        if not texts or len(texts) == 0:
-            log.info("No texts provided for sentiment analysis, using neutral default")
-            return 0.0
-
-        # Filter out empty or invalid texts
-        valid_texts = [str(t).strip() for t in texts if t and str(t).strip()]
-        if not valid_texts:
-            log.info("No valid texts after filtering, using neutral default")
-            return 0.0
-
-        log.info(f"Analizando sentimiento de {len(valid_texts)} textos en {device}")
-
-        # Move model to device
-        model = model.to(device)
-
-        # Process in batches to avoid memory issues
-        batch_size = 16  # Even smaller batch size for maximum memory safety
-        all_scores = []
-
-        for i in range(0, len(valid_texts), batch_size):
-            batch_texts = valid_texts[i:i + batch_size]
-            log.debug(f"Procesando batch {i//batch_size + 1}/{(len(valid_texts) + batch_size - 1)//batch_size} ({len(batch_texts)} textos)")
-
-            try:
-                # Tokenize batch
-                inputs = tokenizer(batch_texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-
-                # Perform inference
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    probs = torch.softmax(outputs.logits, dim=-1)
-                    num_classes = probs.shape[-1]
-
-                    # Calculate sentiment score based on number of classes
-                    if num_classes == 2:
-                        # Binary classification: positive - negative
-                        score = probs[:, 1] - probs[:, 0]
-                    elif num_classes >= 3:
-                        # Multi-class: positive - negative (assuming class 2 is positive, 0 is negative)
-                        score = probs[:, 2] - probs[:, 0]
-                    else:
-                        # Fallback
-                        score = probs[:, -1]
-
-                    all_scores.extend(score.cpu().numpy())
-
-                # Clear cache after each batch to free memory
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-            except Exception as batch_error:
-                log.warning(f"Error procesando batch {i//batch_size + 1}: {batch_error}")
-                # Add neutral scores for failed batch
-                all_scores.extend([0.0] * len(batch_texts))
-
-        # Calculate final sentiment score
-        if all_scores:
-            sentiment_score = float(np.mean(all_scores))
-        else:
-            sentiment_score = 0.0
-
-        # Log detailed results
-        log.info(f"✅ Sentimiento calculado: {sentiment_score:.4f} (device: {device}, textos: {len(valid_texts)})")
-
-        # Log interpretativo con color naranja oscuro sobre el estado del mercado
-        if sentiment_score > 0.6:
-            market_sentiment = "🟠 MUY POSITIVO - Mercado alcista fuerte, alta confianza compradora"
-        elif sentiment_score > 0.3:
-            market_sentiment = "🟠 POSITIVO - Mercado favorable, tendencia alcista moderada"
-        elif sentiment_score > -0.3:
-            market_sentiment = "🟠 NEUTRAL - Mercado lateral, sin dirección clara"
-        elif sentiment_score > -0.6:
-            market_sentiment = "🟠 NEGATIVO - Mercado bajista moderado, cautela recomendada"
-        else:
-            market_sentiment = "🟠 MUY NEGATIVO - Mercado fuertemente bajista, alto riesgo"
-
-        log.info(f"🟠 ANÁLISIS DE SENTIMIENTO: {market_sentiment} (score: {sentiment_score:.4f})")
-
-        # Log average probabilities
-        if all_scores:
-            avg_score = np.mean(all_scores)
-            log.debug(f"Puntuación promedio por texto: {avg_score:.4f}")
-
-        return sentiment_score
-
-    except Exception as e:
-        log.error(f"❌ Error en análisis de sentimiento: {e}", exc_info=True)
-        return 0.0
+        log.error(f"❌ Error checking sentiment cache: {cache_error} - using neutral default (0.0)")
+        return 0.0  # Neutral default on error
 
 def predict_vol_garch(model, returns: np.ndarray):
         """Predice volatilidad usando modelo GARCH."""

@@ -1,0 +1,13 @@
+{
+  "analysis_period": {
+    "start": "2025-11-14T22:52:34.901534",
+    "end": "2025-11-15T22:52:35.382532",
+    "days": 1
+  },
+  "totals": {
+    "signals": 0,
+    "trades": 0,
+    "errors": 0
+  },
+  "execution_rate": 0
+}

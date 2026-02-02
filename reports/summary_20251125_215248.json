@@ -1,0 +1,13 @@
+{
+  "analysis_period": {
+    "start": "2025-11-18T21:52:44.236188",
+    "end": "2025-11-25T21:52:49.398541",
+    "days": 7
+  },
+  "totals": {
+    "signals": 41496,
+    "trades": 41496,
+    "errors": 1
+  },
+  "execution_rate": 100.0
+}
