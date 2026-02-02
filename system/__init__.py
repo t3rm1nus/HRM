@@ -1,0 +1,1 @@
+"""Módulo system - Contiene componentes del sistema de trading."""

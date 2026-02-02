@@ -210,7 +210,7 @@ async def main():
         # Order Manager
         if 'order_manager' not in components or components.get('order_manager') is None:
             from l1_operational.order_manager import OrderManager
-            order_manager = OrderManager()
+            order_manager = OrderManager(state_coordinator, portfolio_manager, config)
             components['order_manager'] = order_manager
             logger.info("✅ OrderManager created manually")
         else:

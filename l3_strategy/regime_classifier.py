@@ -375,7 +375,7 @@ class MarketRegimeClassifier:
 
             if (breakout_up or breakout_down) and volume_spike > self.thresholds['breakout']['volume_spike'] and recent_range < 0.04:
                 subtype = "BULL_BREAKOUT" if breakout_up else "BEAR_BREAKOUT"
-                momentum_conf = abs(momentum_5) / current_price * 100 if current_price != 0 else 0
+                momentum_conf = abs(momentum_5) / current_price if current_price != 0 else 0
                 score = min(1.0, (volume_spike / 2.0) * 0.7 + (momentum_conf / 3.0) * 0.3)
             else:
                 subtype = None

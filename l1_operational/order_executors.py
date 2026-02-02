@@ -95,12 +95,22 @@ class OrderExecutors:
             if self.paper_mode:
                 try:
                     # Execute order through simulated client
-                    trade_result = self.simulated_client.execute_order(
-                        symbol=symbol,
-                        side=action.upper(),
-                        qty=quantity,
-                        market_price=current_price
-                    )
+                    try:
+                        trade_result = self.simulated_client.execute_order(
+                            symbol=symbol,
+                            side=action.upper(),
+                            qty=quantity,
+                            market_price=current_price
+                        )
+                    except Exception as client_error:
+                        logger.error(f"❌ Simulated client error: {client_error}")
+                        return {
+                            'status': 'failed',
+                            'symbol': symbol,
+                            'action': action,
+                            'reason': f"Simulated client error: {str(client_error)}",
+                            'timestamp': datetime.now().isoformat()
+                        }
                     
                     # Get updated balances
                     current_balances = self.simulated_client.get_balances()
