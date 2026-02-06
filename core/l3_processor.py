@@ -45,6 +45,13 @@ def get_l3_decision(market_data: Dict) -> Dict:
             'subtype': regimen_resultado.get('subtype', 'unknown')
         }
 
+        # TEMPORARY AGGRESSIVE MODE - Override L3 decision to allow L2 signals
+        from core.config import TEMPORARY_AGGRESSIVE_MODE
+        if TEMPORARY_AGGRESSIVE_MODE:
+            logger.warning("🔥 L3 override: allowing L2 tactical signals (TEMPORARY AGGRESSIVE MODE)")
+            l3_output['allow_l2_signals'] = True
+            l3_output['strategic_hold'] = False
+
         # Si hay decisión estratégica disponible, añadirla
         if regimen_resultado and 'regime' in regimen_resultado:
             # FIX 3 - L3 debe aceptar el portfolio local como verdad
@@ -102,18 +109,18 @@ def get_l3_decision(market_data: Dict) -> Dict:
 
     except Exception as e:
         logger.error(f"❌ Error generando decisión L3: {e}")
-        # Fallback a decisión básica con blind_mode=True
+        # Fallback a decisión neutral en lugar de error para no bloquear el sistema
         return {
-            'regime': 'error',
+            'regime': 'neutral',
             'signal': 'hold',
-            'confidence': 0.0,
-            'market_regime': 'error',
+            'confidence': 0.5,
+            'market_regime': 'neutral',
             'allow_l2_signals': True,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'fresh_update': True,
             'setup_type': None,
-            'subtype': 'error',
-            'blind_mode': True  # FIX EXTRA - Indicar que estamos en blind mode
+            'subtype': 'neutral',
+            'blind_mode': False
         }
 
 
@@ -300,7 +307,7 @@ def is_l3_fallback_active(l3_regime_info: Dict) -> bool:
     fallback_active = any(fallback_conditions)
     
     if fallback_active:
-        logger.warning("🛡️ FALLBACK L3 ACTIVO: Modo HOLD GLOBAL - Se congelan posiciones y señales tácticas")
+        logger.warning("🛡️ FALLBACK L3 ACTIVO: Modo HOLD GLOBAL - Bloquea señales direccionales L2 pero permite AutoRebalancer")
     
     return fallback_active
 

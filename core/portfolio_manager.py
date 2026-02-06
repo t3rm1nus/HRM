@@ -2,6 +2,7 @@
 
 import os
 import csv
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
@@ -104,7 +105,12 @@ class PortfolioManager:
         self.MIN_HOLD_TIME = 60
 
         self._configure_trading_costs()
-        self._init_portfolio()
+        
+        # Initialize portfolio from client if available
+        if self.client:
+            self._init_portfolio_from_client()
+        else:
+            self._init_portfolio()
 
         logger.info(f"✅ PortfolioManager iniciado | mode={self.mode} | balance={initial_balance}")
 
@@ -112,7 +118,153 @@ class PortfolioManager:
     # INITIALIZATION
     # =========================
 
+    async def _sync_from_client_async(self):
+        """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión asíncrona"""
+        # Si es modo paper, ignorar sincronización con Binance
+        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+            logger.debug("🧪 Paper mode: Skipping Binance portfolio synchronization")
+            return False
+            
+        try:
+            if hasattr(self.client, 'get_balances'):
+                balances = self.client.get_balances()
+            elif hasattr(self.client, 'get_account_balances'):
+                balances = await self.client.get_account_balances()
+            else:
+                logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+                return False
+
+            logger.debug(f"🔄 Sincronizando portfolio desde cliente: {balances}")
+            
+            # Map client balances to portfolio structure
+            self.portfolio = {
+                "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                "total": self.initial_balance,
+                "peak_value": self.initial_balance,
+                "total_fees": 0.0,
+            }
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error sincronizando portfolio desde cliente: {e}")
+            return False
+
+    def _sync_from_client(self):
+        """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión sincrónica"""
+        # Si es modo paper, ignorar sincronización con Binance
+        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+            logger.debug("🧪 Paper mode: Skipping Binance portfolio synchronization")
+            return False
+            
+        try:
+            if hasattr(self.client, 'get_balances'):
+                balances = self.client.get_balances()
+            elif hasattr(self.client, 'get_account_balances'):
+                import asyncio
+                try:
+                    if not asyncio.get_running_loop():
+                        balances = asyncio.run(self.client.get_account_balances())
+                    else:
+                        logger.warning("⚠️ Cannot use sync sync from async context")
+                        return False
+                except RuntimeError:
+                    balances = asyncio.run(self.client.get_account_balances())
+            else:
+                logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+                return False
+
+            logger.debug(f"🔄 Sincronizando portfolio desde cliente: {balances}")
+            
+            # Map client balances to portfolio structure
+            self.portfolio = {
+                "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                "total": self.initial_balance,
+                "peak_value": self.initial_balance,
+                "total_fees": 0.0,
+            }
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error sincronizando portfolio desde cliente: {e}")
+            return False
+
+    def _init_portfolio_from_client(self):
+        """Initialize portfolio from client balances (single source of truth)"""
+        # Si es modo paper, inicializar con valores del cliente simulado
+        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+            logger.info("🧪 Paper mode: Initializing portfolio from simulated client balances")
+            self._init_portfolio_from_simulated_client()
+        else:
+            if not self._sync_from_client():
+                self._init_portfolio()
+
+    def _init_portfolio_from_simulated_client(self):
+        """Initialize portfolio from simulated client balances to maintain state between cycles"""
+        if self.client:
+            try:
+                # Try to get balances from SimulatedExchangeClient (uses get_account_balances async)
+                if hasattr(self.client, 'get_account_balances'):
+                    # Check if we're in an async context
+                    import asyncio
+                    try:
+                        # If in async context, use the already running loop
+                        loop = asyncio.get_running_loop()
+                        balances = loop.run_until_complete(self.client.get_account_balances())
+                    except RuntimeError:
+                        # If not in async context, create a new loop
+                        balances = asyncio.run(self.client.get_account_balances())
+                elif hasattr(self.client, 'get_balance'):
+                    # Fallback if only single balance method available
+                    balances = {
+                        "BTC": self.client.get_balance("BTC"),
+                        "ETH": self.client.get_balance("ETH"),
+                        "USDT": self.client.get_balance("USDT")
+                    }
+                else:
+                    raise AttributeError("Simulated client has no get_account_balances or get_balance method")
+                
+                logger.debug(f"📊 Paper mode: Using simulated client balances: {balances}")
+                
+                # Convert client balances to portfolio structure (using BTC/ETH as base assets)
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
+                
+                # Calculate initial total value using simulated client's prices
+                if hasattr(self.client, 'get_market_price'):
+                    btc_price = self.client.get_market_price("BTCUSDT")
+                    eth_price = self.client.get_market_price("ETHUSDT")
+                    self.portfolio["total"] = (
+                        self.portfolio["USDT"]["free"] +
+                        self.portfolio["BTCUSDT"]["position"] * btc_price +
+                        self.portfolio["ETHUSDT"]["position"] * eth_price
+                    )
+                    self.portfolio["peak_value"] = self.portfolio["total"]
+                
+                self.peak_value = self.portfolio["peak_value"]
+                self.total_fees = 0.0
+                
+                logger.info(f"🎯 Portfolio initialized from simulated client ({self.portfolio['total']:.2f} USDT)")
+                return
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get simulated client balances: {e}, using fallback")
+        
+        # Fallback if simulated client not available or failed
+        self._init_portfolio()
+
     def _init_portfolio(self):
+        """Initialize portfolio with hardcoded values (only as fallback)"""
         self.portfolio = {
             "BTCUSDT": {"position": 0.0, "free": 0.0},
             "ETHUSDT": {"position": 0.0, "free": 0.0},
@@ -126,6 +278,11 @@ class PortfolioManager:
         self.total_fees = 0.0
 
         logger.info(f"🎯 Portfolio inicializado limpio ({self.initial_balance} USDT)")
+
+    def reset_portfolio(self):
+        """Reset portfolio to initial state - ONLY call this explicitly"""
+        logger.warning("⚠️ Resetting portfolio - this will lose all paper trading history")
+        self._init_portfolio()
 
     def _configure_trading_costs(self):
         if self.mode == "live":
@@ -168,6 +325,7 @@ class PortfolioManager:
     # =========================
 
     def get_total_value(self, market_data: Optional[Dict[str, Any]] = None) -> float:
+        # No sincronizar desde aquí para evitar error con asyncio.run()
         if not market_data:
             return safe_float(self.portfolio.get("total", 0.0))
 
@@ -219,50 +377,100 @@ class PortfolioManager:
             if not filled:
                 return
 
-            btc = self.get_balance("BTCUSDT")
-            eth = self.get_balance("ETHUSDT")
-            usdt = self.get_balance("USDT")
+            # In paper mode, update SimulatedExchangeClient directly (single source of truth)
+            if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+                logger.debug("🧪 Paper mode: Updating portfolio from local calculation")
+                
+                # Send orders to SimulatedExchangeClient
+                for o in filled:
+                    symbol = o["symbol"]
+                    side = o["side"].lower()
+                    qty = safe_float(o["quantity"])
+                    price = safe_float(o["filled_price"])
+                    
+                    await self.client.create_order(symbol, side, qty, price)
+                
+                # Sync portfolio from SimulatedExchangeClient (single source of truth)
+                balances = await self.client.get_account_balances()
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
+                
+                # Calculate total value
+                if hasattr(self.client, 'get_market_price'):
+                    btc_price = self.client.get_market_price("BTCUSDT")
+                    eth_price = self.client.get_market_price("ETHUSDT")
+                    self.portfolio["total"] = (
+                        self.portfolio["USDT"]["free"] +
+                        self.portfolio["BTCUSDT"]["position"] * btc_price +
+                        self.portfolio["ETHUSDT"]["position"] * eth_price
+                    )
+                    self.portfolio["peak_value"] = self.portfolio["total"]
+                
+                self.peak_value = self.portfolio["peak_value"]
+                
+                logger.debug("✅ Portfolio updated from SimulatedExchangeClient")
+                
+                # Log portfolio comparison to show real changes
+                logger.info("📊 PORTFOLIO COMPARISON - After order execution:")
+                logger.info(f"   BTC: {self.portfolio['BTCUSDT']['position']:.6f}")
+                logger.info(f"   ETH: {self.portfolio['ETHUSDT']['position']:.6f}")
+                logger.info(f"   USDT: {self.portfolio['USDT']['free']:.2f}")
+                logger.info(f"   Total Value: {self.portfolio['total']:.2f}")
+                
+            else:
+                # Real mode: sync with Binance balances
+                if await self._sync_from_client_async():
+                    logger.info("✅ Portfolio sincronizado con balances reales del exchange")
+                else:
+                    logger.warning("⚠️ Fallback: Actualizando portfolio desde cálculo local")
+                    btc = self.get_balance("BTCUSDT")
+                    eth = self.get_balance("ETHUSDT")
+                    usdt = self.get_balance("USDT")
 
-            for o in filled:
-                symbol = o["symbol"]
-                side = o["side"].lower()
-                qty = safe_float(o["quantity"])
-                price = safe_float(o["filled_price"])
+                    for o in filled:
+                        symbol = o["symbol"]
+                        side = o["side"].lower()
+                        qty = safe_float(o["quantity"])
+                        price = safe_float(o["filled_price"])
 
-                value = qty * price
-                fee = value * self.taker_fee
+                        value = qty * price
+                        fee = value * self.taker_fee
 
-                if symbol == "BTCUSDT":
-                    if side == "buy" and usdt >= value + fee:
-                        btc += qty
-                        usdt -= value + fee
-                    elif side == "sell" and btc >= qty:
-                        btc -= qty
-                        usdt += value - fee
+                        if symbol == "BTCUSDT":
+                            if side == "buy" and usdt >= value + fee:
+                                btc += qty
+                                usdt -= value + fee
+                            elif side == "sell" and btc >= qty:
+                                btc -= qty
+                                usdt += value - fee
 
-                elif symbol == "ETHUSDT":
-                    if side == "buy" and usdt >= value + fee:
-                        eth += qty
-                        usdt -= value + fee
-                    elif side == "sell" and eth >= qty:
-                        eth -= qty
-                        usdt += value - fee
+                        elif symbol == "ETHUSDT":
+                            if side == "buy" and usdt >= value + fee:
+                                eth += qty
+                                usdt -= value + fee
+                            elif side == "sell" and eth >= qty:
+                                eth -= qty
+                                usdt += value - fee
 
-                self.total_fees += fee
-                self.position_age[symbol] = datetime.now().timestamp()
+                        self.total_fees += fee
+                        self.position_age[symbol] = datetime.now().timestamp()
 
-            self.portfolio = {
-                "BTCUSDT": {"position": btc, "free": btc},
-                "ETHUSDT": {"position": eth, "free": eth},
-                "USDT": {"free": usdt},
-                "total": self.get_total_value(market_data),
-                "peak_value": max(self.peak_value, self.get_total_value(market_data)),
-                "total_fees": self.total_fees,
-            }
+                    self.portfolio = {
+                        "BTCUSDT": {"position": btc, "free": btc},
+                        "ETHUSDT": {"position": eth, "free": eth},
+                        "USDT": {"free": usdt},
+                        "total": self.get_total_value(market_data),
+                        "peak_value": max(self.peak_value, self.get_total_value(market_data)),
+                        "total_fees": self.total_fees,
+                    }
 
-            self.peak_value = self.portfolio["peak_value"]
-
-            logger.info("✅ Portfolio actualizado desde órdenes")
+                    self.peak_value = self.portfolio["peak_value"]
 
         except Exception as e:
             logger.error(f"❌ Error update_from_orders_async: {e}", exc_info=True)

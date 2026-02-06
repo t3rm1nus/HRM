@@ -92,6 +92,7 @@ async def main():
     error_recovery = None
     
     try:
+        
         # ================================================================
         # STEP 1: SYSTEM CLEANUP
         # ================================================================
@@ -154,13 +155,7 @@ async def main():
             if hasattr(system_context, 'external_adapter'):
                 external_adapter = system_context.external_adapter
             
-            # IMPORTANT: Re-inject StateCoordinator from bootstrap if different
-            if hasattr(system_context, 'state_coordinator') and system_context.state_coordinator is not None:
-                state_coordinator = system_context.state_coordinator
-                inject_state_coordinator(state_coordinator)
-                logger.info("✅ StateCoordinator from bootstrap re-injected")
-            
-            logger.info("✅ SystemBootstrap completed")
+            logger.info("✅ SystemBootstrap completed - StateCoordinator sin cambios")
             
         except Exception as bootstrap_error:
             logger.error(f"❌ SystemBootstrap failed: {bootstrap_error}")
@@ -400,6 +395,10 @@ async def main():
         # ================================================================
         logger.info("🔍 INITIAL PORTFOLIO STATE:")
         try:
+            # Sincronizar con el exchange para obtener balances reales (single source of truth)
+            if hasattr(portfolio_manager, '_sync_from_client'):
+                portfolio_manager._sync_from_client()
+            
             btc_bal = portfolio_manager.get_balance('BTCUSDT')
             eth_bal = portfolio_manager.get_balance('ETHUSDT')
             usdt_bal = portfolio_manager.get_balance('USDT')
@@ -440,194 +439,47 @@ async def main():
             market_data = {}
 
         # ================================================================
-        # STEP 14: INITIAL DEPLOYMENT
+        # STEP 14: BOOTSTRAP DEPLOYMENT (INITIAL ENTRY)
         # ================================================================
         if validate_market_data(market_data):
-            logger.info("🔄 Calculating initial deployment...")
+            logger.info("🚀 Calculating bootstrap deployment...")
             try:
-                orders = position_rotator.calculate_initial_deployment(market_data)
+                # First try bootstrap deployment (guaranteed initial entry)
+                bootstrap_orders = position_rotator.calculate_bootstrap_deployment(market_data)
                 
-                if orders:
-                    processed_orders = await order_manager.execute_orders(orders)
+                if bootstrap_orders:
+                    logger.info(f"🔥 Bootstrap deployment: {len(bootstrap_orders)} orders will be executed")
+                    processed_orders = await order_manager.execute_orders(bootstrap_orders)
                     await portfolio_manager.update_from_orders_async(processed_orders, market_data)
-                    logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
+                    logger.info(f"✅ Bootstrap deployment completed: {len(processed_orders)} orders executed")
                 else:
-                    logger.info("⚠️ No initial deployment needed")
+                    logger.info("⏸️ No bootstrap deployment needed - checking initial deployment")
+                    # Fallback to initial deployment if bootstrap failed or is disabled
+                    orders = position_rotator.calculate_initial_deployment(market_data)
+                    if orders:
+                        processed_orders = await order_manager.execute_orders(orders)
+                        await portfolio_manager.update_from_orders_async(processed_orders, market_data)
+                        logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
+                    else:
+                        logger.info("⚠️ No initial deployment needed")
+                        
             except Exception as deploy_error:
-                logger.error(f"❌ Initial deployment failed: {deploy_error}")
+                logger.error(f"❌ Deployment failed: {deploy_error}")
         else:
-            logger.warning("⚠️ Skipping initial deployment - invalid market data")
+            logger.warning("⚠️ Skipping deployment - invalid market data")
 
         # ================================================================
         # STEP 15: INTEGRATE AUTO-LEARNING
         # ================================================================
         logger.info("🤖 Integrating Auto-Learning System...")
         try:
-            auto_learning_system = integrate_with_main_system()
+            auto_learning_system = await integrate_with_main_system()
             logger.info("✅ Auto-Learning System integrated")
         except Exception as learning_error:
             logger.error(f"❌ Auto-Learning integration failed: {learning_error}")
 
         # ================================================================
-        # STEP 16: MAIN TRADING LOOP
-        # ================================================================
-        logger.info("🔄 Starting main trading loop...")
-        logger.info("="*80)
-        
-        cycle_id = 0
-        total_signals_all_cycles = 0
-        total_orders_all_cycles = 0
-        total_rejected_all_cycles = 0
-        total_cooldown_blocked_all_cycles = 0
-        
-        last_cycle_time = pd.Timestamp.utcnow()
-
-        while True:
-            cycle_id += 1
-            start_time = pd.Timestamp.utcnow()
-            
-            # Enforce 3-second cycle timing
-            elapsed = (start_time - last_cycle_time).total_seconds()
-            if elapsed < 3.0:
-                wait_time = 3.0 - elapsed
-                logger.debug(f"⏱️ Waiting {wait_time:.2f}s for 3-second cycle")
-                await asyncio.sleep(wait_time)
-            
-            last_cycle_time = pd.Timestamp.utcnow()
-
-            try:
-                # ============================================================
-                # CYCLE STEP 1: GET FRESH MARKET DATA
-                # ============================================================
-                try:
-                    market_data = await market_data_manager.get_data_with_fallback()
-                    
-                    if not market_data or len(market_data) == 0:
-                        logger.warning(f"⚠️ Cycle {cycle_id}: No market data, skipping")
-                        await asyncio.sleep(3.0)
-                        continue
-                    
-                    # Update state with fresh data
-                    state["market_data"] = market_data
-                    
-                except Exception as data_error:
-                    logger.error(f"❌ Cycle {cycle_id}: Market data error: {data_error}")
-                    await asyncio.sleep(3.0)
-                    continue
-                
-                # ============================================================
-                # CYCLE STEP 2: PROCESS TRADING CYCLE
-                # ============================================================
-                cycle_result = await trading_pipeline.process_trading_cycle(
-                    state=state,
-                    market_data=market_data  # ✅ CRITICAL: Pass market_data explicitly
-                )
-                
-                # Update state from cycle result
-                state["total_value"] = cycle_result.portfolio_value
-                
-                # Update cumulative counters
-                total_signals_all_cycles += cycle_result.signals_generated
-                total_orders_all_cycles += cycle_result.orders_executed
-                total_rejected_all_cycles += cycle_result.orders_rejected
-                total_cooldown_blocked_all_cycles += cycle_result.cooldown_blocked
-                
-                # ============================================================
-                # CYCLE STEP 3: LOG SUMMARY (every 5 cycles)
-                # ============================================================
-                if cycle_id % 5 == 0:
-                    logger.info("="*80)
-                    logger.info(f"📊 CYCLE {cycle_id} SUMMARY")
-                    logger.info(f"   Signals: {cycle_result.signals_generated}")
-                    logger.info(f"   Orders Executed: {cycle_result.orders_executed}")
-                    logger.info(f"   Orders Rejected: {cycle_result.orders_rejected}")
-                    logger.info(f"   Cooldown Blocked: {cycle_result.cooldown_blocked}")
-                    logger.info(f"   Portfolio Value: ${cycle_result.portfolio_value:.2f}")
-                    logger.info(f"   L3 Regime: {cycle_result.l3_regime}")
-                    logger.info("="*80)
-                    
-                    # Cumulative stats
-                    logger.info(f"📈 CUMULATIVE (Cycles 1-{cycle_id})")
-                    logger.info(f"   Total Signals: {total_signals_all_cycles}")
-                    logger.info(f"   Total Orders: {total_orders_all_cycles}")
-                    logger.info(f"   Total Rejected: {total_rejected_all_cycles}")
-                    logger.info(f"   Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.2f}")
-                    logger.info("="*80)
-                
-                # ============================================================
-                # CYCLE STEP 4: PORTFOLIO COMPARISON LOG (every cycle)
-                # ============================================================
-                await log_portfolio_comparison(
-                    portfolio_manager=portfolio_manager,
-                    initial_portfolio=initial_portfolio,
-                    cycle_id=cycle_id,
-                    market_data=market_data
-                )
-
-            except Exception as cycle_error:
-                logger.error(f"❌ Cycle {cycle_id} error: {cycle_error}")
-                
-                # Use ErrorRecoveryManager for intelligent recovery
-                try:
-                    if error_recovery is not None:
-                        recovery_action = await error_recovery.handle_cycle_error(
-                            error=cycle_error,
-                            state=state,
-                            cycle_id=cycle_id
-                        )
-                        
-                        if recovery_action.action == RecoveryActionType.SHUTDOWN:
-                            logger.critical("🛑 Unrecoverable error - shutting down")
-                            break
-                        
-                        if recovery_action.action == RecoveryActionType.RESET_COMPONENT:
-                            logger.warning(f"🔄 Resetting component...")
-                            for step in recovery_action.recovery_steps_taken:
-                                logger.info(f"  ✓ {step}")
-                        
-                        await asyncio.sleep(recovery_action.wait_seconds)
-        
-                    else:
-                        logger.warning("⚠️ ErrorRecovery not available, using default wait")
-                        await asyncio.sleep(10.0)
-                    
-                except Exception as recovery_error:
-                    logger.error(f"❌ Recovery failed: {recovery_error}")
-                    await asyncio.sleep(10.0)
-                
-                continue
-
-        # ================================================================
-        # STEP 13: INITIAL DEPLOYMENT
-        # ================================================================
-        if validate_market_data(market_data):
-            logger.info("🔄 Calculating initial deployment...")
-            try:
-                orders = position_rotator.calculate_initial_deployment(market_data)
-                
-                if orders:
-                    processed_orders = await order_manager.execute_orders(orders)
-                    await portfolio_manager.update_from_orders_async(processed_orders, market_data)
-                    logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
-                else:
-                    logger.info("⚠️ No initial deployment needed")
-            except Exception as deploy_error:
-                logger.error(f"❌ Initial deployment failed: {deploy_error}")
-        else:
-            logger.warning("⚠️ Skipping initial deployment - invalid market data")
-
-        # ================================================================
-        # STEP 14: INTEGRATE AUTO-LEARNING
-        # ================================================================
-        logger.info("🤖 Integrating Auto-Learning System...")
-        try:
-            auto_learning_system = integrate_with_main_system()
-            logger.info("✅ Auto-Learning System integrated")
-        except Exception as learning_error:
-            logger.error(f"❌ Auto-Learning integration failed: {learning_error}")
-
-        # ================================================================
-        # STEP 15: APPLY FUNDAMENTAL RULE - CRITICAL FIX
+        # STEP 16: APPLY FUNDAMENTAL RULE - CRITICAL FIX
         # ================================================================
         logger.info("🛡️ Applying FUNDAMENTAL RULE for simulated mode...")
         try:
@@ -639,7 +491,7 @@ async def main():
             # Continue anyway - this is not a critical failure
         
         # ================================================================
-        # STEP 16: MAIN TRADING LOOP
+        # STEP 17: MAIN TRADING LOOP
         # ================================================================
         logger.info("🔄 Starting main trading loop...")
         logger.info("="*80)
@@ -727,9 +579,14 @@ async def main():
                 # ============================================================
                 # CYCLE STEP 4: PORTFOLIO COMPARISON LOG (every cycle)
                 # ============================================================
+                # Sincronizar portfolio con exchange antes de mostrar la comparación
+                if hasattr(portfolio_manager, '_sync_from_client_async'):
+                    await portfolio_manager._sync_from_client_async()
+                elif hasattr(portfolio_manager, '_sync_from_client'):
+                    portfolio_manager._sync_from_client()
+                
                 await log_portfolio_comparison(
                     portfolio_manager=portfolio_manager,
-                    initial_portfolio=initial_portfolio,
                     cycle_id=cycle_id,
                     market_data=market_data
                 )
@@ -792,48 +649,53 @@ async def main():
         
         logger.info("👋 HRM System shutdown complete")
 
-async def log_portfolio_comparison(portfolio_manager, initial_portfolio, cycle_id, market_data):
-    """Log portfolio comparison with colored output every cycle"""
+async def log_portfolio_comparison(portfolio_manager, cycle_id, market_data):
+    """Log portfolio comparison with colored output every cycle using real SimulatedExchangeClient balances"""
     try:
-        if initial_portfolio is None:
-            logger.warning("⚠️ Initial portfolio not available for comparison")
-            return
-        
-        # Get current portfolio values
-        current_btc = portfolio_manager.get_balance('BTCUSDT')
-        current_eth = portfolio_manager.get_balance('ETHUSDT')
-        current_usdt = portfolio_manager.get_balance('USDT')
-        current_total = portfolio_manager.get_total_value(market_data)
-        
-        # Calculate differences
-        btc_diff = current_btc - initial_portfolio['btc_balance']
-        eth_diff = current_eth - initial_portfolio['eth_balance']
-        usdt_diff = current_usdt - initial_portfolio['usdt_balance']
-        total_diff = current_total - initial_portfolio['total_value']
-        
-        # Determine color based on total portfolio performance
-        if total_diff >= 0:
-            # Portfolio value increased or stayed the same - GREEN
-            color_start = Fore.GREEN
-            color_end = Style.RESET_ALL
-            status = "PROFIT"
+        # Get current portfolio values directly from SimulatedExchangeClient (single source of truth)
+        # This ensures we're using real paper trading balances, not cached values
+        if hasattr(portfolio_manager, 'client') and portfolio_manager.client:
+            # Get real balances from the client
+            if hasattr(portfolio_manager.client, 'get_account_balances'):
+                balances = await portfolio_manager.client.get_account_balances()
+                current_btc = balances.get("BTCUSDT", 0.0)
+                current_eth = balances.get("ETHUSDT", 0.0)
+                current_usdt = balances.get("USDT", 0.0)
+            elif hasattr(portfolio_manager.client, 'get_balance'):
+                current_btc = portfolio_manager.client.get_balance("BTCUSDT")
+                current_eth = portfolio_manager.client.get_balance("ETHUSDT")
+                current_usdt = portfolio_manager.client.get_balance("USDT")
+            else:
+                logger.warning("⚠️ Client has no get_account_balances or get_balance method")
+                return
         else:
-            # Portfolio value decreased - RED
-            color_start = Fore.RED
-            color_end = Style.RESET_ALL
-            status = "LOSS"
+            logger.warning("⚠️ No client available for portfolio comparison")
+            return
+            
+        # Calculate real NAV using market prices (USDT + crypto at market value)
+        current_total = current_usdt
+        for symbol in ["BTCUSDT", "ETHUSDT"]:
+            if symbol == "BTCUSDT":
+                bal = current_btc
+            else:
+                bal = current_eth
+                
+            if bal > 0:
+                data = market_data.get(symbol)
+                if isinstance(data, dict) and "close" in data:
+                    current_total += bal * data["close"]
+                elif isinstance(data, pd.DataFrame) and "close" in data.columns:
+                    current_total += bal * data["close"].iloc[-1]
         
-        # Create 80-character colored border
-        border = color_start + "=" * 80 + color_end
+        # Log the real portfolio state with colored output
+        logger.info(f"💰 PORTFOLIO COMPARISON - Cycle {cycle_id} (Real NAV)")
+        logger.info(f"   BTCUSDT: {current_btc:.6f}")
+        logger.info(f"   ETHUSDT: {current_eth:.3f}")
+        logger.info(f"   USDT: ${current_usdt:.2f}")
+        logger.info(f"   TOTAL NAV: ${current_total:.2f}")
         
-        # Log the comparison with colored borders
-        print(border)  # Print border above
-        logger.info(f"{color_start}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} ({status}){color_end}")
-        logger.info(f"{color_start}   BTC: {current_btc:.6f} ({'+' if btc_diff >= 0 else ''}{btc_diff:.6f}){color_end}")
-        logger.info(f"{color_start}   ETH: {current_eth:.3f} ({'+' if eth_diff >= 0 else ''}{eth_diff:.3f}){color_end}")
-        logger.info(f"{color_start}   USDT: ${current_usdt:.2f} ({'+' if usdt_diff >= 0 else ''}${usdt_diff:.2f}){color_end}")
-        logger.info(f"{color_start}   TOTAL: ${current_total:.2f} ({'+' if total_diff >= 0 else ''}${total_diff:.2f}){color_end}")
-        print(border)  # Print border below
+        # Debug: Verify portfolio state consistency
+        logger.debug(f"🔍 Portfolio state verify - BTCUSDT: {current_btc}, ETHUSDT: {current_eth}, USDT: {current_usdt}")
         
     except Exception as e:
         logger.error(f"❌ Error in portfolio comparison: {e}")

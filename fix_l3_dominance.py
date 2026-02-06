@@ -78,7 +78,7 @@ def should_l3_block_l2_signals(
     if l3_confidence >= 0.6:
         logger.warning(
             f"🚫 L3 DOMINANCE: L3 {l3_signal.upper()} con {l3_confidence:.2f} confidence (>= 0.6) "
-            f"bloquea señales L2 en {regime} regime"
+            f"bloquea señales direccionales L2 en {regime} regime (AutoRebalancer still allowed)"
         )
         return True
 
