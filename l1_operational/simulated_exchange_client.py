@@ -12,14 +12,50 @@ class SimulatedExchangeClient:
     - Aplica slippage + fees
     - Guarda historial de trades
     - NUNCA hace requests HTTP
+    - Singleton pattern to maintain state between cycles
     """
+    _instance = None
+    _initialized = False
+
+    def __new__(cls, initial_balances: Dict[str, float] = None,
+                 fee: float = 0.001,
+                 slippage: float = 0.0005):
+        """Singleton pattern to maintain state between instances"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(
         self,
-        initial_balances: Dict[str, float],
+        initial_balances: Dict[str, float] = None,
         fee: float = 0.001,
         slippage: float = 0.0005
     ):
+        """
+        Inicializa el cliente simulado.
+        
+        Args:
+            initial_balances: Balances iniciales para cada activo
+            fee: Comisión por trade (0.001 = 0.1%)
+            slippage: Slippage por trade (0.0005 = 0.05%)
+        """
+        if SimulatedExchangeClient._initialized:
+            logger.debug("🎮 SimulatedExchangeClient already initialized - maintaining state")
+            # Si se proporcionan balances iniciales diferentes, actualizar (solo para pruebas)
+            if initial_balances and initial_balances != self.initial_balances:
+                logger.warning("⚠️ SimulatedExchangeClient already initialized - ignoring new initial balances")
+            return
+        
+        SimulatedExchangeClient._initialized = True
+        
+        if initial_balances is None:
+            initial_balances = {
+                "BTC": 0.01549,
+                "ETH": 0.385,
+                "USDT": 3000.0
+            }
+        
+        self.initial_balances = initial_balances.copy()
         self.balances: Dict[str, float] = initial_balances.copy()
         self.fee = fee
         self.slippage = slippage
@@ -37,6 +73,7 @@ class SimulatedExchangeClient:
         logger.info(f"   Balances iniciales: {self.balances}")
         logger.info(f"   Comisión: {fee*100:.2f}%")
         logger.info(f"   Slippage: {slippage*100:.2f}%")
+        logger.info(f"   SIM_INIT_ONCE=True")
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -230,3 +267,21 @@ class SimulatedExchangeClient:
 
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
         return []
+    
+    @classmethod
+    def force_reset(cls, initial_balances: Dict[str, float] = None):
+        """Force reset only for testing purposes - should NOT be used in production"""
+        if cls._instance is not None:
+            cls._initialized = False
+            if initial_balances:
+                cls._instance.__init__(initial_balances)
+            else:
+                cls._instance.__init__()
+            logger.warning("⚠️ SimulatedExchangeClient forcefully reset - testing only")
+        else:
+            logger.warning("⚠️ SimulatedExchangeClient not initialized - cannot reset")
+            
+    def reset(self):
+        """Reinicia el cliente a su estado inicial - PROHIBIDO en paper mode"""
+        logger.critical("🚨 FATAL: Attempt to reset SimulatedExchangeClient state - this should never happen in paper mode")
+        raise RuntimeError("Resetting SimulatedExchangeClient state is prohibited in paper mode")

@@ -60,8 +60,19 @@ class SimulatedExchangeClient:
     Cliente de intercambio simulado que replica el comportamiento de Binance
     pero con datos internos y sin riesgo real.
     """
+    _instance = None
+    _initialized = False
 
-    def __init__(self, initial_balances: Dict[str, float], 
+    def __new__(cls, initial_balances: Dict[str, float] = None,
+                 enable_commissions: bool = True,
+                 enable_slippage: bool = True,
+                 volatility_factor: float = 0.02):
+        """Singleton pattern to maintain state between instances"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, initial_balances: Dict[str, float] = None,
                  enable_commissions: bool = True,
                  enable_slippage: bool = True,
                  volatility_factor: float = 0.02):
@@ -74,6 +85,22 @@ class SimulatedExchangeClient:
             enable_slippage: Habilitar slippage en órdenes
             volatility_factor: Factor de volatilidad para simulación de precios
         """
+        if SimulatedExchangeClient._initialized:
+            logger.debug("🎮 SimulatedExchangeClient already initialized - maintaining state")
+            # Si se proporcionan balances iniciales diferentes, actualizar (solo para pruebas)
+            if initial_balances and initial_balances != self.initial_balances:
+                logger.warning("⚠️ SimulatedExchangeClient already initialized - ignoring new initial balances")
+            return
+        
+        SimulatedExchangeClient._initialized = True
+        
+        if initial_balances is None:
+            initial_balances = {
+                "BTC": 0.01549,
+                "ETH": 0.385,
+                "USDT": 3000.0
+            }
+        
         self.initial_balances = initial_balances.copy()
         self.enable_commissions = enable_commissions
         self.enable_slippage = enable_slippage
@@ -101,6 +128,7 @@ class SimulatedExchangeClient:
         logger.info(f"   Comisiones: {'Habilitadas' if self.enable_commissions else 'Deshabilitadas'}")
         logger.info(f"   Slippage: {'Habilitado' if self.enable_slippage else 'Deshabilitado'}")
         logger.info(f"   Volatilidad: {volatility_factor}")
+        logger.info(f"   SIM_INIT_ONCE=True")
 
     def _initialize_market_prices(self):
         """Inicializa precios de mercado basados en balances o valores por defecto"""
@@ -180,7 +208,11 @@ class SimulatedExchangeClient:
             self.price_history[symbol] = self.price_history[symbol][-1000:]
 
     async def get_account_balances(self) -> Dict[str, float]:
-        """Obtiene los balances de la cuenta (simulados)"""
+        """Obtiene los balances de la cuenta (simulados) - versión asincrónica para compatibilidad con BinanceClient"""
+        return self.balances.copy()
+
+    def get_account_balances_sync(self) -> Dict[str, float]:
+        """Obtiene los balances de la cuenta (simulados) - versión sincrónica"""
         return self.balances.copy()
 
     def get_balance(self, asset: str) -> float:
@@ -245,19 +277,22 @@ class SimulatedExchangeClient:
         return order_value * self.taker_fee
 
     def validate_order(self, symbol: str, side: str, quantity: float, 
-                      price: Optional[float] = None) -> tuple[bool, str]:
-        """Valida una orden antes de colocarla"""
+                      price: Optional[float] = None) -> tuple[bool, str, float]:
+        """Valida una orden antes de colocarla y ajusta la cantidad si es necesario"""
         # Validar símbolo - permitir cualquier símbolo que termine en USDT
         if not symbol.endswith("USDT") and symbol != "USDT":
-            return False, f"Símbolo no soportado: {symbol}"
+            return False, f"Símbolo no soportado: {symbol}", quantity
+        
+        # Extract base asset for symbol (e.g., BTCUSDT -> BTC)
+        base_asset = symbol.replace("USDT", "") if symbol != "USDT" else "USDT"
         
         # Validar lado
         if side.lower() not in ["buy", "sell"]:
-            return False, f"Lado inválido: {side}"
+            return False, f"Lado inválido: {side}", quantity
         
         # Validar cantidad
         if quantity <= 0:
-            return False, f"Cantidad inválida: {quantity}"
+            return False, f"Cantidad inválida: {quantity}", quantity
         
         # Validar balance para compras
         if side.lower() == "buy":
@@ -271,14 +306,47 @@ class SimulatedExchangeClient:
             total_cost = order_value * (1 + slippage) + fees
             
             if self.get_balance("USDT") < total_cost:
-                return False, f"Fondos insuficientes: USDT={self.get_balance('USDT'):.2f} < {total_cost:.2f}"
+                logger.warning(f"⚠️ Fondos insuficientes para compra: USDT={self.get_balance('USDT'):.2f} < {total_cost:.2f}")
+                # Calcular cantidad máxima posible
+                max_quantity = (self.get_balance("USDT") / (current_price * (1 + slippage) + current_price * self.taker_fee))
+                if max_quantity > 0:
+                    logger.info(f"📊 Ajustando cantidad de compra: {quantity:.6f} → {max_quantity:.6f} unidades")
+                    return True, "Cantidad ajustada por fondos insuficientes", max_quantity
+                else:
+                    return False, "No hay suficientes fondos para comprar incluso la cantidad mínima", 0.0
         
         # Validar balance para ventas
         else:
-            if self.get_balance(symbol) < quantity:
-                return False, f"Balance insuficiente: {symbol}={self.get_balance(symbol):.6f} < {quantity:.6f}"
+            if self.get_balance(base_asset) < quantity:
+                logger.warning(f"⚠️ Balance insuficiente para venta: {base_asset}={self.get_balance(base_asset):.6f} < {quantity:.6f}")
+                logger.info(f"📊 Ajustando cantidad de venta: {quantity:.6f} → {self.get_balance(base_asset):.6f} unidades")
+                return True, "Cantidad ajustada por balance insuficiente", self.get_balance(base_asset)
         
-        return True, "OK"
+        return True, "OK", quantity
+
+    async def execute_order(self, symbol: str, side: str, qty: float, market_price: float) -> Dict[str, Any]:
+        """Execute an order with automatic quantity adjustment if funds are insufficient"""
+        # Validate and adjust order quantity if needed
+        is_valid, validation_msg, adjusted_qty = self.validate_order(symbol, side, qty, market_price)
+        
+        if not is_valid:
+            logger.error(f"❌ Order execution failed: {validation_msg}")
+            return {
+                "status": "failed",
+                "error": validation_msg,
+                "quantity": qty,
+                "execution_price": market_price,
+                "cost": 0.0,
+                "fee": 0.0,
+                "slippage_cost": 0.0,
+                "trade_id": f"sim_{time.time()}"
+            }
+        
+        # Execute with adjusted quantity if needed
+        if adjusted_qty != qty:
+            logger.warning(f"⚠️ Executing adjusted order quantity: {adjusted_qty:.6f} instead of {qty:.6f}")
+        
+        return await self.create_order(symbol, side, adjusted_qty, market_price, order_type="market")
 
     async def create_order(self, symbol: str, side: str, quantity: float,
                           price: Optional[float] = None, 
@@ -297,8 +365,8 @@ class SimulatedExchangeClient:
             Dict con información de la orden creada
         """
         try:
-            # Validar la orden
-            is_valid, error_msg = self.validate_order(symbol, side, quantity, price)
+            # Validar la orden y ajustar cantidad si es necesario
+            is_valid, error_msg, adjusted_quantity = self.validate_order(symbol, side, quantity, price)
             if not is_valid:
                 logger.warning(f"❌ Orden rechazada: {error_msg}")
                 return {
@@ -311,7 +379,7 @@ class SimulatedExchangeClient:
                     'price': price
                 }
             
-            # Crear la orden
+            # Crear la orden con la cantidad ajustada
             order_id = f"sim_{self.order_counter:06d}"
             self.order_counter += 1
             
@@ -320,7 +388,7 @@ class SimulatedExchangeClient:
                 symbol=symbol,
                 side=side.lower(),
                 type=OrderType(order_type.lower()),
-                quantity=quantity,
+                quantity=adjusted_quantity,
                 price=price
             )
             
@@ -332,7 +400,7 @@ class SimulatedExchangeClient:
             elif order_type.lower() == "limit":
                 await self._execute_limit_order(order)
             
-            logger.info(f"✅ Orden creada: {order_id} - {side.upper()} {quantity} {symbol}")
+            logger.info(f"✅ Orden creada: {order_id} - {side.upper()} {adjusted_quantity:.6f} {symbol}")
             
             return {
                 'id': order.id,
@@ -370,17 +438,20 @@ class SimulatedExchangeClient:
         order_value = order.quantity * execution_price
         fees = self.calculate_fees(order_value)
         
+        # Extract base asset for symbol (e.g., BTCUSDT -> BTC)
+        base_asset = order.symbol.replace("USDT", "") if order.symbol != "USDT" else "USDT"
+        
         # Actualizar balances
         if order.side == "buy":
-            # Comprar: reducir USDT, aumentar símbolo
+            # Comprar: reducir USDT, aumentar base asset
             total_cost = order_value + fees
             self.balances["USDT"] -= total_cost
-            self.balances[order.symbol] += order.quantity
+            self.balances[base_asset] += order.quantity
             
         else:
-            # Vender: reducir símbolo, aumentar USDT
+            # Vender: reducir base asset, aumentar USDT
             proceeds = order_value - fees
-            self.balances[order.symbol] -= order.quantity
+            self.balances[base_asset] -= order.quantity
             self.balances["USDT"] += proceeds
         
         # Actualizar orden
@@ -535,11 +606,19 @@ class SimulatedExchangeClient:
 
     def reset(self):
         """Reinicia el cliente a su estado inicial"""
-        self.balances = self.initial_balances.copy()
-        self.orders = {}
-        self.order_counter = 1
-        self._initialize_market_prices()
-        logger.info("🔄 SimulatedExchangeClient reiniciado a estado inicial")
+        logger.critical("🚨 FATAL: Attempt to reset SimulatedExchangeClient state - this should never happen in paper mode")
+        raise RuntimeError("Resetting SimulatedExchangeClient state is prohibited in paper mode")
+        
+    @classmethod
+    def force_reset(cls, initial_balances: Dict[str, float] = None):
+        """Force reset only for testing purposes - should NOT be used in production"""
+        # Reset both the instance and the initialized flag
+        cls._initialized = False
+        if initial_balances:
+            cls._instance = cls(initial_balances)
+        else:
+            cls._instance = cls()
+        logger.warning("⚠️ SimulatedExchangeClient forcefully reset - testing only")
 
     def advance_time(self, steps: int = 1):
         """Avanza el tiempo simulado y actualiza precios"""
