@@ -12,7 +12,7 @@ class RealTimeDataLoader:
         self.binance_client = None
         self._closed = False
         logger.info("✅ RealTimeDataLoader inicializado")
-        
+
     async def _init_binance(self):
         """Inicializa el cliente de Binance de forma segura"""
         if not self.binance_client:
@@ -24,10 +24,10 @@ class RealTimeDataLoader:
                 'BINANCE_API_SECRET': None,   # No requiere API keys
                 'USE_TESTNET': False          # SIEMPRE FALSE para datos de mercado
             })
-            
+
             self.binance_client = BinanceClient(market_data_config)
             logger.info("✅ Cliente de datos de mercado configurado en mainnet (sin API keys)")
-            
+
     async def close(self):
         """Cierra apropiadamente las conexiones"""
         if not self._closed:
@@ -46,19 +46,24 @@ class RealTimeDataLoader:
         # Asegurar que tenemos un cliente inicializado
         if not self.binance_client:
             await self._init_binance()
-            
+
         try:
             data = await self.binance_client.get_klines(symbol, timeframe, limit)
             if not data:
                 logger.warning(f"⚠️ No se obtuvieron datos para {symbol}")
                 return pd.DataFrame()
 
-            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            # Binance API returns 12 columns, we only need the first 6
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                                           'close_time', 'quote_asset_volume', 'number_of_trades',
+                                           'taker_buy_base', 'taker_buy_quote', 'ignore'])
+            # Keep only the first 6 columns
+            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = df[col].astype(float)
-            
+
             logger.debug(f"📊 Datos en tiempo real para {symbol}: shape={df.shape}")
             return df
         except Exception as e:
@@ -72,7 +77,7 @@ class RealTimeDataLoader:
         try:
             tasks = [self.fetch_realtime_data(symbol, limit=200) for symbol in self.symbols]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             market_data = {}
             for symbol, result in zip(self.symbols, results):
                 if isinstance(result, pd.DataFrame) and not result.empty:
@@ -80,7 +85,7 @@ class RealTimeDataLoader:
                     logger.info(f"✅ Datos en tiempo real {symbol} shape: {result.shape}")
                 else:
                     logger.warning(f"⚠️ No se obtuvieron datos para {symbol}")
-            
+
             return market_data
         except Exception as e:
             logger.error(f"❌ Error en get_realtime_data: {e}", exc_info=True)

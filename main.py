@@ -205,9 +205,14 @@ async def main():
         # Order Manager
         if 'order_manager' not in components or components.get('order_manager') is None:
             from l1_operational.order_manager import OrderManager
-            order_manager = OrderManager(state_coordinator, portfolio_manager, config)
+            from system.bootstrap import bootstrap_simulated_exchange
+            
+            # Bootstrap simulated exchange client if in paper mode
+            simulated_client = bootstrap_simulated_exchange(config)
+            
+            order_manager = OrderManager(state_coordinator, portfolio_manager, config, simulated_client=simulated_client)
             components['order_manager'] = order_manager
-            logger.info("✅ OrderManager created manually")
+            logger.info("✅ OrderManager created manually with simulated client")
         else:
             order_manager = components['order_manager']
             logger.info("✅ OrderManager from bootstrap")
@@ -519,6 +524,104 @@ async def main():
 
             try:
                 # ============================================================
+                # CYCLE STEP 0: CHECK FOR ZERO BALANCES (DETECCIÓN TEMPRANA)
+                # ============================================================
+                logger.info(f"🔍 Cycle {cycle_id}: Checking SimulatedExchangeClient state")
+                
+                # Get real balances from SimulatedExchangeClient
+                if hasattr(portfolio_manager, 'client') and portfolio_manager.client:
+                    client = portfolio_manager.client
+                    is_paper_mode = False
+                    if hasattr(client, 'paper_mode'):
+                        is_paper_mode = client.paper_mode
+                    elif portfolio_manager.mode == "simulated":
+                        is_paper_mode = True
+                    
+                    if is_paper_mode:
+                        # Get balances from SimulatedExchangeClient
+                        if hasattr(client, 'get_account_balances'):
+                            import inspect
+                            if inspect.iscoroutinefunction(client.get_account_balances):
+                                balances = await client.get_account_balances()
+                            else:
+                                balances = client.get_account_balances()
+                        elif hasattr(client, 'get_balance'):
+                            if inspect.iscoroutinefunction(client.get_balance):
+                                current_btc = await client.get_balance("BTC")
+                                current_eth = await client.get_balance("ETH")
+                                current_usdt = await client.get_balance("USDT")
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                            else:
+                                current_btc = client.get_balance("BTC")
+                                current_eth = client.get_balance("ETH")
+                                current_usdt = client.get_balance("USDT")
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                        else:
+                            logger.warning("⚠️ Client has no get_account_balances or get_balance method")
+                            continue
+                        
+                        # Log SIM_STATE_ID and SIM_BALANCES
+                        logger.info(f"   SIM_STATE_ID: {id(client)}")
+                        logger.info(f"   SIM_BALANCES: {balances}")
+                        
+                # Check if all balances are zero
+                        current_btc = balances.get("BTC", 0.0)
+                        current_eth = balances.get("ETH", 0.0)
+                        current_usdt = balances.get("USDT", 0.0)
+                        
+                        if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
+                            logger.critical("ERROR: Pérdida de estado - todos los balances son cero")
+                            # Intentar restaurar los balances iniciales
+                            logger.info("🔧 Intentando restaurar balances iniciales...")
+                            try:
+                                # Force reset del SimulatedExchangeClient para restaurar balances
+                                if hasattr(client, 'force_reset'):
+                                    client.force_reset({
+                                        "BTC": 0.01549,
+                                        "ETH": 0.385,
+                                        "USDT": 3000.0
+                                    })
+                                    logger.info("✅ Balances iniciales restaurados")
+                                    # Volver a obtener los balances después del reset
+                                    if hasattr(client, 'get_account_balances'):
+                                        import inspect
+                                        if inspect.iscoroutinefunction(client.get_account_balances):
+                                            balances = await client.get_account_balances()
+                                        else:
+                                            balances = client.get_account_balances()
+                                    elif hasattr(client, 'get_balance'):
+                                        if inspect.iscoroutinefunction(client.get_balance):
+                                            current_btc = await client.get_balance("BTC")
+                                            current_eth = await client.get_balance("ETH")
+                                            current_usdt = await client.get_balance("USDT")
+                                            balances = {
+                                                "BTC": current_btc,
+                                                "ETH": current_eth,
+                                                "USDT": current_usdt
+                                            }
+                                        else:
+                                            balances = {
+                                                "BTC": client.get_balance("BTC"),
+                                                "ETH": client.get_balance("ETH"),
+                                                "USDT": client.get_balance("USDT")
+                                            }
+                                    logger.info(f"✅ Nuevos balances: {balances}")
+                                else:
+                                    logger.error("❌ No se puede restaurar balances - force_reset no disponible")
+                                    raise RuntimeError("Pérdida de estado - todos los balances son cero y no se puede restaurar")
+                            except Exception as reset_error:
+                                logger.error(f"❌ Error al restaurar balances: {reset_error}")
+                                raise RuntimeError("Pérdida de estado - todos los balances son cero")
+                
+                # ============================================================
                 # CYCLE STEP 1: GET FRESH MARKET DATA
                 # ============================================================
                 try:
@@ -652,22 +755,64 @@ async def main():
 async def log_portfolio_comparison(portfolio_manager, cycle_id, market_data):
     """Log portfolio comparison with colored output every cycle using real SimulatedExchangeClient balances"""
     try:
-        # Get current portfolio values directly from SimulatedExchangeClient (single source of truth)
+        # Get current portfolio values directly from client (single source of truth)
         # This ensures we're using real paper trading balances, not cached values
         if hasattr(portfolio_manager, 'client') and portfolio_manager.client:
-            # Get real balances from the client
-            if hasattr(portfolio_manager.client, 'get_account_balances'):
-                balances = await portfolio_manager.client.get_account_balances()
-                current_btc = balances.get("BTCUSDT", 0.0)
-                current_eth = balances.get("ETHUSDT", 0.0)
-                current_usdt = balances.get("USDT", 0.0)
-            elif hasattr(portfolio_manager.client, 'get_balance'):
-                current_btc = portfolio_manager.client.get_balance("BTCUSDT")
-                current_eth = portfolio_manager.client.get_balance("ETHUSDT")
-                current_usdt = portfolio_manager.client.get_balance("USDT")
+            client = portfolio_manager.client
+            client_type = "SIMULATED"
+            
+            # Determine if we're in paper/simulated mode
+            is_paper_mode = False
+            if hasattr(client, 'paper_mode'):
+                is_paper_mode = client.paper_mode
+            elif portfolio_manager.mode == "simulated":
+                is_paper_mode = True
+            
+            # Get real balances from the client with proper async handling
+            if hasattr(client, 'get_account_balances'):
+                # Check if method is async (coroutine)
+                import inspect
+                if inspect.iscoroutinefunction(client.get_account_balances):
+                    balances = await client.get_account_balances()
+                else:
+                    balances = client.get_account_balances()
+            elif hasattr(client, 'get_balance'):
+                # Check if method is async (coroutine)
+                import inspect
+                if inspect.iscoroutinefunction(client.get_balance):
+                    current_btc = await client.get_balance("BTC")
+                    current_eth = await client.get_balance("ETH")
+                    current_usdt = await client.get_balance("USDT")
+                    balances = {
+                        "BTC": current_btc,
+                        "ETH": current_eth,
+                        "USDT": current_usdt
+                    }
+                else:
+                    current_btc = client.get_balance("BTC")
+                    current_eth = client.get_balance("ETH")
+                    current_usdt = client.get_balance("USDT")
+                    balances = {
+                        "BTC": current_btc,
+                        "ETH": current_eth,
+                        "USDT": current_usdt
+                    }
             else:
                 logger.warning("⚠️ Client has no get_account_balances or get_balance method")
                 return
+                
+            # Log raw balances for debugging
+            logger.debug(f"SOURCE={client_type} BALANCES_RAW={balances}")
+            
+            # Validate balances are not empty or zero
+            current_btc = balances.get("BTC", 0.0)
+            current_eth = balances.get("ETH", 0.0)
+            current_usdt = balances.get("USDT", 0.0)
+            
+            if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
+                logger.error("ERROR: Pérdida de estado - todos los balances son cero")
+                return
+                
         else:
             logger.warning("⚠️ No client available for portfolio comparison")
             return
@@ -687,15 +832,39 @@ async def log_portfolio_comparison(portfolio_manager, cycle_id, market_data):
                 elif isinstance(data, pd.DataFrame) and "close" in data.columns:
                     current_total += bal * data["close"].iloc[-1]
         
+        # Get initial portfolio values for comparison (to determine if we made profit or loss)
+        initial_btc = 0.01549
+        initial_eth = 0.385
+        initial_usdt = 3000.0
+        initial_total = initial_usdt
+        for symbol in ["BTCUSDT", "ETHUSDT"]:
+            if symbol == "BTCUSDT":
+                bal = initial_btc
+            else:
+                bal = initial_eth
+                
+            if bal > 0:
+                data = market_data.get(symbol)
+                if isinstance(data, dict) and "close" in data:
+                    initial_total += bal * data["close"]
+                elif isinstance(data, pd.DataFrame) and "close" in data.columns:
+                    initial_total += bal * data["close"].iloc[-1]
+        
+        # Determine color based on profit/loss
+        if current_total >= initial_total:
+            color = Fore.GREEN
+        else:
+            color = Fore.RED
+        
         # Log the real portfolio state with colored output
-        logger.info(f"💰 PORTFOLIO COMPARISON - Cycle {cycle_id} (Real NAV)")
-        logger.info(f"   BTCUSDT: {current_btc:.6f}")
-        logger.info(f"   ETHUSDT: {current_eth:.3f}")
+        logger.info(f"{color}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} ({client_type} Balances){Style.RESET_ALL}")
+        logger.info(f"   BTC: {current_btc:.6f}")
+        logger.info(f"   ETH: {current_eth:.3f}")
         logger.info(f"   USDT: ${current_usdt:.2f}")
-        logger.info(f"   TOTAL NAV: ${current_total:.2f}")
+        logger.info(f"{color}   TOTAL NAV: ${current_total:.2f}{Style.RESET_ALL}")
         
         # Debug: Verify portfolio state consistency
-        logger.debug(f"🔍 Portfolio state verify - BTCUSDT: {current_btc}, ETHUSDT: {current_eth}, USDT: {current_usdt}")
+        logger.debug(f"🔍 Portfolio state verify - BTC: {current_btc}, ETH: {current_eth}, USDT: {current_usdt}")
         
     except Exception as e:
         logger.error(f"❌ Error in portfolio comparison: {e}")

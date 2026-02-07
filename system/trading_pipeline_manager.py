@@ -45,8 +45,12 @@ class TradingPipelineManager:
 
         start_time = pd.Timestamp.utcnow()
 
-        if not state or "version" not in state:
+        if not state:
             raise RuntimeError("System state not injected")
+        
+        # Add version to state if it doesn't exist
+        if "version" not in state:
+            state["version"] = "1.0"
 
         result = TradingCycleResult(
             signals_generated=0,
@@ -89,12 +93,32 @@ class TradingPipelineManager:
             if filled:
                 await self.portfolio_manager.update_from_orders_async(filled, market_data)
 
-            # PASO 8 – Refrescar STATE desde portfolio real
+            # PASO 8 – Sincronizar portfolio con cliente (single source of truth)
+            # Esto asegura que el portfolio manager tenga los balances reales del exchange
+            if hasattr(self.portfolio_manager, '_sync_from_client_async'):
+                await self.portfolio_manager._sync_from_client_async()
+            elif hasattr(self.portfolio_manager, '_sync_from_client'):
+                self.portfolio_manager._sync_from_client()
+
+            # PASO 9 – Refrescar STATE desde portfolio real
             self._sync_state_from_portfolio(state)
 
+            # PASO 10 – Actualizar estado global en StateCoordinator (single source of truth)
             result.portfolio_value = self.portfolio_manager.get_total_value(market_data)
+            self.state_coordinator.update_total_value(result.portfolio_value)
+            self.state_coordinator.update_market_data(market_data)
+            self.state_coordinator.update_l3_output(l3_output)
+            
+            # Update portfolio state in StateCoordinator
+            portfolio_state = self.portfolio_manager.get_portfolio_state()
+            self.state_coordinator.update_portfolio_state({
+                "btc_balance": portfolio_state.get("BTCUSDT", {}).get("position", 0.0),
+                "eth_balance": portfolio_state.get("ETHUSDT", {}).get("position", 0.0),
+                "usdt_balance": portfolio_state.get("USDT", {}).get("free", 0.0),
+                "total_value": result.portfolio_value
+            })
 
-            # PASO 9 – Rotación (opcional)
+            # PASO 11 – Rotación (opcional)
             if self.position_rotator:
                 rotation = await self.position_rotator.check_and_rotate_positions(state, market_data)
                 if rotation:
@@ -102,8 +126,13 @@ class TradingPipelineManager:
                     await self.portfolio_manager.update_from_orders_async(executed_rot, market_data)
                     result.orders_executed += len(executed_rot)
 
-            # PASO 10 – Rebalance (opcional)
-            if self.auto_rebalancer:
+            # PASO 12 – Rebalance (opcional) - Priorizar señales L2 sobre rebalance en modo agresivo
+            from core.config import TEMPORARY_AGGRESSIVE_MODE, check_temporary_aggressive_mode
+            
+            # Check if temporary aggressive mode should be disabled
+            check_temporary_aggressive_mode()
+            
+            if self.auto_rebalancer and not (TEMPORARY_AGGRESSIVE_MODE and len(valid_signals) > 0):
                 rebalance = await self.auto_rebalancer.check_and_execute_rebalance(
                     market_data, l3_decision=l3_output
                 )
@@ -111,6 +140,8 @@ class TradingPipelineManager:
                     executed_reb = await self.order_manager.execute_orders(rebalance)
                     await self.portfolio_manager.update_from_orders_async(executed_reb, market_data)
                     result.orders_executed += len(executed_reb)
+            elif TEMPORARY_AGGRESSIVE_MODE and len(valid_signals) > 0:
+                logger.debug("🧯 AutoRebalance skipped in aggressive mode - L2 signals present")
 
         except Exception as e:
             logger.error(f"❌ Error en ciclo de trading: {e}", exc_info=True)
@@ -132,14 +163,14 @@ class TradingPipelineManager:
         portfolio = self.portfolio_manager.get_portfolio_state()
 
         snapshot = {
-            "btc_balance": portfolio.get("BTC", 0.0),
-            "eth_balance": portfolio.get("ETH", 0.0),
-            "usdt_balance": portfolio.get("USDT", 0.0),
+            "btc_balance": portfolio.get("BTCUSDT", {}).get("position", 0.0),
+            "eth_balance": portfolio.get("ETHUSDT", {}).get("position", 0.0),
+            "usdt_balance": portfolio.get("USDT", {}).get("free", 0.0),
             "total_value": portfolio.get("total", 0.0),
         }
 
         state["portfolio"] = snapshot
-        self.state_coordinator.update_state({"portfolio": snapshot})
+        logger.debug(f"✅ State synced from PortfolioManager: {snapshot}")
 
     async def _update_l3_decision(self, state: Dict, market_data: Dict) -> Dict:
         from core.l3_processor import get_l3_decision

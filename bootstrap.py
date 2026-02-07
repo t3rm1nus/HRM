@@ -41,9 +41,8 @@ from comms.config import config, APAGAR_L3
 from comms.message_bus import MessageBus
 
 from sentiment.sentiment_manager import update_sentiment_texts
-from system.orchestrator import HRMOrchestrator
 
-from system_cleanup import SystemCleanup
+from system.system_cleanup import SystemCleanup
 from storage.paper_trade_logger import get_paper_logger
 
 
@@ -181,9 +180,33 @@ class HRMBootstrap:
         """Initialize L1 operational components."""
         logger.info("🔧 Initializing L1 operational components...")
         
-        # Initialize Binance client
+        # Initialize Binance client (solo para datos públicos en paper mode)
         binance_client = BinanceClient()
         self.components['binance_client'] = binance_client
+        
+        # Initialize SimulatedExchangeClient (para paper trading)
+        from l1_operational.simulated_exchange_client import SimulatedExchangeClient
+        
+        # Balances iniciales para simulación
+        initial_balances = {
+            "BTC": 0.01549,
+            "ETH": 0.385,
+            "USDT": 3000.0
+        }
+        
+        # Inicializar solo una vez
+        simulated_client = SimulatedExchangeClient.initialize_once(initial_balances)
+        self.components['simulated_client'] = simulated_client
+        
+        # Logs requeridos
+        logger.info("📊 SIM_INIT_ONCE=True")
+        logger.info(f"🔢 SIM_STATE_ID: {id(simulated_client)}")
+        logger.info(f"💰 SIM_BALANCES: {simulated_client.get_balances()}")
+        
+        # Verificar que los balances no estén vacíos
+        if not simulated_client.get_balances() or all(balance == 0 for balance in simulated_client.get_balances().values()):
+            logger.critical("🚨 FATAL: SimulatedExchangeClient initialized with empty or zero balances", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot operate with empty or zero balances")
         
         # Initialize RealTimeDataLoader
         loader = RealTimeDataLoader(config)
@@ -258,11 +281,15 @@ class HRMBootstrap:
         portfolio_manager = PortfolioManager(
             mode=portfolio_mode,
             initial_balance=initial_balance,
-            client=self.components['binance_client'],
+            client=self.components['simulated_client'] if portfolio_mode == "simulated" else self.components['binance_client'],
             symbols=env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"]),
             enable_commissions=env_config.get("ENABLE_COMMISSIONS", True),
             enable_slippage=env_config.get("ENABLE_SLIPPAGE", True)
         )
+        
+        # Initialize asynchronously to get balances from simulated client
+        if portfolio_mode == "simulated":
+            await portfolio_manager.initialize_async()
         
         # CRITICAL: Synchronize with exchange for production mode
         try:
@@ -291,23 +318,11 @@ class HRMBootstrap:
         logger.info("💰 Initializing Order Manager...")
         
         order_manager = OrderManager(
-            binance_client=self.components['binance_client'],
-            market_data=self.state.get("market_data", {}),
-            portfolio_manager=self.portfolio_manager
+            state_manager=self.state,
+            portfolio_manager=self.portfolio_manager,
+            config=config,
+            simulated_client=self.components['simulated_client']
         )
-        
-        # Clean up stale orders
-        logger.info("🧹 Cleaning up stale orders...")
-        try:
-            current_positions = {}
-            for symbol in config["SYMBOLS"]:
-                if symbol != "USDT":
-                    current_positions[symbol] = self.portfolio_manager.get_balance(symbol)
-            
-            cleanup_stats = order_manager.cleanup_stale_orders(current_positions)
-            logger.info(f"🧹 Cleanup completed: {cleanup_stats}")
-        except Exception as e:
-            logger.error(f"❌ Error during order cleanup: {e}")
         
         logger.info("✅ Order Manager initialized")
         return order_manager
@@ -367,7 +382,7 @@ class HRMBootstrap:
         return self.state
 
 
-async def bootstrap_hrm_system(mode: str = "live") -> Tuple[PortfolioManager, OrderManager, HRMRuntimeLoop]:
+async def bootstrap_hrm_system(mode: str = "live"):
     """Bootstrap the HRM system and return core components."""
     bootstrap = HRMBootstrap()
     portfolio_manager, order_manager = await bootstrap.bootstrap_system(mode)

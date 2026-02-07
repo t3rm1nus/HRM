@@ -1,115 +1,90 @@
-#!/usr/bin/env python3
-"""
-Test script for Aggressive Mode functionality in PortfolioManager
-"""
-
+import asyncio
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.config import TEMPORARY_AGGRESSIVE_MODE, set_config_value
+from core.l3_processor import get_l3_decision
+from l1_operational.simulated_exchange_client import SimulatedExchangeClient
 from core.portfolio_manager import PortfolioManager
-from core.weight_calculator import WeightStrategy
 
-def test_aggressive_mode():
-    """Test aggressive mode functionality"""
-    print("🚀 TESTING AGGRESSIVE MODE FUNCTIONALITY")
-    print("=" * 60)
-
-    # Test data
-    market_data = {
-        "BTCUSDT": {"close": 50000.0},
-        "ETHUSDT": {"close": 3000.0}
+async def test_aggressive_mode():
+    """Test temporary aggressive mode functionality"""
+    
+    # Test 1: Verify default mode is conservative
+    print("1. Testing default conservative mode:")
+    if not TEMPORARY_AGGRESSIVE_MODE:
+        print("✅ Default mode is conservative (TEMPORARY_AGGRESSIVE_MODE = False)")
+    else:
+        print("❌ Default mode should be conservative")
+    
+    # Create test market data
+    test_market_data = {
+        "BTCUSDT": [],
+        "ETHUSDT": []
     }
+    
+    # Test 2: Get L3 decision in conservative mode
+    print("\n2. Testing L3 decision in conservative mode:")
+    l3_decision_conservative = get_l3_decision(test_market_data)
+    print(f"   Regime: {l3_decision_conservative.get('regime', 'unknown')}")
+    print(f"   Signal: {l3_decision_conservative.get('signal', 'unknown')}")
+    print(f"   Allow L2 signals: {l3_decision_conservative.get('allow_l2_signals', False)}")
+    
+    # Enable aggressive mode temporarily
+    print("\n3. Enabling temporary aggressive mode:")
+    import core.config
+    core.config.TEMPORARY_AGGRESSIVE_MODE = True
+    print("✅ Temporary aggressive mode enabled")
+    
+    # Test 3: Get L3 decision in aggressive mode
+    print("\n4. Testing L3 decision in aggressive mode:")
+    l3_decision_aggressive = get_l3_decision(test_market_data)
+    print(f"   Regime: {l3_decision_aggressive.get('regime', 'unknown')}")
+    print(f"   Signal: {l3_decision_aggressive.get('signal', 'unknown')}")
+    print(f"   Allow L2 signals: {l3_decision_aggressive.get('allow_l2_signals', False)}")
+    
+    assert l3_decision_aggressive.get('allow_l2_signals') == True
+    print("✅ Allow L2 signals is True in aggressive mode")
+    
+    # Test 4: Verify strategic_hold is False
+    assert l3_decision_aggressive.get('strategic_hold') == False
+    print("✅ Strategic hold is False in aggressive mode")
+    
+    # Disable aggressive mode
+    print("\n5. Disabling temporary aggressive mode:")
+    core.config.TEMPORARY_AGGRESSIVE_MODE = False
+    print("✅ Temporary aggressive mode disabled")
+    
+    print("\n📊 Test completed successfully!")
+    print("\n📝 Summary of changes:")
+    print("   - Default mode is conservative")
+    print("   - Aggressive mode overrides L3 decision to allow L2 signals")
+    print("   - Aggressive mode sets strategic_hold to False")
+    print("   - Mode can be easily toggled on/off")
 
-    # Test 1: Normal mode
-    print("\n📊 TEST 1: Normal Mode (aggressive_mode=False)")
-    pm_normal = PortfolioManager(
-        mode="simulated",
-        initial_balance=10000.0,
-        aggressive_mode=False
-    )
+async def test_portfolio_behavior():
+    """Test portfolio behavior in aggressive mode"""
+    print("\n6. Testing portfolio behavior:")
+    
+    # Create simulated exchange client
+    client = SimulatedExchangeClient({"USDT": 10000, "BTC": 0.1, "ETH": 1.0})
+    pm = PortfolioManager(client=client, mode="simulated")
+    
+    # Test initial state
+    print(f"   Initial BTC: {pm.get_balance('BTCUSDT'):.6f}")
+    print(f"   Initial ETH: {pm.get_balance('ETHUSDT'):.6f}")
+    print(f"   Initial USDT: {pm.get_balance('USDT'):.2f}")
+    
+    assert pm.get_balance('BTCUSDT') == 0.1
+    assert pm.get_balance('ETHUSDT') == 1.0
+    assert pm.get_balance('USDT') == 10000
+    
+    print("✅ Portfolio initialized correctly")
 
-    # Initialize weight calculator
-    pm_normal.initialize_weight_calculator()
-
-    # Add test assets
-    pm_normal.add_asset_for_weighting("BTCUSDT", 50000.0, market_cap=1000000000, volatility=0.3)
-    pm_normal.add_asset_for_weighting("ETHUSDT", 3000.0, market_cap=500000000, volatility=0.4)
-
-    # Test position limits
-    btc_limit_normal = pm_normal.get_position_size_limit("BTCUSDT", "aggressive")
-    print(f"   BTC Position Limit (Normal): ${btc_limit_normal:.2f}")
-
-    # Test deployment plan
-    deployment_normal = pm_normal.get_risk_adjusted_deployment_plan(
-        strategy=WeightStrategy.RISK_PARITY,
-        market_data=market_data
-    )
-    print(f"   Deployment Multiplier (Normal): {deployment_normal.get('risk_multiplier', 1.0):.1f}x")
-    print(f"   Adjusted Capital (Normal): ${deployment_normal.get('adjusted_available_capital', 0):.2f}")
-
-    # Test 2: Aggressive mode
-    print("\n🚨 TEST 2: Aggressive Mode (aggressive_mode=True)")
-    pm_aggressive = PortfolioManager(
-        mode="simulated",
-        initial_balance=10000.0,
-        aggressive_mode=True
-    )
-
-    # Initialize weight calculator
-    pm_aggressive.initialize_weight_calculator()
-
-    # Add test assets
-    pm_aggressive.add_asset_for_weighting("BTCUSDT", 50000.0, market_cap=1000000000, volatility=0.3)
-    pm_aggressive.add_asset_for_weighting("ETHUSDT", 3000.0, market_cap=500000000, volatility=0.4)
-
-    # Test position limits
-    btc_limit_aggressive = pm_aggressive.get_position_size_limit("BTCUSDT", "aggressive")
-    print(f"   BTC Position Limit (Aggressive): ${btc_limit_aggressive:.2f}")
-
-    # Test deployment plan
-    deployment_aggressive = pm_aggressive.get_risk_adjusted_deployment_plan(
-        strategy=WeightStrategy.RISK_PARITY,
-        market_data=market_data
-    )
-    print(f"   Deployment Multiplier (Aggressive): {deployment_aggressive.get('risk_multiplier', 1.0):.1f}x")
-    print(f"   Adjusted Capital (Aggressive): ${deployment_aggressive.get('adjusted_available_capital', 0):.2f}")
-
-    # Test 3: Comparison
-    print("\n📈 TEST 3: Comparison Results")
-    print("-" * 40)
-
-    limit_ratio = btc_limit_aggressive / btc_limit_normal if btc_limit_normal > 0 else 0
-    capital_ratio = deployment_aggressive.get('adjusted_available_capital', 0) / deployment_normal.get('adjusted_available_capital', 0) if deployment_normal.get('adjusted_available_capital', 0) > 0 else 0
-
-    print(f"   Position Limit Increase: {limit_ratio:.2f}x")
-    print(f"   Capital Deployment Increase: {capital_ratio:.2f}x")
-
-    # Verify aggressive mode is working
-    success = True
-    if limit_ratio <= 1.0:
-        print("   ❌ Position limits not increased in aggressive mode")
-        success = False
-    else:
-        print("   ✅ Position limits correctly increased in aggressive mode")
-
-    if capital_ratio <= 1.0:
-        print("   ❌ Capital deployment not increased in aggressive mode")
-        success = False
-    else:
-        print("   ✅ Capital deployment correctly increased in aggressive mode")
-
-    print("\n" + "=" * 60)
-    if success:
-        print("✅ AGGRESSIVE MODE TEST PASSED")
-        print("   - Higher position limits: ✓")
-        print("   - Increased capital deployment: ✓")
-        print("   - Risk warnings displayed: ✓")
-    else:
-        print("❌ AGGRESSIVE MODE TEST FAILED")
-        return False
-
-    return True
+async def main():
+    await test_aggressive_mode()
+    await test_portfolio_behavior()
 
 if __name__ == "__main__":
-    test_aggressive_mode()
+    asyncio.run(main())

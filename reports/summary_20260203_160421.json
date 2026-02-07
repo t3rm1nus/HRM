@@ -1,0 +1,15 @@
+{
+  "analysis_period": {
+    "start": "2026-01-27T16:04:18.884457",
+    "end": "2026-02-03T16:04:21.048964",
+    "days": 7
+  },
+  "totals": {
+    "signals_generated": 49980,
+    "actionable_signals": 18376,
+    "hold_signals": 31604,
+    "orders_executed": 0,
+    "errors": 0
+  },
+  "execution_rate": 0.0
+}

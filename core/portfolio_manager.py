@@ -120,79 +120,192 @@ class PortfolioManager:
 
     async def _sync_from_client_async(self):
         """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión asíncrona"""
-        # Si es modo paper, ignorar sincronización con Binance
+        # Si es modo paper, sincronizar con SimulatedExchangeClient
         if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
-            logger.debug("🧪 Paper mode: Skipping Binance portfolio synchronization")
-            return False
-            
-        try:
-            if hasattr(self.client, 'get_balances'):
-                balances = self.client.get_balances()
-            elif hasattr(self.client, 'get_account_balances'):
-                balances = await self.client.get_account_balances()
-            else:
-                logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+            logger.debug("🧪 Paper mode: Synchronizing with SimulatedExchangeClient")
+            try:
+                if hasattr(self.client, 'get_account_balances'):
+                    import inspect
+                    if inspect.iscoroutinefunction(self.client.get_account_balances):
+                        balances = await self.client.get_account_balances()
+                    else:
+                        balances = self.client.get_account_balances()
+                elif hasattr(self.client, 'get_balance'):
+                    import inspect
+                    if inspect.iscoroutinefunction(self.client.get_balance):
+                        current_btc = await self.client.get_balance("BTC")
+                        current_eth = await self.client.get_balance("ETH")
+                        current_usdt = await self.client.get_balance("USDT")
+                        balances = {
+                            "BTC": current_btc,
+                            "ETH": current_eth,
+                            "USDT": current_usdt
+                        }
+                    else:
+                        balances = {
+                            "BTC": self.client.get_balance("BTC"),
+                            "ETH": self.client.get_balance("ETH"),
+                            "USDT": self.client.get_balance("USDT")
+                        }
+                else:
+                    logger.warning("⚠️ Simulated client has no get_account_balances or get_balance method")
+                    return False
+
+                logger.debug(f"🔄 Sincronizando portfolio desde SimulatedExchangeClient: {balances}")
+                
+                # Map client balances to portfolio structure
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
+
+                return True
+
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando portfolio desde SimulatedExchangeClient: {e}")
                 return False
+        else:
+            # Modo live: sincronizar con BinanceClient
+            try:
+                if hasattr(self.client, 'get_balances'):
+                    balances = self.client.get_balances()
+                elif hasattr(self.client, 'get_account_balances'):
+                    balances = await self.client.get_account_balances()
+                else:
+                    logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+                    return False
 
-            logger.debug(f"🔄 Sincronizando portfolio desde cliente: {balances}")
-            
-            # Map client balances to portfolio structure
-            self.portfolio = {
-                "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                "USDT": {"free": balances.get("USDT", self.initial_balance)},
-                "total": self.initial_balance,
-                "peak_value": self.initial_balance,
-                "total_fees": 0.0,
-            }
+                logger.debug(f"🔄 Sincronizando portfolio desde BinanceClient: {balances}")
+                
+                # Map client balances to portfolio structure
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
 
-            return True
+                return True
 
-        except Exception as e:
-            logger.error(f"❌ Error sincronizando portfolio desde cliente: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando portfolio desde BinanceClient: {e}")
+                return False
 
     def _sync_from_client(self):
         """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión sincrónica"""
-        # Si es modo paper, ignorar sincronización con Binance
+        # Si es modo paper, sincronizar con SimulatedExchangeClient
         if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
-            logger.debug("🧪 Paper mode: Skipping Binance portfolio synchronization")
-            return False
-            
-        try:
-            if hasattr(self.client, 'get_balances'):
-                balances = self.client.get_balances()
-            elif hasattr(self.client, 'get_account_balances'):
-                import asyncio
-                try:
-                    if not asyncio.get_running_loop():
-                        balances = asyncio.run(self.client.get_account_balances())
+            logger.debug("🧪 Paper mode: Synchronizing with SimulatedExchangeClient")
+            try:
+                if hasattr(self.client, 'get_account_balances'):
+                    import inspect
+                    if inspect.iscoroutinefunction(self.client.get_account_balances):
+                        import asyncio
+                        try:
+                            if not asyncio.get_running_loop():
+                                balances = asyncio.run(self.client.get_account_balances())
+                            else:
+                                logger.warning("⚠️ Cannot use sync sync from async context")
+                                return False
+                        except RuntimeError:
+                            balances = asyncio.run(self.client.get_account_balances())
                     else:
-                        logger.warning("⚠️ Cannot use sync sync from async context")
-                        return False
-                except RuntimeError:
-                    balances = asyncio.run(self.client.get_account_balances())
-            else:
-                logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+                        balances = self.client.get_account_balances()
+                elif hasattr(self.client, 'get_balance'):
+                    import inspect
+                    if inspect.iscoroutinefunction(self.client.get_balance):
+                        import asyncio
+                        try:
+                            if not asyncio.get_running_loop():
+                                current_btc = asyncio.run(self.client.get_balance("BTC"))
+                                current_eth = asyncio.run(self.client.get_balance("ETH"))
+                                current_usdt = asyncio.run(self.client.get_balance("USDT"))
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                            else:
+                                logger.warning("⚠️ Cannot use sync sync from async context")
+                                return False
+                        except RuntimeError:
+                            current_btc = asyncio.run(self.client.get_balance("BTC"))
+                            current_eth = asyncio.run(self.client.get_balance("ETH"))
+                            current_usdt = asyncio.run(self.client.get_balance("USDT"))
+                            balances = {
+                                "BTC": current_btc,
+                                "ETH": current_eth,
+                                "USDT": current_usdt
+                            }
+                    else:
+                        balances = {
+                            "BTC": self.client.get_balance("BTC"),
+                            "ETH": self.client.get_balance("ETH"),
+                            "USDT": self.client.get_balance("USDT")
+                        }
+                else:
+                    logger.warning("⚠️ Simulated client has no get_account_balances or get_balance method")
+                    return False
+
+                logger.debug(f"🔄 Sincronizando portfolio desde SimulatedExchangeClient: {balances}")
+                
+                # Map client balances to portfolio structure
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
+
+                return True
+
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando portfolio desde SimulatedExchangeClient: {e}")
                 return False
+        else:
+            # Modo live: sincronizar con BinanceClient
+            try:
+                if hasattr(self.client, 'get_balances'):
+                    balances = self.client.get_balances()
+                elif hasattr(self.client, 'get_account_balances'):
+                    import asyncio
+                    try:
+                        if not asyncio.get_running_loop():
+                            balances = asyncio.run(self.client.get_account_balances())
+                        else:
+                            logger.warning("⚠️ Cannot use sync sync from async context")
+                            return False
+                    except RuntimeError:
+                        balances = asyncio.run(self.client.get_account_balances())
+                else:
+                    logger.warning("⚠️ Client has no get_balances or get_account_balances method")
+                    return False
 
-            logger.debug(f"🔄 Sincronizando portfolio desde cliente: {balances}")
-            
-            # Map client balances to portfolio structure
-            self.portfolio = {
-                "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                "USDT": {"free": balances.get("USDT", self.initial_balance)},
-                "total": self.initial_balance,
-                "peak_value": self.initial_balance,
-                "total_fees": 0.0,
-            }
+                logger.debug(f"🔄 Sincronizando portfolio desde BinanceClient: {balances}")
+                
+                # Map client balances to portfolio structure
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
 
-            return True
+                return True
 
-        except Exception as e:
-            logger.error(f"❌ Error sincronizando portfolio desde cliente: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"❌ Error sincronizando portfolio desde BinanceClient: {e}")
+                return False
 
     def _init_portfolio_from_client(self):
         """Initialize portfolio from client balances (single source of truth)"""
@@ -204,28 +317,119 @@ class PortfolioManager:
             if not self._sync_from_client():
                 self._init_portfolio()
 
-    def _init_portfolio_from_simulated_client(self):
-        """Initialize portfolio from simulated client balances to maintain state between cycles"""
+    async def _init_portfolio_from_simulated_client_async(self):
+        """Initialize portfolio from simulated client balances to maintain state between cycles - async version"""
         if self.client:
             try:
-                # Try to get balances from SimulatedExchangeClient (uses get_account_balances async)
+                # Try to get balances from SimulatedExchangeClient (check if async)
+                import inspect
                 if hasattr(self.client, 'get_account_balances'):
-                    # Check if we're in an async context
-                    import asyncio
-                    try:
-                        # If in async context, use the already running loop
-                        loop = asyncio.get_running_loop()
-                        balances = loop.run_until_complete(self.client.get_account_balances())
-                    except RuntimeError:
-                        # If not in async context, create a new loop
-                        balances = asyncio.run(self.client.get_account_balances())
+                    if inspect.iscoroutinefunction(self.client.get_account_balances):
+                        balances = await self.client.get_account_balances()
+                    else:
+                        balances = self.client.get_account_balances()
                 elif hasattr(self.client, 'get_balance'):
                     # Fallback if only single balance method available
-                    balances = {
-                        "BTC": self.client.get_balance("BTC"),
-                        "ETH": self.client.get_balance("ETH"),
-                        "USDT": self.client.get_balance("USDT")
-                    }
+                    if inspect.iscoroutinefunction(self.client.get_balance):
+                        current_btc = await self.client.get_balance("BTC")
+                        current_eth = await self.client.get_balance("ETH")
+                        current_usdt = await self.client.get_balance("USDT")
+                        balances = {
+                            "BTC": current_btc,
+                            "ETH": current_eth,
+                            "USDT": current_usdt
+                        }
+                    else:
+                        balances = {
+                            "BTC": self.client.get_balance("BTC"),
+                            "ETH": self.client.get_balance("ETH"),
+                            "USDT": self.client.get_balance("USDT")
+                        }
+                else:
+                    raise AttributeError("Simulated client has no get_account_balances or get_balance method")
+                
+                logger.debug(f"📊 Paper mode: Using simulated client balances: {balances}")
+                
+                # Convert client balances to portfolio structure (using BTC/ETH as base assets)
+                self.portfolio = {
+                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
+                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
+                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "total": self.initial_balance,
+                    "peak_value": self.initial_balance,
+                    "total_fees": 0.0,
+                }
+                
+                # Calculate initial total value using simulated client's prices
+                if hasattr(self.client, 'get_market_price'):
+                    btc_price = self.client.get_market_price("BTCUSDT")
+                    eth_price = self.client.get_market_price("ETHUSDT")
+                    self.portfolio["total"] = (
+                        self.portfolio["USDT"]["free"] +
+                        self.portfolio["BTCUSDT"]["position"] * btc_price +
+                        self.portfolio["ETHUSDT"]["position"] * eth_price
+                    )
+                    self.portfolio["peak_value"] = self.portfolio["total"]
+                
+                self.peak_value = self.portfolio["peak_value"]
+                self.total_fees = 0.0
+                
+                logger.info(f"🎯 Portfolio initialized from simulated client ({self.portfolio['total']:.2f} USDT)")
+                return
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get simulated client balances: {e}, using fallback")
+        
+        # Fallback if simulated client not available or failed
+        self._init_portfolio()
+
+    def _init_portfolio_from_simulated_client(self):
+        """Initialize portfolio from simulated client balances to maintain state between cycles - sync version"""
+        if self.client:
+            try:
+                # Try to get balances from SimulatedExchangeClient (check if async)
+                import inspect
+                if hasattr(self.client, 'get_account_balances'):
+                    if inspect.iscoroutinefunction(self.client.get_account_balances):
+                        import asyncio
+                        try:
+                            if not asyncio.get_running_loop():
+                                balances = asyncio.run(self.client.get_account_balances())
+                            else:
+                                # If we're already in an async loop, we should have used initialize_async instead
+                                logger.warning("⚠️ Should use initialize_async instead of sync init in async context")
+                                raise RuntimeError("Should use initialize_async instead of sync init in async context")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Cannot get async balances: {e}")
+                            raise RuntimeError(f"Cannot get async balances: {e}")
+                    else:
+                        balances = self.client.get_account_balances()
+                elif hasattr(self.client, 'get_balance'):
+                    # Fallback if only single balance method available
+                    if inspect.iscoroutinefunction(self.client.get_balance):
+                        import asyncio
+                        try:
+                            if not asyncio.get_running_loop():
+                                current_btc = asyncio.run(self.client.get_balance("BTC"))
+                                current_eth = asyncio.run(self.client.get_balance("ETH"))
+                                current_usdt = asyncio.run(self.client.get_balance("USDT"))
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                            else:
+                                # If we're already in an async loop, we should have used initialize_async instead
+                                logger.warning("⚠️ Should use initialize_async instead of sync init in async context")
+                                raise RuntimeError("Should use initialize_async instead of sync init in async context")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Cannot get async balance: {e}")
+                            raise RuntimeError(f"Cannot get async balance: {e}")
+                    else:
+                        balances = {
+                            "BTC": self.client.get_balance("BTC"),
+                            "ETH": self.client.get_balance("ETH"),
+                            "USDT": self.client.get_balance("USDT")
+                        }
                 else:
                     raise AttributeError("Simulated client has no get_account_balances or get_balance method")
                 
@@ -278,6 +482,15 @@ class PortfolioManager:
         self.total_fees = 0.0
 
         logger.info(f"🎯 Portfolio inicializado limpio ({self.initial_balance} USDT)")
+
+    async def initialize_async(self):
+        """Initialize portfolio manager asynchronously - use this instead of __init__ in async contexts"""
+        if self.client:
+            if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+                await self._init_portfolio_from_simulated_client_async()
+            else:
+                if not await self._sync_from_client_async():
+                    self._init_portfolio()
 
     def reset_portfolio(self):
         """Reset portfolio to initial state - ONLY call this explicitly"""
@@ -391,11 +604,25 @@ class PortfolioManager:
                     await self.client.create_order(symbol, side, qty, price)
                 
                 # Sync portfolio from SimulatedExchangeClient (single source of truth)
-                balances = await self.client.get_account_balances()
+                import inspect
+                if inspect.iscoroutinefunction(self.client.get_account_balances):
+                    balances = await self.client.get_account_balances()
+                else:
+                    balances = self.client.get_account_balances()
+                    
+                # Validate balances after order execution
+                current_btc = balances.get("BTC", 0.0)
+                current_eth = balances.get("ETH", 0.0)
+                current_usdt = balances.get("USDT", 0.0)
+                
+                if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
+                    logger.critical("🚨 FATAL: Balances volvieron a cero después de ejecutar órdenes - deteniendo sistema")
+                    raise RuntimeError("Balances cero después de ejecución de órdenes")
+                
                 self.portfolio = {
-                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
+                    "BTCUSDT": {"position": current_btc, "free": current_btc},
+                    "ETHUSDT": {"position": current_eth, "free": current_eth},
+                    "USDT": {"free": current_usdt},
                     "total": self.initial_balance,
                     "peak_value": self.initial_balance,
                     "total_fees": 0.0,

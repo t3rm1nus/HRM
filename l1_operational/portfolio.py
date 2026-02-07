@@ -78,16 +78,11 @@ class PortfolioManager:
 async def get_available_balance(symbol: str, client: SimulatedExchangeClient = None) -> Tuple[float, float]:
     """
     Función de compatibilidad para obtener balances.
-    Si no se proporciona cliente, crea uno con balances por defecto.
+    Requiere un cliente pre-inicializado.
     """
     if client is None:
-        # Crear cliente simulado con balances por defecto
-        client = SimulatedExchangeClient(
-            balances={"BTC": 0.015, "ETH": 0.38, "USDT": 3000},
-            fee=0.001,
-            slippage=0.0005
-        )
-        logger.info("⚠️ Creando SimulatedExchangeClient por defecto para get_available_balance()")
+        logger.critical("🚨 FATAL: get_available_balance requires a pre-initialized SimulatedExchangeClient")
+        raise RuntimeError("get_available_balance requires a pre-initialized SimulatedExchangeClient")
     
     portfolio_manager = PortfolioManager(client, mode="simulated")
     return await portfolio_manager.get_available_balance(symbol)

@@ -179,7 +179,12 @@ class PaperExchangeAdapter(ExchangeAdapter):
                 self._paper_balances["USDT"] -= cost
                 self._paper_balances[symbol.replace("USDT", "")] += quantity
             else:
-                logger.warning("⚠️ Insufficient USDT for paper buy order")
+                # Calculate maximum affordable quantity
+                max_quantity = self._paper_balances["USDT"] / price
+                logger.warning(f"🧪 PAPER MODE: Adjusting buy quantity - requested {quantity:.6f} exceeds available USDT, using {max_quantity:.6f}")
+                if max_quantity > 0:
+                    self._paper_balances["USDT"] -= max_quantity * price
+                    self._paper_balances[symbol.replace("USDT", "")] += max_quantity
                 
         elif side.upper() == "SELL":
             # Sell: reduce asset, increase USDT
@@ -189,7 +194,11 @@ class PaperExchangeAdapter(ExchangeAdapter):
                 self._paper_balances[asset] -= quantity
                 self._paper_balances["USDT"] += proceeds
             else:
-                logger.warning(f"⚠️ Insufficient {asset} for paper sell order")
+                logger.warning(f"🧪 PAPER MODE: Adjusting sell quantity - requested {quantity:.6f} exceeds available {asset}, using {self._paper_balances[asset]:.6f}")
+                if self._paper_balances[asset] > 0:
+                    proceeds = self._paper_balances[asset] * price
+                    self._paper_balances[asset] = 0.0
+                    self._paper_balances["USDT"] += proceeds
 
     async def cancel_order(self, order_id: str) -> bool:
         """

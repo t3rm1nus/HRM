@@ -1,6 +1,7 @@
 # core/config.py - Environment Configuration Management
 import os
 import json
+from datetime import datetime
 from typing import Dict, Any
 from core.logging import logger
 
@@ -37,6 +38,16 @@ class EnvironmentConfig:
             "MAX_POSITION_SIZE": 0.05,  # 5% max position per symbol
             "MIN_ORDER_VALUE": 1.0,     # Minimum order value in USDT
             "RISK_PER_TRADE": 0.02,    # 2% risk per trade
+            "PAPER_MODE": True,        # Paper mode enabled by default
+            "BOOTSTRAP_ENABLED": True,  # Bootstrap functionality enabled by default
+            "BOOTSTRAP_MIN_EXPOSURE": 0.10,  # Minimum 10% exposure for initial bootstrap
+            "BOOTSTRAP_MAX_EXPOSURE": 0.30,  # Maximum 30% exposure for initial bootstrap
+            "BOOTSTRAP_MIN_ORDER_VALUE": 10.0,  # Minimum $10 per bootstrap order
+            "SIMULATED_INITIAL_BALANCES": {
+                "BTC": 0.01549,
+                "ETH": 0.385,
+                "USDT": 3000.0
+            }
         }
 
         # Environment-specific overrides
@@ -123,6 +134,10 @@ class EnvironmentConfig:
         # Slippage override
         if slippage := os.getenv("HRM_ENABLE_SLIPPAGE"):
             env_config["ENABLE_SLIPPAGE"] = slippage.lower() in ("true", "1", "yes")
+
+        # Paper mode override
+        if paper_mode := os.getenv("HRM_PAPER_MODE"):
+            env_config["PAPER_MODE"] = paper_mode.lower() in ("true", "1", "yes")
 
         return env_config
 
@@ -229,6 +244,61 @@ SIGNAL_VERIFICATION_CONFIG = {
 }
 
 # ============================================================================
+# TEMPORARY AGGRESSIVE MODE CONFIG
+# ============================================================================
+TEMPORARY_AGGRESSIVE_MODE = False  # Default: False (conservative mode)
+TEMPORARY_AGGRESSIVE_MODE_START_TIME = None
+TEMPORARY_AGGRESSIVE_MODE_DURATION = 300  # 5 minutes in seconds
+TEMPORARY_AGGRESSIVE_MODE_CYCLES = None
+TEMPORARY_AGGRESSIVE_MODE_MAX_CYCLES = 100  # Maximum 100 cycles
+
+def enable_temporary_aggressive_mode(duration_seconds: int = 300, max_cycles: int = 100):
+    """Enable temporary aggressive mode with duration and cycle limits."""
+    import sys
+    module = sys.modules[__name__]
+    module.TEMPORARY_AGGRESSIVE_MODE = True
+    module.TEMPORARY_AGGRESSIVE_MODE_START_TIME = datetime.now()
+    module.TEMPORARY_AGGRESSIVE_MODE_CYCLES = 0
+    module.TEMPORARY_AGGRESSIVE_MODE_DURATION = duration_seconds
+    module.TEMPORARY_AGGRESSIVE_MODE_MAX_CYCLES = max_cycles
+    logger.warning(f"🔥 TEMPORARY AGGRESSIVE MODE ENABLED (duration: {duration_seconds}s, max cycles: {max_cycles})")
+
+def disable_temporary_aggressive_mode():
+    """Disable temporary aggressive mode."""
+    import sys
+    module = sys.modules[__name__]
+    module.TEMPORARY_AGGRESSIVE_MODE = False
+    module.TEMPORARY_AGGRESSIVE_MODE_START_TIME = None
+    module.TEMPORARY_AGGRESSIVE_MODE_CYCLES = None
+    logger.info("🧯 TEMPORARY AGGRESSIVE MODE DISABLED")
+
+def check_temporary_aggressive_mode():
+    """Check if temporary aggressive mode should be disabled (time or cycle limit reached)."""
+    import sys
+    module = sys.modules[__name__]
+    
+    if not module.TEMPORARY_AGGRESSIVE_MODE:
+        return False
+        
+    # Check time limit
+    if module.TEMPORARY_AGGRESSIVE_MODE_START_TIME:
+        elapsed = (datetime.now() - module.TEMPORARY_AGGRESSIVE_MODE_START_TIME).total_seconds()
+        if elapsed >= module.TEMPORARY_AGGRESSIVE_MODE_DURATION:
+            logger.warning(f"⏰ TEMPORARY AGGRESSIVE MODE EXPIRED (time limit reached: {elapsed:.0f}s)")
+            disable_temporary_aggressive_mode()
+            return False
+    
+    # Check cycle limit
+    if module.TEMPORARY_AGGRESSIVE_MODE_CYCLES is not None:
+        if module.TEMPORARY_AGGRESSIVE_MODE_CYCLES >= module.TEMPORARY_AGGRESSIVE_MODE_MAX_CYCLES:
+            logger.warning(f"🔄 TEMPORARY AGGRESSIVE MODE EXPIRED (cycle limit reached: {module.TEMPORARY_AGGRESSIVE_MODE_CYCLES})")
+            disable_temporary_aggressive_mode()
+            return False
+        module.TEMPORARY_AGGRESSIVE_MODE_CYCLES += 1
+    
+    return True
+
+# ============================================================================
 # SIGNAL COMPOSER CONFIG - BALANCED WEIGHTS
 # ============================================================================
 SIGNAL_COMPOSER_CONFIG = {
@@ -240,6 +310,12 @@ SIGNAL_COMPOSER_CONFIG = {
 
 # Logging for confidence adjustments
 logger.info(f"✅ Confidence thresholds adjusted: min={MIN_SIGNAL_CONFIDENCE}, L2={MIN_L2_CONFIDENCE}")
+
+# Log temporary aggressive mode status initially
+if TEMPORARY_AGGRESSIVE_MODE:
+    logger.warning("🔥 TEMPORARY AGGRESSIVE MODE ENABLED")
+else:
+    logger.debug("🧯 TEMPORARY AGGRESSIVE MODE DISABLED")
 
 # Global configuration instance
 _config_instance = None

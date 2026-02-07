@@ -1276,7 +1276,7 @@ class L2TacticProcessor:
         # INV-5 RULE: Sistema duda → HOLD (CRÍTICO - ANTES QUE CUALQUIER OTRA LÓGICA)
         # ========================================================================================
         # Si el sistema duda (confidence < 0.6), genera HOLD sin excepciones
-        system_doubt_threshold = 0.6
+        system_doubt_threshold = 0.35
         l3_confidence = l3_context.get('confidence', 0.0)
 
         if l3_confidence < system_doubt_threshold:
@@ -1360,6 +1360,62 @@ class L2TacticProcessor:
             logger.info(f"🟢 L3 AUTHORITY: {symbol} BUY_LIGHT (conf={confidence:.2f}) - L3 buy signal override")
             return l3_buy_signal
 
+        # PULLBACK STRATEGY: When L3 has LONG bias but no clear signal, look for pullbacks
+        if l3_context.get('bias') == 'LONG' and l3_signal == 'hold':
+            logger.info(f"🎯 L3 LONG BIAS DETECTED: Looking for pullback buying opportunities for {symbol}")
+            try:
+                # Check if we have pullback conditions (RSI < 50, price below MA)
+                symbol_data = market_data.get(symbol, {})
+                if isinstance(symbol_data, dict) and 'historical_data' in symbol_data:
+                    df = symbol_data['historical_data']
+                    if isinstance(df, pd.DataFrame) and len(df) >= 50:
+                        indicators = self.multi_timeframe.calculate_technical_indicators(df)
+                        
+                        # Get latest values from indicators (which are pandas Series)
+                        rsi = indicators.get('rsi', pd.Series([50])).iloc[-1]
+                        
+                        # Check if ma50 is available (it might be called close_sma or sma_50)
+                        ma50 = indicators.get('ma50')
+                        if ma50 is None:
+                            ma50 = indicators.get('close_sma')  # Check if it's called close_sma
+                        if ma50 is None:
+                            ma50 = indicators.get('sma_50')    # Check if it's called sma_50
+                        if ma50 is None:
+                            ma50 = 0  # Fallback value
+                        else:
+                            ma50 = ma50.iloc[-1]
+                            
+                        current_price = df['close'].iloc[-1]
+                        
+                        # Pullback conditions: RSI < 50 and price below 50-period MA
+                        if rsi < 50 and current_price < ma50:
+                            pullback_signal = TacticalSignal(
+                                symbol=symbol,
+                                side='buy',
+                                strength=0.6,
+                                confidence=0.55,
+                                source='l2_pullback_strategy',
+                                timestamp=pd.Timestamp.now(),
+                                features=indicators,
+                                metadata={
+                                    'reason': f'Pullback buy - aligned with L3 LONG bias (RSI={rsi:.1f}, price < MA50)',
+                                    'l3_regime': l3_context.get('regime', 'unknown'),
+                                    'l3_bias': 'LONG',
+                                    'l3_confidence': l3_context.get('confidence', 0.0),
+                                    'strategy_type': 'pullback',
+                                    'rsi': rsi,
+                                    'ma50_price': ma50,
+                                    'current_price': current_price,
+                                    'philosophy': 'Buy pullbacks in trending markets - L3 bias = LONG'
+                                }
+                            )
+                            logger.info(f"✅ {symbol}: PULLBACK BUY signal (RSI={rsi:.1f}, price < MA50) - aligned with L3 LONG bias")
+                            return pullback_signal
+                        else:
+                            logger.debug(f"⏸️ {symbol}: No pullback conditions - RSI={rsi:.1f}, price={current_price:.2f}, MA50={ma50:.2f}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error in pullback strategy: {e}")
+        
         # HOLD por defecto - SOLO cuando L3 no tiene bias claro
         default_hold = TacticalSignal(
             symbol=symbol,

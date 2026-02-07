@@ -35,25 +35,30 @@ class SimulatedExchangeClient:
         Inicializa el cliente simulado.
         
         Args:
-            initial_balances: Balances iniciales para cada activo
+            initial_balances: Balances iniciales para cada activo (REQUERIDO)
             fee: Comisión por trade (0.001 = 0.1%)
             slippage: Slippage por trade (0.0005 = 0.05%)
+        
+        Raises:
+            RuntimeError: Si se intenta inicializar sin balances iniciales válidos
         """
         if SimulatedExchangeClient._initialized:
             logger.debug("🎮 SimulatedExchangeClient already initialized - maintaining state")
-            # Si se proporcionan balances iniciales diferentes, actualizar (solo para pruebas)
-            if initial_balances and initial_balances != self.initial_balances:
-                logger.warning("⚠️ SimulatedExchangeClient already initialized - ignoring new initial balances")
+            # Si ya está inicializado, no hacer nada más
             return
         
-        SimulatedExchangeClient._initialized = True
+        # Validar balances iniciales (REQUERIDOS)
+        if initial_balances is None or not isinstance(initial_balances, dict) or len(initial_balances) == 0:
+            logger.critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized without valid initial_balances")
         
-        if initial_balances is None:
-            initial_balances = {
-                "BTC": 0.01549,
-                "ETH": 0.385,
-                "USDT": 3000.0
-            }
+        # Validar que los balances sean positivos
+        invalid_balances = [asset for asset, balance in initial_balances.items() if balance <= 0]
+        if invalid_balances:
+            logger.critical(f"🚨 FATAL: SimulatedExchangeClient balances must be positive. Invalid: {invalid_balances}", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized with non-positive balances")
+        
+        SimulatedExchangeClient._initialized = True
         
         self.initial_balances = initial_balances.copy()
         self.balances: Dict[str, float] = initial_balances.copy()
@@ -74,6 +79,30 @@ class SimulatedExchangeClient:
         logger.info(f"   Comisión: {fee*100:.2f}%")
         logger.info(f"   Slippage: {slippage*100:.2f}%")
         logger.info(f"   SIM_INIT_ONCE=True")
+
+    @classmethod
+    def initialize_once(cls, initial_balances: Dict[str, float],
+                       fee: float = 0.001,
+                       slippage: float = 0.0005):
+        """
+        Inicializa el SimulatedExchangeClient solo una vez por proceso.
+        
+        Args:
+            initial_balances: Balances iniciales para cada activo (REQUERIDO)
+            fee: Comisión por trade (0.001 = 0.1%)
+            slippage: Slippage por trade (0.0005 = 0.05%)
+        
+        Returns:
+            SimulatedExchangeClient: Instancia del cliente simulado
+        
+        Raises:
+            RuntimeError: Si se intenta inicializar sin balances o más de una vez
+        """
+        if cls._initialized:
+            logger.warning("⚠️ SimulatedExchangeClient already initialized - returning existing instance")
+            return cls._instance
+        
+        return cls(initial_balances, fee, slippage)
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -247,6 +276,10 @@ class SimulatedExchangeClient:
     # ------------------------------------------------------------------
 
     async def get_account_balances(self) -> Dict[str, float]:
+        """Devuelve los balances actuales - compatibilidad con BinanceClient"""
+        if not hasattr(self, 'balances') or not self.balances:
+            logger.warning("⚠️ SimulatedExchangeClient balances not initialized, returning initial balances")
+            return self.initial_balances.copy()
         return self.get_balances()
 
     async def place_order(
@@ -268,20 +301,38 @@ class SimulatedExchangeClient:
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
         return []
     
+    def force_reset(self, initial_balances: Dict[str, float] = None):
+        """Force reset the client with new initial balances"""
+        if initial_balances:
+            self.balances = initial_balances.copy()
+            self.initial_balances = initial_balances.copy()
+            self.trades.clear()
+            self.order_history.clear()
+            self._trade_id_counter = 1
+            logger.info(f"🔄 SimulatedExchangeClient forcefully reset with balances: {self.balances}")
+        else:
+            logger.critical("🚨 FATAL: force_reset requires initial_balances")
+            raise RuntimeError("force_reset requires initial_balances")
+    
     @classmethod
-    def force_reset(cls, initial_balances: Dict[str, float] = None):
-        """Force reset only for testing purposes - should NOT be used in production"""
+    def force_reset_class(cls, initial_balances: Dict[str, float] = None):
+        """Force reset at class level - should be used only for testing"""
         if cls._instance is not None:
             cls._initialized = False
             if initial_balances:
                 cls._instance.__init__(initial_balances)
             else:
-                cls._instance.__init__()
+                logger.critical("🚨 FATAL: force_reset requires initial_balances")
+                raise RuntimeError("force_reset requires initial_balances")
             logger.warning("⚠️ SimulatedExchangeClient forcefully reset - testing only")
         else:
             logger.warning("⚠️ SimulatedExchangeClient not initialized - cannot reset")
             
     def reset(self):
-        """Reinicia el cliente a su estado inicial - PROHIBIDO en paper mode"""
-        logger.critical("🚨 FATAL: Attempt to reset SimulatedExchangeClient state - this should never happen in paper mode")
-        raise RuntimeError("Resetting SimulatedExchangeClient state is prohibited in paper mode")
+        """Reinicia el cliente a su estado inicial"""
+        self.balances = self.initial_balances.copy()
+        self.trades.clear()
+        self.order_history.clear()
+        self._trade_id_counter = 1
+        logger.info("🔄 SimulatedExchangeClient reiniciado a estado inicial")
+        logger.info(f"   Balances: {self.balances}")

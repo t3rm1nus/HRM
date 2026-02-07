@@ -350,16 +350,31 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                 'setup_type': 'mean_reversion'
             })
         else:
-            # RULE 1: HOLD strategic = complete L2 blockade (no "relax dominance")
+            # RULE 1: HOLD strategic con asset allocation = permitir rebalance pero bloquear señales L2
             if regime_signal == 'hold':
-                l3_dominance_state.update({
-                    'allow_l2_signals': False,
-                    'strategic_hold_active': True,
-                    'strategic_hold_reason': f"Strategic HOLD active - L2 signals blocked",
-                    'strategic_hold_type': "HOLD_L3_STRATEGIC",
-                    'l2_signals_blocked': True
-                })
-                logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - blocking all L2 signals (no relax dominance)")
+                # Si hay asset allocation, permitir rebalance pero bloquear señales L2
+                if portfolio and sum(portfolio.values()) > 0:
+                    l3_dominance_state.update({
+                        'allow_l2_signals': False,
+                        'strategic_hold_active': True,
+                        'strategic_hold_reason': f"Strategic HOLD active but asset allocation present - allowing rebalance",
+                        'strategic_hold_type': "HOLD_L3_STRATEGIC_ALLOCATION",
+                        'l2_signals_blocked': False,  # Permitir rebalance
+                        'block_autorebalancer': False,  # Permitir AutoRebalancer
+                        'freeze_positions': False  # No congelar posiciones
+                    })
+                    logger.info(f"🎯 STRATEGIC HOLD CON ALLOCATION: Permitiendo rebalance pero bloqueando señales L2")
+                else:
+                    l3_dominance_state.update({
+                        'allow_l2_signals': False,
+                        'strategic_hold_active': True,
+                        'strategic_hold_reason': f"Strategic HOLD active - L2 signals blocked",
+                        'strategic_hold_type': "HOLD_L3_STRATEGIC",
+                        'l2_signals_blocked': True,
+                        'block_autorebalancer': True,
+                        'freeze_positions': True
+                    })
+                    logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - blocking all L2 signals and rebalance")
 
             # RULE 2: WEAK SIGNALS BLOCKED - Apply WEAK_THRESHOLD logic
             elif regime_confidence < WEAK_THRESHOLD:
@@ -370,7 +385,9 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                     'strategic_hold_reason': f"WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} threshold",
                     'strategic_hold_type': "HOLD_L3_WEAK_SIGNALS_BLOCKED",
                     'capital_preservation_mode': True,
-                    'l2_signals_blocked': True
+                    'l2_signals_blocked': True,
+                    'block_autorebalancer': True,
+                    'freeze_positions': True
                 })
                 regime_signal = 'hold'
                 logger.warning(f"🚨 WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} - FORCING HOLD")
@@ -562,7 +579,7 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     macro = inputs.get("macro", {})
 
     # ========================================================================================
-    # EXPOSURE MANAGEMENT
+    # EXPOSURE MANAGEMENT - FIX: Provide default exposure decisions when data is insufficient
     # ========================================================================================
     exposure_decisions = {}
     if portfolio_state and market_data:
@@ -571,6 +588,33 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         logger.info("📊 Decisiones de exposición calculadas exitosamente")
     else:
         logger.warning("⚠️ Datos insuficientes para gestión de exposición - usando configuración por defecto")
+        # FIX: Provide default exposure decisions instead of empty dict
+        # Default allocations based on regime
+        if regime.lower() == "bear":
+            target_allocations = {'BTCUSDT': 0.20, 'ETHUSDT': 0.20, 'USDT': 0.60}
+        elif regime.lower() == "bull":
+            target_allocations = {'BTCUSDT': 0.60, 'ETHUSDT': 0.30, 'USDT': 0.10}
+        else:
+            target_allocations = {'BTCUSDT': 0.50, 'ETHUSDT': 0.30, 'USDT': 0.20}
+        
+        # Create default exposure decisions
+        exposure_decisions = {
+            'BTCUSDT': {
+                'action': 'hold',
+                'target_allocation': target_allocations['BTCUSDT'],
+                'reason': 'Default allocation - insufficient data'
+            },
+            'ETHUSDT': {
+                'action': 'hold',
+                'target_allocation': target_allocations['ETHUSDT'],
+                'reason': 'Default allocation - insufficient data'
+            },
+            'USDT': {
+                'action': 'hold',
+                'target_allocation': target_allocations['USDT'],
+                'reason': 'Default allocation - insufficient data'
+            }
+        }
 
     # ========================================================================================
     # CALIBRATED EXPOSURE GUIDELINES
@@ -650,8 +694,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         "setup_detected": setup_type is not None,
         "setup_type": setup_type,
         "setup_active": setup_active,  # L2 bridge: explicit setup_active flag
-        "bias": regime_signal,  # L2 bridge: directional bias from regime
-        "allow_l2_signals": allow_l2_signal or (setup_type is not None),
+        "bias": "LONG" if (regime == "TRENDING" or regime == "bull") and regime_confidence > 0.5 else regime_signal,  # L3 bias instead of direct signal
+        "allow_l2_signals": allow_l2_signal or (setup_type is not None) or ((regime == "TRENDING" or regime == "bull") and regime_confidence > 0.5),
         "strategic_hold_active": l3_dominance_state.get("strategic_hold_active", False),
         "sentiment_score": sentiment,
         "asset_allocation": portfolio,

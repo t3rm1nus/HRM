@@ -328,15 +328,17 @@ class PortfolioRebalancer:
             return result
 
     def _calculate_rebalance_trades(self, current_weights: Dict[str, float],
-                                  portfolio_value: float, market_data: Dict[str, Any]) -> List[RebalanceTrade]:
+                                  portfolio_value: float, market_data: Dict[str, Any],
+                                  available_usdt: float = None) -> List[RebalanceTrade]:
         """
         Calculate the trades needed to rebalance to target weights
-        with minimum position size protection
+        with minimum position size protection and USDT balance constraints
 
         Args:
             current_weights: Current portfolio weights
             portfolio_value: Current portfolio value
             market_data: Current market data
+            available_usdt: Available USDT balance for paper mode
 
         Returns:
             List of RebalanceTrade objects
@@ -344,7 +346,17 @@ class PortfolioRebalancer:
         try:
             trades = []
             min_position_value = portfolio_value * self.min_position_percentage
+            
+            # If available USDT not provided, estimate from current portfolio
+            if available_usdt is None:
+                available_usdt = portfolio_value * (1 - sum(current_weights.values()))
+            
+            logger.debug(f"📊 Rebalance: Available USDT for buys: ${available_usdt:.2f}")
 
+            # Calculate total buy value needed
+            total_buy_value = 0.0
+            buy_trades = []
+            
             for symbol, target_weight in self.target_weights.items():
                 current_weight = current_weights.get(symbol, 0.0)
                 weight_diff = target_weight - current_weight
@@ -404,17 +416,128 @@ class PortfolioRebalancer:
                     priority=priority
                 )
 
-                trades.append(trade)
+                if side == 'buy':
+                    buy_trades.append(trade)
+                    total_buy_value += trade.estimated_value
+                else:
+                    trades.append(trade)  # Sell trades can be executed immediately
+
+            # Handle buy trades with USDT constraint
+            if buy_trades:
+                if total_buy_value > available_usdt:
+                    logger.warning(f"⚠️ Rebalance: Total buy value ${total_buy_value:.2f} exceeds available USDT ${available_usdt:.2f}")
+                    # Scale down buy trades proportionally
+                    scale_factor = available_usdt / total_buy_value
+                    logger.info(f"📊 Rebalance: Scaling buy trades by {scale_factor:.2%}")
+                    for trade in buy_trades:
+                        trade.quantity *= scale_factor
+                        trade.estimated_value *= scale_factor
+                        logger.debug(f"   {trade.symbol}: {trade.quantity:.6f} units (${trade.estimated_value:.2f})")
+                else:
+                    logger.info(f"✅ Rebalance: Total buy value ${total_buy_value:.2f} within available USDT ${available_usdt:.2f}")
+                
+                trades.extend(buy_trades)
 
             # Sort trades by priority (high priority first)
             trades.sort(key=lambda x: x.priority)
 
-            logger.debug(f"📊 Calculated {len(trades)} rebalance trades (after position size filtering)")
+            logger.debug(f"📊 Calculated {len(trades)} rebalance trades (after position size and USDT constraints)")
             return trades
 
         except Exception as e:
             logger.error(f"❌ Error calculating rebalance trades: {e}")
             return []
+
+    async def execute_rebalance(self, current_weights: Dict[str, float],
+                              portfolio_value: float, market_data: Dict[str, Any],
+                              trigger: RebalanceTrigger,
+                              available_usdt: float = None) -> RebalanceResult:
+        """
+        Execute portfolio rebalancing
+
+        Args:
+            current_weights: Current portfolio weights
+            portfolio_value: Current portfolio value in USD
+            market_data: Current market data
+            trigger: Rebalance trigger type
+            available_usdt: Available USDT balance for paper mode
+
+        Returns:
+            RebalanceResult with execution details
+        """
+        try:
+            logger.info(f"🔄 Executing portfolio rebalance (trigger: {trigger.value})")
+
+            # Calculate required trades
+            trades_required = self._calculate_rebalance_trades(
+                current_weights, portfolio_value, market_data, available_usdt
+            )
+
+            # Filter out small trades
+            significant_trades = [
+                trade for trade in trades_required
+                if trade.estimated_value >= self.min_trade_value
+            ]
+
+            if not significant_trades:
+                result = RebalanceResult(
+                    success=True,
+                    trades_required=[],
+                    total_value_change=0.0,
+                    execution_status="No significant trades required",
+                    timestamp=pd.Timestamp.now().isoformat(),
+                    metadata={'reason': 'all_trades_below_minimum'}
+                )
+                logger.info("ℹ️ Rebalance completed - no significant trades required")
+                return result
+
+            # Calculate total value change
+            total_value_change = sum(trade.estimated_value for trade in significant_trades)
+
+            # Estimate transaction costs
+            total_costs = total_value_change * self.transaction_costs
+
+            # Check if rebalance is cost-effective
+            if total_costs > portfolio_value * 0.001:  # Costs > 0.1% of portfolio
+                logger.warning(f"⚠️ Rebalance costs (${total_costs:.2f}) may not be justified")
+
+            # Update rebalance state
+            self.last_rebalance = pd.Timestamp.now().isoformat()
+            self.rebalance_history.append({
+                'timestamp': self.last_rebalance,
+                'trigger': trigger.value,
+                'trades': len(significant_trades),
+                'total_value_change': total_value_change,
+                'portfolio_value': portfolio_value
+            })
+
+            result = RebalanceResult(
+                success=True,
+                trades_required=significant_trades,
+                total_value_change=total_value_change,
+                execution_status="Trades calculated successfully",
+                timestamp=self.last_rebalance,
+                metadata={
+                    'transaction_costs': total_costs,
+                    'portfolio_value': portfolio_value,
+                    'trigger': trigger.value
+                }
+            )
+
+            logger.info(f"✅ Rebalance executed: {len(significant_trades)} trades, ${total_value_change:.2f} value change")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error executing rebalance: {e}")
+            result = RebalanceResult(
+                success=False,
+                trades_required=[],
+                total_value_change=0.0,
+                execution_status=f"Error: {str(e)}",
+                timestamp=pd.Timestamp.now().isoformat(),
+                metadata={'error': str(e)}
+            )
+            return result
 
     def _get_asset_price(self, symbol: str, market_data: Dict[str, Any]) -> float:
         """

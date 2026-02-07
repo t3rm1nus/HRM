@@ -31,7 +31,19 @@ L3_VETO_ENABLED = True  # Main.py enforces L3 veto power
 L2_L3_INTEGRATION = True  # L2 respects L3 context preemptively
 
 # Objeto config para módulos nuevos
+# Paper trading mode configuration
+PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
+
+# Simulated initial balances
+SIMULATED_INITIAL_BALANCES = {
+    "BTC": 0.01549,
+    "ETH": 0.385,
+    "USDT": 3000.0
+}
+
 config = {
+    "paper_mode": PAPER_MODE,
+    "simulated_initial_balances": SIMULATED_INITIAL_BALANCES,
     "SYMBOLS": SYMBOLS,
     "RISK_CONFIG": {
         "max_drawdown_limit": 0.01,

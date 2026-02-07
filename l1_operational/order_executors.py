@@ -9,7 +9,7 @@ class OrderExecutors:
     Executes trading orders through simulated or real trading interfaces.
     """
 
-    def __init__(self, state_manager, portfolio_manager, config: Dict[str, Any]):
+    def __init__(self, state_manager, portfolio_manager, config: Dict[str, Any], simulated_client=None):
         """
         Initialize OrderExecutors with required managers and configuration.
 
@@ -17,24 +17,27 @@ class OrderExecutors:
             state_manager: State management object
             portfolio_manager: Portfolio management object
             config: Configuration object
+            simulated_client: Pre-initialized SimulatedExchangeClient instance (DI)
         """
         self.state_manager = state_manager
         self.portfolio_manager = portfolio_manager
         self.config = config
 
-        # Execution settings
-        self.paper_mode = config.get('OPERATION_MODE') == 'TESTNET' or config.get('PAPER_MODE', True)
-        self.use_testnet = config.get('USE_TESTNET', True)
+        # Execution settings - Clear distinction between paper mode and testnet
+        self.paper_mode = config.get('PAPER_MODE', True)
+        self.use_testnet = config.get('USE_TESTNET', False) and not self.paper_mode
 
-        # Initialize simulated exchange client for paper trading
+        # Initialize simulated exchange client for paper trading (DI)
         if self.paper_mode:
-            initial_balances = config.get('INITIAL_BALANCES', {'USDT': 10000.0, 'BTC': 0.0})
-            self.simulated_client = SimulatedExchangeClient(
-                initial_balances=initial_balances,
-                fee=0.001,  # 0.1% fee
-                slippage=0.0005  # 0.05% slippage
-            )
-            logger.info(f"✅ SimulatedExchangeClient initialized with balances: {initial_balances}")
+            logger.info("🧪 Paper trading with simulated execution")
+            logger.info("📊 Using REAL Binance market data (public endpoints)")
+            
+            if simulated_client is None:
+                logger.critical("🚨 FATAL: Paper mode requires a pre-initialized SimulatedExchangeClient")
+                raise RuntimeError("Paper mode requires a pre-initialized SimulatedExchangeClient")
+                
+            self.simulated_client = simulated_client
+            logger.info(f"✅ SimulatedExchangeClient initialized with balances: {simulated_client.get_balances()}")
         else:
             self.simulated_client = None
 

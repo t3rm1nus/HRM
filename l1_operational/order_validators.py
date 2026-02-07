@@ -1,116 +1,172 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 from core.logging import logger
-
+from l1_operational.config import ConfigObject
 
 class OrderValidators:
     """
-    Validates trading orders according to HRM rules and market conditions.
+    Clase centralizada para validar órdenes antes de su ejecución.
+    Asegura que todas las órdenes tengan los campos obligatorios y sean válidas.
     """
 
-    def __init__(self, config):
-        """
-        Initialize OrderValidators with configuration.
-
-        Args:
-            config: Configuration object (can be dict or ConfigObject)
-        """
+    def __init__(self, config: Dict):
         self.config = config
+        self.required_fields = ['action', 'symbol', 'quantity', 'price', 'type', 'side']
+        self.logger = logger
 
-        # Handle both dict and ConfigObject instances
-        if hasattr(config, 'RISK_LIMITS'):
-            # ConfigObject instance - extract values from its attributes
-            self.min_order_value = config.RISK_LIMITS.get('MIN_ORDER_SIZE_USDT', 5.0)  # Minimum $5 order
-            self.max_position_pct = config.PORTFOLIO_LIMITS.get('MAX_PORTFOLIO_EXPOSURE_BTC', 0.30)  # Maximum 30% of portfolio
-        else:
-            # Fallback for dict-like objects
-            self.min_order_value = getattr(config, 'get', lambda key, default: default)('MIN_ORDER_VALUE', 5.0)
-            self.max_position_pct = getattr(config, 'get', lambda key, default: default)('MAX_POSITION_PCT', 0.30)
-
-        logger.info(f"✅ OrderValidators initialized - Min order: ${self.min_order_value}, Max position: {self.max_position_pct*100:.1f}%")
-
-    def validate_order(self, symbol: str, action: str, quantity: float,
-                      current_price: float, portfolio_value: float, position_qty: float) -> Dict[str, Any]:
+    def validate_order_fields(self, order: Dict[str, Any]) -> Optional[str]:
         """
-        Validate a trading order according to HRM trading rules.
+        Valida que la orden tenga todos los campos obligatorios.
 
         Args:
-            symbol: Trading symbol (e.g., 'BTCUSDT')
-            action: Order action ('buy' or 'sell')
-            quantity: Order quantity in base asset
-            current_price: Current market price
-            portfolio_value: Total portfolio value in USDT
-            position_qty: Current position quantity
+            order: Diccionario con los datos de la orden
 
         Returns:
-            dict: {'valid': bool, 'reason': str}
+            None si la orden es válida, o un mensaje de error si falta algún campo
         """
-        try:
-            logger.debug(f"🔍 Validating {action.upper()} order: {symbol} qty={quantity:.6f} @ ${current_price:.2f}")
+        missing_fields = [field for field in self.required_fields if field not in order]
 
-            # Calculate order value
-            order_value_usdt = abs(quantity) * current_price
+        if missing_fields:
+            return f"Campos obligatorios faltantes: {', '.join(missing_fields)}"
 
-            # 1. Minimum order value check
-            if order_value_usdt < self.min_order_value:
-                return {
-                    'valid': False,
-                    'reason': f"Order value ${order_value_usdt:.2f} below minimum ${self.min_order_value:.2f}"
-                }
+        # Validar que los campos tengan valores válidos
+        if not order.get('action') or order['action'].upper() not in ['BUY', 'SELL']:
+            return "Campo 'action' inválido o faltante"
 
-            # 2. Action validation
-            if action.lower() not in ['buy', 'sell']:
-                return {
-                    'valid': False,
-                    'reason': f"Invalid action '{action}'. Must be 'buy' or 'sell'"
-                }
+        if not order.get('symbol') or not isinstance(order['symbol'], str):
+            return "Campo 'symbol' inválido o faltante"
 
-            # 3. Position validation for sell orders
-            if action.lower() == 'sell':
-                if position_qty <= 0:
-                    return {
-                        'valid': False,
-                        'reason': f"No position to sell for {symbol} (current position: {position_qty:.6f})"
-                    }
-                if abs(quantity) > position_qty:
-                    return {
-                        'valid': False,
-                        'reason': f"Insufficient position: {position_qty:.6f} < {abs(quantity):.6f}"
-                    }
+        if not isinstance(order.get('quantity'), (int, float)) or order['quantity'] <= 0:
+            return "Campo 'quantity' inválido o faltante"
 
-            # 4. Position size limit validation for buy orders
-            if action.lower() == 'buy':
-                new_position_value = (position_qty + quantity) * current_price
-                max_allowed_value = portfolio_value * self.max_position_pct
+        if not isinstance(order.get('price'), (int, float)) or order['price'] <= 0:
+            return "Campo 'price' inválido o faltante"
 
-                if new_position_value > max_allowed_value:
-                    return {
-                        'valid': False,
-                        'reason': f"Position size ${new_position_value:.2f} exceeds maximum ${max_allowed_value:.2f} ({self.max_position_pct*100:.1f}% of portfolio)"
-                    }
+        if not order.get('type') or order['type'].upper() not in ['MARKET', 'LIMIT']:
+            return "Campo 'type' inválido o faltante"
 
-            # 5. Price validation
-            if current_price <= 0:
-                return {
-                    'valid': False,
-                    'reason': f"Invalid price: ${current_price:.2f}"
-                }
+        if not order.get('side') or order['side'].upper() not in ['BUY', 'SELL']:
+            return "Campo 'side' inválido o faltante"
 
-            # 6. Quantity validation
-            if quantity == 0:
-                return {
-                    'valid': False,
-                    'reason': "Order quantity cannot be zero"
-                }
+        return None
 
-            logger.info(f"✅ Order validation passed: {symbol} {action.upper()} {quantity:.6f} @ ${current_price:.2f} (${order_value_usdt:.2f})")
-            return {
-                'valid': True,
-                'reason': f"Order meets all validation criteria (${order_value_usdt:.2f})"
-            }
+    def validate_order_values(self, order: Dict[str, Any]) -> Optional[str]:
+        """
+        Valida que los valores de la orden estén dentro de los límites permitidos.
 
-        except Exception as e:
-            logger.error(f"❌ Error validating order for {symbol}: {e}")
-            return {
-                'valid': False,
-                'reason': f"Validation error: {str(e)}"
-            }
+        Args:
+            order: Diccionario con los datos de la orden
+
+        Returns:
+            None si los valores son válidos, o un mensaje de error si hay problemas
+        """
+        # Validar tamaño mínimo de orden
+        order_value = order['quantity'] * order['price']
+        min_order_size = self.config.get('MIN_ORDER_SIZE_USDT', 5.0)
+
+        if order_value < min_order_size:
+            return f"Valor de orden (${order_value:.2f}) menor al mínimo permitido (${min_order_size:.2f})"
+
+        # Validar límites de riesgo por activo
+        asset = order['symbol'].replace('USDT', '')
+        max_order_size = self.config.get(f"MAX_ORDER_SIZE_{asset}", 0.05 if asset == 'BTC' else 0.5)
+
+        if order['quantity'] > max_order_size:
+            return f"Cantidad ({order['quantity']}) excede el límite máximo para {asset}"
+
+        return None
+
+    def validate_order_completeness(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Valida completamente una orden y devuelve un reporte detallado.
+
+        Args:
+            order: Diccionario con los datos de la orden
+
+        Returns:
+            Diccionario con el resultado de la validación
+        """
+        validation_report = {
+            'status': 'valid',
+            'symbol': order.get('symbol', 'unknown'),
+            'action': order.get('action', 'unknown'),
+            'errors': []
+        }
+
+        # Validar campos obligatorios
+        field_error = self.validate_order_fields(order)
+        if field_error:
+            validation_report['status'] = 'invalid'
+            validation_report['errors'].append(field_error)
+            return validation_report
+
+        # Validar valores
+        value_error = self.validate_order_values(order)
+        if value_error:
+            validation_report['status'] = 'invalid'
+            validation_report['errors'].append(value_error)
+
+        return validation_report
+
+    def normalize_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normaliza una orden para asegurar consistencia en el formato.
+
+        Args:
+            order: Diccionario con los datos de la orden
+
+        Returns:
+            Orden normalizada con todos los campos en el formato correcto
+        """
+        normalized_order = {}
+
+        # Normalizar action
+        if 'action' in order:
+            normalized_order['action'] = order['action'].upper()
+        else:
+            normalized_order['action'] = order.get('side', 'UNKNOWN').upper()
+
+        # Normalizar symbol
+        normalized_order['symbol'] = order.get('symbol', 'UNKNOWN')
+
+        # Normalizar quantity
+        normalized_order['quantity'] = float(order.get('quantity', 0))
+
+        # Normalizar price
+        normalized_order['price'] = float(order.get('price', 0))
+
+        # Normalizar type
+        if 'type' in order:
+            normalized_order['type'] = order['type'].upper()
+        else:
+            normalized_order['type'] = 'MARKET'
+
+        # Normalizar side (fallback a action si no existe)
+        if 'side' in order:
+            normalized_order['side'] = order['side'].upper()
+        else:
+            normalized_order['side'] = normalized_order['action']
+
+        # Agregar campos adicionales si existen
+        for key in ['timestamp', 'signal_source', 'reason', 'status', 'order_type', 'execution_type']:
+            if key in order:
+                normalized_order[key] = order[key]
+
+        return normalized_order
+
+    def validate_and_normalize_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Valida y normaliza una orden en un solo paso.
+
+        Args:
+            order: Diccionario con los datos de la orden
+
+        Returns:
+            Diccionario con el resultado de la validación y la orden normalizada
+        """
+        normalized_order = self.normalize_order(order)
+        validation_report = self.validate_order_completeness(normalized_order)
+
+        return {
+            'order': normalized_order,
+            'validation': validation_report
+        }

@@ -80,26 +80,30 @@ class SimulatedExchangeClient:
         Inicializa el cliente simulado.
         
         Args:
-            initial_balances: Balances iniciales para cada activo
+            initial_balances: Balances iniciales para cada activo (REQUERIDO)
             enable_commissions: Habilitar comisiones de trading
             enable_slippage: Habilitar slippage en órdenes
             volatility_factor: Factor de volatilidad para simulación de precios
+        
+        Raises:
+            RuntimeError: Si se intenta inicializar sin balances iniciales válidos
         """
         if SimulatedExchangeClient._initialized:
             logger.debug("🎮 SimulatedExchangeClient already initialized - maintaining state")
-            # Si se proporcionan balances iniciales diferentes, actualizar (solo para pruebas)
-            if initial_balances and initial_balances != self.initial_balances:
-                logger.warning("⚠️ SimulatedExchangeClient already initialized - ignoring new initial balances")
             return
         
-        SimulatedExchangeClient._initialized = True
+        # Validar balances iniciales (REQUERIDOS)
+        if initial_balances is None or not isinstance(initial_balances, dict) or len(initial_balances) == 0:
+            logger.critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized without valid initial_balances")
         
-        if initial_balances is None:
-            initial_balances = {
-                "BTC": 0.01549,
-                "ETH": 0.385,
-                "USDT": 3000.0
-            }
+        # Validar que los balances sean positivos
+        invalid_balances = [asset for asset, balance in initial_balances.items() if balance <= 0]
+        if invalid_balances:
+            logger.critical(f"🚨 FATAL: SimulatedExchangeClient balances must be positive. Invalid: {invalid_balances}", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized with non-positive balances")
+        
+        SimulatedExchangeClient._initialized = True
         
         self.initial_balances = initial_balances.copy()
         self.enable_commissions = enable_commissions
@@ -129,6 +133,32 @@ class SimulatedExchangeClient:
         logger.info(f"   Slippage: {'Habilitado' if self.enable_slippage else 'Deshabilitado'}")
         logger.info(f"   Volatilidad: {volatility_factor}")
         logger.info(f"   SIM_INIT_ONCE=True")
+
+    @classmethod
+    def initialize_once(cls, initial_balances: Dict[str, float],
+                       enable_commissions: bool = True,
+                       enable_slippage: bool = True,
+                       volatility_factor: float = 0.02):
+        """
+        Inicializa el SimulatedExchangeClient solo una vez por proceso.
+        
+        Args:
+            initial_balances: Balances iniciales para cada activo (REQUERIDO)
+            enable_commissions: Habilitar comisiones de trading
+            enable_slippage: Habilitar slippage en órdenes
+            volatility_factor: Factor de volatilidad para simulación de precios
+        
+        Returns:
+            SimulatedExchangeClient: Instancia del cliente simulado
+        
+        Raises:
+            RuntimeError: Si se intenta inicializar sin balances o más de una vez
+        """
+        if cls._initialized:
+            logger.warning("⚠️ SimulatedExchangeClient already initialized - returning existing instance")
+            return cls._instance
+        
+        return cls(initial_balances, enable_commissions, enable_slippage, volatility_factor)
 
     def _initialize_market_prices(self):
         """Inicializa precios de mercado basados en balances o valores por defecto"""

@@ -201,7 +201,7 @@ class AutoLearningIntegration:
         except Exception as e:
             logger.error(f"❌ Error during cleanup: {e}")
 
-def integrate_with_main_system():
+async def integrate_with_main_system():
     """
     Función principal de integración
     Esta es la función que se llama desde main.py
@@ -211,9 +211,8 @@ def integrate_with_main_system():
         # Crear instancia de integración
         integration = AutoLearningIntegration()
         
-        # Inicializar integración (sin await ya que no es async)
-        # En una implementación real, esto podría ser async
-        integration.initialize_integration()
+        # Inicializar integración con await
+        await integration.initialize_integration()
         
         logger.info("🤖 Auto-Learning System successfully integrated with HRM")
         return integration

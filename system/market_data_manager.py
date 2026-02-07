@@ -70,6 +70,11 @@ class MarketDataManager:
         if fallback_enabled is not None:
             self.config["FALLBACK_STRATEGY"] = "external->realtime->datafeed" if fallback_enabled else "datafeed_only"
         
+        # Forzar mainnet para datos de mercado si es paper mode
+        if self.config.get('PAPER_MODE', True):
+            logger.info("🧪 Paper mode: Forcing Binance MAINNET public endpoints for market data")
+            self.config['USE_TESTNET'] = False  # No usar testnet para datos de mercado en paper mode
+        
         # Configuración
         self.symbols = self.config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
         self.validation_retries = self.config.get("VALIDATION_RETRIES", 3)
@@ -383,7 +388,11 @@ class MarketDataManager:
                 await self._update_cache(validated_data, source_used)
                 return validated_data
             else:
-                logger.warning("⚠️ No se obtuvieron datos válidos después de validación")
+                logger.warning("⚠️ No se obtuvieron datos válidos después de validación - usando caché viejo")
+                # Devolver datos del caché incluso si están expirados como último recurso
+                if self._cache:
+                    logger.info(f"💾 Usando caché expirado (edad: {time.time() - self._cache.timestamp:.1f}s)")
+                    return self._cache.data
                 return {}
                 
         except Exception as e:

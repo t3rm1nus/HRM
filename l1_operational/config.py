@@ -47,7 +47,7 @@ EXECUTION_CONFIG = {
     "MAX_SLIPPAGE_BPS": 50,            # máximo 0.5% de slippage
     "ORDER_TIMEOUT_SECONDS": 30,       # timeout para órdenes
     "RETRY_ATTEMPTS": 3,               # intentos de reintento
-    "PAPER_MODE": False,               # LIVE trading mode
+    "PAPER_MODE": True,               # Paper trading mode by default
 }
 
 # Configuración de alertas
@@ -88,7 +88,7 @@ class ConfigObject:
     """
     
     # Atributos de clase (para acceso directo tipo ConfigObject.RISK_LIMITS)
-    OPERATION_MODE = 'TESTNET'
+    OPERATION_MODE = 'PAPER'
     RISK_LIMITS = RISK_LIMITS
     PORTFOLIO_LIMITS = PORTFOLIO_LIMITS
     EXECUTION_CONFIG = EXECUTION_CONFIG
