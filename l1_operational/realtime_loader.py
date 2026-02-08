@@ -53,12 +53,10 @@ class RealTimeDataLoader:
                 logger.warning(f"⚠️ No se obtuvieron datos para {symbol}")
                 return pd.DataFrame()
 
-            # Binance API returns 12 columns, we only need the first 6
-            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 
-                                           'close_time', 'quote_asset_volume', 'number_of_trades',
-                                           'taker_buy_base', 'taker_buy_quote', 'ignore'])
-            # Keep only the first 6 columns
-            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            # Si vienen más de 6 columnas, recorte
+            if len(data) > 0 and len(data[0]) > 6:
+                data = [row[:6] for row in data]
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             for col in ['open', 'high', 'low', 'close', 'volume']:

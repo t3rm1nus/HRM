@@ -66,9 +66,21 @@ from fix_l3_dominance import (
 # 🔄 AUTO-LEARNING SYSTEM INTEGRATION
 from integration_auto_learning import integrate_with_main_system
 
-# 🧹 SYSTEM CLEANUP
+# 🧹 SYSTEM CLEANUP - USAR NUEVO MÓDULO
+# PRIORIDAD 4: memory_reset = False ANTES del try
+memory_reset = False
+CLEANUP_AVAILABLE = False
+
 try:
-    from system_cleanup import SystemCleanup
+    from system.system_cleanup import (
+        perform_full_cleanup, 
+        force_paper_mode,
+        filesystem_cleanup,
+        memory_reset as cleanup_memory_reset,
+        async_context_reset
+    )
+    # PRIORIDAD 4: Asignar después del import si está disponible
+    memory_reset = cleanup_memory_reset
     CLEANUP_AVAILABLE = True
 except ImportError:
     logger.warning("⚠️ SystemCleanup not available, skipping cleanup")
@@ -94,20 +106,28 @@ async def main():
     try:
         
         # ================================================================
-        # STEP 1: SYSTEM CLEANUP
+        # STEP 1: SYSTEM CLEANUP - USAR perform_full_cleanup()
         # ================================================================
         logger.info("🧹 Running system cleanup...")
         if CLEANUP_AVAILABLE:
             try:
-                cleanup = SystemCleanup()
-                cleanup_result = cleanup.perform_full_cleanup()
+                # Usar perform_full_cleanup que resetea singletons y fuerza paper mode
+                cleanup_result = perform_full_cleanup(mode="paper")
                 
                 if cleanup_result.get("success", False):
-                    logger.info(f"✅ Cleanup: {cleanup_result.get('deleted_files', 0)} files removed")
+                    logger.info(f"✅ Cleanup completo exitoso")
+                    logger.info(f"   📁 Archivos eliminados: {cleanup_result.get('filesystem', {}).get('deleted_files', 0)}")
+                    logger.info(f"   🧠 Singletons reseteados")
+                    logger.info(f"   🎯 Modo forzado: paper")
                 else:
                     logger.warning("⚠️ Cleanup completed with warnings")
             except Exception as cleanup_error:
                 logger.warning(f"⚠️ Cleanup failed: {cleanup_error}")
+                # Still try to force paper mode as fallback
+                try:
+                    force_paper_mode()
+                except:
+                    pass
         else:
             logger.info("⚠️ SystemCleanup not available, skipping")
 
@@ -344,8 +364,21 @@ async def main():
         logger.info("🔧 Initializing position management...")
         from core.position_rotator import PositionRotator, AutoRebalancer
         
-        position_rotator = PositionRotator(portfolio_manager)
-        auto_rebalancer = AutoRebalancer(portfolio_manager)
+        # Get paper_mode from config and inject into PositionRotator
+        try:
+            live_config = get_config("live")
+            paper_mode = getattr(live_config, 'PAPER_MODE', False)
+        except Exception:
+            paper_mode = False
+        
+        position_rotator = PositionRotator(
+            portfolio_manager=portfolio_manager,
+            paper_mode=paper_mode
+        )
+        auto_rebalancer = AutoRebalancer(
+            portfolio_manager=portfolio_manager,
+            paper_mode=paper_mode
+        )
         logger.info("✅ Position managers ready")
 
         # ================================================================
@@ -494,6 +527,56 @@ async def main():
         except Exception as rule_error:
             logger.error(f"❌ FUNDAMENTAL RULE failed: {rule_error}")
             # Continue anyway - this is not a critical failure
+        
+        # ================================================================
+        # 💥 PRIORIDAD 2: FORCE WARMUP - Ensure market data cache is populated
+        # ================================================================
+        logger.info("🔥 PRIORIDAD 2: Ejecutando force_warmup()...")
+        warmup_success = await market_data_manager.force_warmup(
+            symbol="BTCUSDT",
+            timeframe="1m",
+            limit=100
+        )
+        
+        if not warmup_success:
+            # Fallback: try ETHUSDT
+            logger.warning("⚠️ Warmup BTCUSDT falló, intentando ETHUSDT...")
+            warmup_success = await market_data_manager.force_warmup(
+                symbol="ETHUSDT",
+                timeframe="1m",
+                limit=100
+            )
+        
+        # ================================================================
+        # 💥 PRIORIDAD 3: FAIL FAST - No market data = No trading loop
+        # ================================================================
+        # Verificar si tenemos datos de mercado después del bootstrap/warmup
+        market_data_after_warmup = await market_data_manager.get_data_with_fallback()
+        
+        if not market_data_after_warmup or len(market_data_after_warmup) == 0:
+            logger.critical("🚨 FAIL FAST: market_data está vacío después de bootstrap/warmup")
+            logger.critical("   No hay datos de mercado - NO se entrará al trading loop")
+            logger.critical("   Intentando reintentar warmup...")
+            
+            # Retry warmup once
+            await asyncio.sleep(5)
+            retry_success = await market_data_manager.force_warmup(
+                symbol="BTCUSDT",
+                timeframe="1m",
+                limit=100
+            )
+            
+            if retry_success:
+                logger.info("✅ Retry warmup exitoso - continuando al trading loop")
+                market_data_after_warmup = await market_data_manager.get_data_with_fallback()
+            else:
+                logger.critical("❌ Retry warmup falló - abortando")
+                logger.info("👋 HRM System shutdown complete (fail fast)")
+                return  # Exit main() - no trading without market data
+        
+        # Update state con datos válidos
+        state["market_data"] = market_data_after_warmup
+        logger.info(f"✅ Market data verificado: {len(market_data_after_warmup)} símbolos")
         
         # ================================================================
         # STEP 17: MAIN TRADING LOOP

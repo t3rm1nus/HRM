@@ -36,7 +36,7 @@ def should_execute_with_l3_dominance(l2_signal: Dict, l3_info: Dict) -> Tuple[bo
     l3_signal = l3_info.get('signal', 'hold')
     l3_confidence = l3_info.get('confidence', 0.0)
     regime = l3_info.get('regime', 'unknown')
-    l3_allow_l2 = l3_info.get('allow_l2', True)
+    l3_allow_l2 = l3_info.get('allow_l2_signals', l3_info.get('allow_l2', True))
     symbol = l2_signal.get('symbol', 'UNKNOWN')
     action = l2_signal.get('action', 'hold')
 
@@ -59,11 +59,6 @@ def should_execute_with_l3_dominance(l2_signal: Dict, l3_info: Dict) -> Tuple[bo
     # LÓGICA NORMAL DE DOMINANCIA L3 (si la excepción táctica no se aplica)
     # ========================================================================================
 
-    # Permitir L2 si L3 explícitamente lo permite
-    # Nota: El logging se mueve a la detección de cambios de estado en el bucle principal
-    if l3_allow_l2:
-        return True, f"L3 permite señales L2 (allow_l2={l3_allow_l2})"
-
     # Usar lógica de dominancia corregida con nueva excepción quirúrgica
     should_block = should_l3_block_l2_signals(
         l3_signal=l3_signal,
@@ -72,7 +67,8 @@ def should_execute_with_l3_dominance(l2_signal: Dict, l3_info: Dict) -> Tuple[bo
         current_allocation={},  # Se obtendría de datos del portfolio
         target_allocation=l3_info.get('asset_allocation', {}),
         l2_signal_action=action,  # Pasar acción L2 para excepción quirúrgica
-        has_position=has_position  # Pasar estado de posición para excepción quirúrgica
+        has_position=has_position,  # Pasar estado de posición para excepción quirúrgica
+        allow_l2_signals=l3_allow_l2
     )
 
     if should_block:

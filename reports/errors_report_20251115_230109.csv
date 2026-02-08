@@ -1,2 +1,0 @@
-timestamp,message,level,module,symbol,cycle_id
-2025-11-15 21:46:50.409582,⚠️ Error durante limpieza de recursos HTTP: There is no current event loop in thread 'MainThread'.,WARNING,core.logging,,

@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, Any
 from core.exchange_adapter import ExchangeAdapter
 from l1_operational.binance_client import BinanceClient
+from core.logging import logger
 
 
 class PaperExchangeAdapter(ExchangeAdapter):

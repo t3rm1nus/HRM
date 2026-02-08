@@ -21,12 +21,9 @@ from core.logging import logger
 from l2_tactic.utils import safe_float
 from l1_operational.config import ConfigObject
 from l1_operational.order_validators import OrderValidators
-from core.config import HRM_PATH_MODE, get_config
+from core.config import HRM_PATH_MODE
 
-# Configuration constants for paper trading seed
-PAPER_MODE = get_config("live").PAPER_MODE if hasattr(get_config("live"), 'PAPER_MODE') else False
-SEED_FIRST_POSITION = get_config("live").SEED_FIRST_POSITION if hasattr(get_config("live"), 'SEED_FIRST_POSITION') else False
-SEED_MAX_EXPOSURE = get_config("live").SEED_MAX_EXPOSURE if hasattr(get_config("live"), 'SEED_MAX_EXPOSURE') else 0.2
+# paper_mode now injected via constructor (never use get_config("live") or get_config("paper"))
 
 
 def _extract_current_price(symbol: str, market_data: Dict[str, Any]) -> Optional[float]:
@@ -104,9 +101,12 @@ class PositionRotator:
     - Rotar capital de activos con pérdidas > 3%
     """
 
-    def __init__(self, portfolio_manager):
+    def __init__(self, portfolio_manager, paper_mode: bool = False):
         self.portfolio_manager = portfolio_manager
         self.logger = logger
+        self.paper_mode = paper_mode
+        self.seed_first_position = False  # Default, can be set via setter
+        self.seed_max_exposure = 0.2  # Default 20% max exposure for seed
 
     def calculate_bootstrap_deployment(self, market_data: Dict[str, pd.DataFrame]):
         """
@@ -119,23 +119,10 @@ class PositionRotator:
         Returns:
             List of buy orders to execute, or empty list if data is invalid
         """
-        from core.config import get_config
-        
-        config = get_config("live")
-        
-        # Check if bootstrap functionality is enabled
-        if not config.get("BOOTSTRAP_ENABLED", True):
-            logger.info("⏸️ Bootstrap deployment skipped - functionality disabled")
-            return []
-
         # Check if we should allow bootstrap (paper or simulated mode)
-        try:
-            system_mode = getattr(config, 'mode', 'unknown')
-        except Exception:
-            system_mode = 'unknown'
-        
-        if system_mode not in ["simulated", "testnet"] and not config.get("PAPER_MODE", False):
-            logger.info("⏸️ Bootstrap deployment skipped - not in paper or simulated mode")
+        # paper_mode is injected via constructor - use self.paper_mode
+        if not self.paper_mode:
+            logger.info("⏸️ Bootstrap deployment skipped - not in paper mode")
             return []
 
         # Check if portfolio is empty (only bootstrap if no positions exist)
@@ -165,10 +152,10 @@ class PositionRotator:
         # Get capital from portfolio manager
         capital = self.portfolio_manager.get_total_value()
         
-        # Get bootstrap configuration
-        min_exposure = config.get("BOOTSTRAP_MIN_EXPOSURE", 0.10)
-        max_exposure = config.get("BOOTSTRAP_MAX_EXPOSURE", 0.30)
-        min_order_value = config.get("BOOTSTRAP_MIN_ORDER_VALUE", 10.0)
+        # Bootstrap configuration (defaults)
+        min_exposure = 0.10  # 10% minimum exposure
+        max_exposure = 0.30  # 30% maximum exposure
+        min_order_value = 10.0  # Minimum order value in USDT
         
         # Calculate deployment amounts
         btc_target = 0.40  # 40% BTC
@@ -270,16 +257,13 @@ class PositionRotator:
             
         # Fallback to legacy seed deployment if bootstrap failed or is disabled
         # Check if we should allow initial deployment (paper mode seed)
-        # FIX: Always allow initial deployment in simulated mode
-        from core.config import get_config
-        try:
-            config = get_config("live")
-            system_mode = getattr(config, 'mode', 'unknown')
-        except Exception:
-            system_mode = 'unknown'
+        # Use self.paper_mode injected via constructor
+        if not self.paper_mode:
+            logger.info("⏸️ Initial deployment skipped - not in paper mode")
+            return []
         
-        if system_mode != "simulated" and not (PAPER_MODE and SEED_FIRST_POSITION):
-            logger.info("⏸️ Initial deployment skipped - not in paper mode or seed disabled")
+        if not self.seed_first_position:
+            logger.info("⏸️ Initial deployment skipped - seed_first_position disabled")
             return []
 
         # Check if portfolio is empty (only deploy if no positions exist)
@@ -320,7 +304,7 @@ class PositionRotator:
         usdt_target = 0.30  # 30% USDT
 
         # Apply seed max exposure limit
-        max_exposure = capital * SEED_MAX_EXPOSURE
+        max_exposure = capital * self.seed_max_exposure
         btc_amount = min(capital * btc_target, max_exposure)
         eth_amount = min(capital * eth_target, max_exposure)
 
@@ -409,10 +393,11 @@ class AutoRebalancer:
     - Liberar capital en condiciones de riesgo excesivo
     """
 
-    def __init__(self, portfolio_manager):
+    def __init__(self, portfolio_manager, paper_mode: bool = False):
         self.portfolio_manager = portfolio_manager
         self.logger = logger
         self.last_rebalance_time = 0  # Timestamp of last rebalance to prevent loops
+        self.paper_mode = paper_mode
 
     async def check_and_execute_rebalance(self, market_data: Dict[str, Any], l3_active: bool = False,
                                         l3_asset_allocation: Dict[str, float] = None,
@@ -437,24 +422,18 @@ class AutoRebalancer:
         """
         try:
             # ========================================================================================
-            # CRÍTICO: AutoRebalancer habilitado si allow_l2_signals=True o simulated mode
+            # CRÍTICO: AutoRebalancer habilitado si allow_l2_signals=True o simulated/paper mode
             # ========================================================================================
-            from core.config import get_config
-            try:
-                config = get_config("live")
-                system_mode = getattr(config, 'mode', 'unknown')
-            except Exception:
-                system_mode = 'unknown'
-
+            # Use self.paper_mode injected via constructor (never use get_config("live"))
             allow_rebalance = False
-            if system_mode == "simulated":
-                logger.info("🛡️ Modo simulated detectado - AutoRebalancer habilitado")
+            if self.paper_mode:
+                logger.info("🛡️ Paper mode detectado - AutoRebalancer habilitado")
                 allow_rebalance = True
             elif l3_decision and l3_decision.get('allow_l2_signals', False):
                 logger.info("🎯 L3 permite señales L2 - AutoRebalancer habilitado")
                 allow_rebalance = True
             else:
-                logger.debug("🚫 AutoRebalancer disabled: No allow_l2_signals y no simulated mode")
+                logger.debug("🚫 AutoRebalancer disabled: No allow_l2_signals y no paper mode")
                 return []
 
             # ========================================================================================

@@ -1,3 +1,0 @@
-timestamp,message,level,module,symbol,cycle_id
-2026-01-15 19:22:38.400670,⚠️ Error durante limpieza de recursos HTTP: There is no current event loop in thread 'MainThread'.,WARNING,core.logging,,
-2026-01-14 15:22:50.014947,⚠️ No sentiment cache available - using neutral default (0.0),WARNING,core.logging,,

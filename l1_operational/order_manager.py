@@ -43,7 +43,11 @@ class OrderManager:
         self.executors = OrderExecutors(state_manager, portfolio_manager, config, simulated_client)
 
         # Initialize Order Intent Builder
-        self.intent_builder = OrderIntentBuilder(self.position_manager, config)
+        self.intent_builder = OrderIntentBuilder(
+            self.position_manager,
+            config,
+            paper_mode=config.paper_mode
+        )
         self.intent_processor = OrderIntentProcessor(self.intent_builder)
 
         self.last_trade_time: Dict[str, float] = {}

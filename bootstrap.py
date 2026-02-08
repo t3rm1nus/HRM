@@ -5,6 +5,8 @@ HRM Bootstrap Module
 
 This module handles system initialization, configuration loading,
 and component wiring for the HRM system.
+
+🔥 PRIORIDAD 4: Introducir session_is_fresh - no depender de balances
 """
 
 import os
@@ -42,8 +44,22 @@ from comms.message_bus import MessageBus
 
 from sentiment.sentiment_manager import update_sentiment_texts
 
-from system.system_cleanup import SystemCleanup
+from system.system_cleanup import perform_full_cleanup
 from storage.paper_trade_logger import get_paper_logger
+
+
+# 🔥 PRIORIDAD 4: SESSION IS FRESH - Flag global para nueva sesión
+session_is_fresh = True
+
+def is_session_fresh() -> bool:
+    """Check if current session is fresh (not dependent on balances)"""
+    global session_is_fresh
+    return session_is_fresh
+
+def mark_session_used():
+    """Mark session as no longer fresh"""
+    global session_is_fresh
+    session_is_fresh = False
 
 
 class HRMBootstrap:
@@ -56,9 +72,15 @@ class HRMBootstrap:
         self.order_manager = None
         self.runtime_loop = None
         
-    async def bootstrap_system(self, mode: str = "live") -> Tuple[PortfolioManager, OrderManager]:
-        """Bootstrap the entire HRM system."""
+    async def bootstrap_system(self, mode: str = "paper") -> Tuple[PortfolioManager, OrderManager]:
+        """
+        Bootstrap the entire HRM system.
+        
+        🔥 PRIORIDAD 4: session_is_fresh determina si es nueva sesión,
+        NO los balances. Esto evita dependencia de estado externo.
+        """
         logger.info("🚀 Starting HRM System Bootstrap")
+        logger.info(f"🔥 SESSION_IS_FRESH: {is_session_fresh()}")
         
         try:
             # 1. System Cleanup
@@ -96,6 +118,10 @@ class HRMBootstrap:
             # 11. Start Background Services
             await self._start_background_services()
             
+            # 12. Marcar sesión como usada después de bootstrap exitoso
+            mark_session_used()
+            logger.info(f"🔥 SESSION_IS_FRESH: {is_session_fresh()} (post-bootstrap)")
+            
             logger.info("✅ HRM System Bootstrap Complete")
             return self.portfolio_manager, self.order_manager
             
@@ -108,8 +134,7 @@ class HRMBootstrap:
         """Perform system cleanup before startup."""
         logger.info("🧹 Running system cleanup...")
         
-        cleanup = SystemCleanup()
-        cleanup_result = cleanup.perform_full_cleanup()
+        cleanup_result = perform_full_cleanup(mode="paper")
         
         if not cleanup_result.get("success", False):
             logger.warning("⚠️ Cleanup completed with warnings")
@@ -132,6 +157,7 @@ class HRMBootstrap:
         load_dotenv()
         
         # Get environment configuration
+        # 🔥 PRIORIDAD 4: Usar mode explícito, no depender de configuración previa
         env_config = get_config(mode)
         
         # Check Binance operating mode
@@ -145,13 +171,16 @@ class HRMBootstrap:
         logger.info("🧠 Initializing system state...")
         
         # Initialize state with symbols and initial balance
+        # 🔥 PRIORIDAD 4: session_is_fresh determina si es nueva sesión
         symbols = env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
-        initial_balance = 3000.0
+        initial_balance = 3000.0  # Fixed initial balance, not dependent on previous state
         
         state = initialize_state(symbols, initial_balance)
         state = validate_state_structure(state)
         
         logger.info(f"✅ State initialized for symbols: {symbols}")
+        logger.info(f"   Initial balance: {initial_balance} USDT")
+        logger.info(f"   Session fresh: {is_session_fresh()}")
         return state
     
     async def _initialize_core_components(self, env_config: Dict[str, Any]):
@@ -187,21 +216,27 @@ class HRMBootstrap:
         # Initialize SimulatedExchangeClient (para paper trading)
         from l1_operational.simulated_exchange_client import SimulatedExchangeClient
         
-        # Balances iniciales para simulación
+        # 🔥 PRIORIDAD 4: Siempre usar balances iniciales fijos para nueva sesión
+        # No depender de balances previos - usar valores conocidos
         initial_balances = {
             "BTC": 0.01549,
             "ETH": 0.385,
             "USDT": 3000.0
         }
         
-        # Inicializar solo una vez
-        simulated_client = SimulatedExchangeClient.initialize_once(initial_balances)
+        # Limpiar cualquier estado previo y crear nuevo
+        SimulatedExchangeClient._instance = None
+        SimulatedExchangeClient._initialized = False
+        
+        # Inicializar con balances conocidos
+        simulated_client = SimulatedExchangeClient(initial_balances)
         self.components['simulated_client'] = simulated_client
         
         # Logs requeridos
-        logger.info("📊 SIM_INIT_ONCE=True")
+        logger.info("📊 SIM_INIT: Nueva instancia")
         logger.info(f"🔢 SIM_STATE_ID: {id(simulated_client)}")
         logger.info(f"💰 SIM_BALANCES: {simulated_client.get_balances()}")
+        logger.info(f"🔥 SESSION_IS_FRESH: {is_session_fresh()}")
         
         # Verificar que los balances no estén vacíos
         if not simulated_client.get_balances() or all(balance == 0 for balance in simulated_client.get_balances().values()):
@@ -267,6 +302,7 @@ class HRMBootstrap:
         binance_mode = os.getenv("BINANCE_MODE", "TEST").upper()
         
         # Setup based on binance_mode
+        # 🔥 PRIORIDAD 4: Usar modo explícito, no depender de balances previos
         if binance_mode == "LIVE":
             # Live mode: sync mandatory with exchange
             portfolio_mode = "live"
@@ -274,8 +310,8 @@ class HRMBootstrap:
         else:
             # Test mode: use simulated balance
             portfolio_mode = "simulated"
-            initial_balance = 3000.0
-            logger.info(f"🧪 TESTING MODE: Using initial balance of {initial_balance} USDT")
+            initial_balance = 3000.0  # Fixed balance for paper trading
+            logger.info(f"🧪 TESTING MODE: Using fixed initial balance of {initial_balance} USDT")
         
         # Initialize Portfolio Manager
         portfolio_manager = PortfolioManager(
@@ -291,24 +327,29 @@ class HRMBootstrap:
         if portfolio_mode == "simulated":
             await portfolio_manager.initialize_async()
         
-        # CRITICAL: Synchronize with exchange for production mode
-        try:
-            logger.info("🔄 Synchronizing with exchange...")
-            sync_success = await portfolio_manager.sync_with_exchange()
-            
-            if sync_success:
-                logger.info("✅ Portfolio synchronized with exchange")
-            else:
-                logger.warning("⚠️ Exchange sync failed, loading local state...")
-                loaded = portfolio_manager.load_from_json()
-                if not loaded:
-                    logger.info("📄 No saved portfolio found, starting clean")
+        # 🔥 PRIORIDAD 4: NO sync con exchange en modo paper - confiar en balances iniciales
+        # Esto evita dependencia de estado externo
+        if portfolio_mode == "simulated":
+            logger.info("📊 PAPER MODE: Trusting initial balances, no exchange sync needed")
+        else:
+            # CRITICAL: Synchronize with exchange for production mode
+            try:
+                logger.info("🔄 Synchronizing with exchange...")
+                sync_success = await portfolio_manager.sync_with_exchange()
+                
+                if sync_success:
+                    logger.info("✅ Portfolio synchronized with exchange")
                 else:
-                    logger.info("📂 Local portfolio loaded")
-                    
-        except Exception as e:
-            logger.error(f"❌ Portfolio synchronization failed: {e}")
-            logger.warning("⚠️ Continuing with local state")
+                    logger.warning("⚠️ Exchange sync failed, loading local state...")
+                    loaded = portfolio_manager.load_from_json()
+                    if not loaded:
+                        logger.info("📄 No saved portfolio found, starting clean")
+                    else:
+                        logger.info("📂 Local portfolio loaded")
+                        
+            except Exception as e:
+                logger.error(f"❌ Portfolio synchronization failed: {e}")
+                logger.warning("⚠️ Continuing with local state")
         
         logger.info("✅ Portfolio Manager initialized")
         return portfolio_manager
@@ -382,10 +423,26 @@ class HRMBootstrap:
         return self.state
 
 
-async def bootstrap_hrm_system(mode: str = "live"):
-    """Bootstrap the HRM system and return core components."""
+async def bootstrap_hrm_system(mode: str = "paper"):
+    """
+    Bootstrap the HRM system and return core components.
+    
+    🔥 PRIORIDAD 4: session_is_fresh introducido - nueva sesión independiente de balances
+    """
     bootstrap = HRMBootstrap()
     portfolio_manager, order_manager = await bootstrap.bootstrap_system(mode)
     runtime_loop = bootstrap.get_runtime_loop()
     
     return portfolio_manager, order_manager, runtime_loop
+
+
+def reset_session():
+    """
+    Reset session to fresh state.
+    
+    🔥 PRIORIDAD 4: Función para marcar sesión como nueva
+    """
+    global session_is_fresh
+    session_is_fresh = True
+    logger.info("🔄 Session reset to fresh state")
+    return True

@@ -1,3 +1,0 @@
-timestamp,symbol,side,quantity,price,filled_price,commission,pnl,status,order_id,cycle_id,strategy,reason
-2026-01-14 16:22:52.076508,BTCUSDT,buy,0.0123904554669477,96848.74,96848.74,1.2,0.0,filled,paper_1768404172,,portfolio_manager_simulated,L3_initial_rebalance
-2026-01-14 16:22:52.087874,ETHUSDT,buy,0.2683579179003676,3353.73,3353.73,0.9000000000000001,0.0,filled,paper_1768404172,,portfolio_manager_simulated,L3_initial_rebalance

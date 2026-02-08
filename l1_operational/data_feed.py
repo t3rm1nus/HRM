@@ -2,6 +2,10 @@ import asyncio
 import pandas as pd
 from typing import Dict, Any
 from core.logging import logger
+
+# Import ccxt.async_support for async market data fetching
+import ccxt.async_support as ccxt
+
 try:
     from .binance_client import BinanceClient
 except ImportError:
@@ -73,10 +77,16 @@ class DataFeed:
         try:
             if self.binance_client:
                 data = await self.binance_client.get_klines(symbol, timeframe, limit=limit)
+                # Si vienen más de 6 columnas, recortar
+                if len(data) > 0 and len(data[0]) > 6:
+                    data = [row[:6] for row in data]
                 df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             else:
                 await self.ccxt_exchange.load_markets()
                 ohlcv = await self.ccxt_exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                # Si vienen más de 6 columnas, recorte
+                if len(ohlcv) > 0 and len(ohlcv[0]) > 6:
+                    ohlcv = [candle[:6] for candle in ohlcv]
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')

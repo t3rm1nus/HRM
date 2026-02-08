@@ -4,8 +4,22 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def bootstrap_simulated_exchange(config):
-    if not config.get("paper_mode", False):
+def bootstrap_simulated_exchange(config, force_paper: bool = True):
+    """
+    Bootstrap SimulatedExchangeClient con soporte cleanup.
+    
+    Args:
+        config: Configuración del sistema
+        force_paper: Si True, fuerza modo paper ignorando config
+    
+    Returns:
+        SimulatedExchangeClient instance
+    """
+    # Check if we should use paper mode
+    use_paper = force_paper or config.get("paper_mode", False)
+    
+    if not use_paper:
+        log.info("Paper mode disabled - not initializing SimulatedExchangeClient")
         return None
 
     initial_balances = config.get("simulated_initial_balances", {})
@@ -13,6 +27,11 @@ def bootstrap_simulated_exchange(config):
     if not initial_balances:
         log.critical("SIM_BALANCES vacío en bootstrap")
         raise RuntimeError("Paper mode requires initial balances")
+
+    # 🔄 IMPORTANTE: Asegurar que singleton está limpo antes de inicializar
+    # Esto permite re-inicialización tras cleanup
+    SimulatedExchangeClient._instance = None
+    SimulatedExchangeClient._initialized = False
 
     client = SimulatedExchangeClient.initialize_once(
         initial_balances=initial_balances

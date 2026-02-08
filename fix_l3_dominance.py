@@ -42,27 +42,40 @@ def should_l3_block_l2_signals(
     current_allocation: Dict[str, float],
     target_allocation: Dict[str, float],
     l2_signal_action: str = None,
-    has_position: bool = False
+    has_position: bool = False,
+    allow_l2_signals: bool = True
 ) -> bool:
     """
     Decide si L3 debe bloquear señales L2.
 
     LÓGICA CORREGIDA - NUEVA JERARQUÍA:
-    1. Stop-loss L1 (siempre primero - no aplica aquí)
-    2. SELL TÁCTICO DE SALIDA LIMPIA (excepción quirúrgica)
-    3. Dominancia L3 (normal) - L3 confidence >= 0.6 bloquea
-    4. Duda → HOLD (INV-5) - L3 confidence < 0.6 fuerza HOLD
+    1. Si allow_l2_signals=False → SIEMPRE bloquear señales direccionales (invariante jerárquica)
+    2. Stop-loss L1 (siempre primero - no aplica aquí)
+    3. SELL TÁCTICO DE SALIDA LIMPIA (excepción quirúrgica)
+    4. Dominancia L3 (normal) - L3 confidence >= 0.6 bloquea
+    5. Duda → HOLD (INV-5) - L3 confidence < 0.6 fuerza HOLD
 
     EXCEPCIÓN QUIRÚRGICA SOLO PARA SALIDA:
     - has_position + l2_signal SELL + l3_regime TRENDING + l3_confidence < 0.6
     """
 
-    # 1. L3 BUY/SELL siempre tienen prioridad (dominancia normal)
+    # 1. INVARIANTE JERÁRQUICA: Si allow_l2_signals=False, BLOQUEAR TODAS LAS SEÑALES DIRECCIONALES
+    if not allow_l2_signals:
+        if l2_signal_action and l2_signal_action.upper() not in ['HOLD']:
+            logger.warning(
+                f"🚫 L3 DOMINANCE: allow_l2_signals=False bloquea señal L2 {l2_signal_action.upper()} "
+                f"en régimen {regime}"
+            )
+            return True
+        else:
+            return False
+
+    # 2. L3 BUY/SELL siempre tienen prioridad (dominancia normal)
     if l3_signal in ['buy', 'sell']:
         logger.info(f"✅ L3 {l3_signal.upper()} signal - L2 debe seguir")
         return False
 
-    # 2. EXCEPCIÓN QUIRÚRGICA: SELL TÁCTICO DE SALIDA LIMPIA
+    # 3. EXCEPCIÓN QUIRÚRGICA: SELL TÁCTICO DE SALIDA LIMPIA
     # SOLO si se cumplen TODAS las condiciones:
     if (l2_signal_action and l2_signal_action.upper() in ['SELL', 'SELL_LIGHT', 'REDUCE'] and
         has_position and
@@ -74,7 +87,7 @@ def should_l3_block_l2_signals(
         )
         return False
 
-    # 3. DOMINANCIA L3 NORMAL: L3 bloquea si confidence >= 0.6
+    # 4. DOMINANCIA L3 NORMAL: L3 bloquea si confidence >= 0.6
     if l3_confidence >= 0.6:
         logger.warning(
             f"🚫 L3 DOMINANCE: L3 {l3_signal.upper()} con {l3_confidence:.2f} confidence (>= 0.6) "
@@ -82,7 +95,7 @@ def should_l3_block_l2_signals(
         )
         return True
 
-    # 4. DUDA → HOLD (INV-5): Si L3 confidence < 0.6, forzar HOLD global
+    # 5. DUDA → HOLD (INV-5): Si L3 confidence < 0.6, forzar HOLD global
     # NO permitir BUY bajo duda - solo HOLD hasta que L3 tenga claridad
     if l3_confidence < 0.6:
         logger.info(
@@ -91,7 +104,7 @@ def should_l3_block_l2_signals(
         )
         return True
 
-    # 5. Si allocations desviadas >10%, permitir rebalancing (pero solo HOLD, no BUY)
+    # 6. Si allocations desviadas >10%, permitir rebalancing (pero solo HOLD, no BUY)
     allocation_deviation = calculate_allocation_deviation(
         current_allocation, target_allocation
     )

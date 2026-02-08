@@ -62,26 +62,25 @@ class MarketDataManager:
             fallback_enabled: Habilita estrategia de fallback (usa config global si no se proporciona)
             config_dict: Configuración opcional (usa config global si no se proporciona)
         """
-        # Construir config_dict combinando parámetros con config global
-        self.config = config_dict or config.copy()
+        # Usar config_dict si se proporciona, sino usar config global (sin copiar)
+        # HRMAppConfig es inmutable, única, y se inyecta, no se copia
+        self.config = config_dict if config_dict is not None else config
         
-        if symbols is not None:
-            self.config["SYMBOLS"] = symbols
-        if fallback_enabled is not None:
-            self.config["FALLBACK_STRATEGY"] = "external->realtime->datafeed" if fallback_enabled else "datafeed_only"
-        
-        # Forzar mainnet para datos de mercado si es paper mode
-        if self.config.get('PAPER_MODE', True):
-            logger.info("🧪 Paper mode: Forcing Binance MAINNET public endpoints for market data")
-            self.config['USE_TESTNET'] = False  # No usar testnet para datos de mercado en paper mode
-        
-        # Configuración
+        # Configuración - HRMAppConfig es inmutable, usamos solo getters
         self.symbols = self.config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
         self.validation_retries = self.config.get("VALIDATION_RETRIES", 3)
         self.cache_valid_seconds = self.config.get("CACHE_VALID_SECONDS", 30)
-        self.fallback_strategy = FallbackStrategy(
-            self.config.get("FALLBACK_STRATEGY", "external->realtime->datafeed")
-        )
+        
+        # Fallback strategy
+        if fallback_enabled is not None:
+            fallback_value = "external->realtime->datafeed" if fallback_enabled else "datafeed_only"
+            self.fallback_strategy = FallbackStrategy(fallback_value)
+        else:
+            self.fallback_strategy = FallbackStrategy(self.config.get("FALLBACK_STRATEGY", "external->realtime->datafeed"))
+        
+        # Forzar mainnet para datos de mercado si es paper mode
+        if self.config.get('PAPER_MODE', True):
+            logger.info("🧪 Paper mode: Using MAINNET public endpoints for market data")
         
         # Componentes
         self.realtime_loader = None
@@ -444,6 +443,73 @@ class MarketDataManager:
         except Exception as e:
             logger.error(f"❌ Error en refresh_data: {e}")
             return {}
+    
+    async def force_warmup(self, symbol: str = "BTCUSDT", timeframe: str = "1m", limit: int = 100) -> bool:
+        """
+        💥 PRIORIDAD 2: Warm-up de datos antes del trading loop.
+        
+        Descarga datos para 1 símbolo, 1 timeframe, 100 velas.
+        Verifica que el caché no esté vacío.
+        
+        Args:
+            symbol: Símbolo a descargar (default: BTCUSDT)
+            timeframe: Timeframe (default: 1m)
+            limit: Número de velas (default: 100)
+            
+        Returns:
+            True si el warmup fue exitoso, False si falló
+        """
+        logger.info(f"🔥 force_warmup: {symbol}, {timeframe}, {limit} velas")
+        
+        try:
+            # Inicializar componentes si es necesario
+            await self._init_components()
+            
+            # Forzar descarga de datos directamente
+            if self.data_feed:
+                df = await self.data_feed.fetch_ohlcv(symbol, timeframe, limit)
+                
+                if df is not None and not df.empty:
+                    # Actualizar caché
+                    async with self._cache_lock:
+                        self._cache = CacheEntry(
+                            data={symbol: df},
+                            timestamp=time.time(),
+                            source="warmup",
+                            validation_passed=True
+                        )
+                    
+                    # Verificar que el caché no esté vacío
+                    if self._cache and self._cache.data:
+                        logger.info(f"✅ Warmup exitoso: {symbol} - {len(df)} velas, shape={df.shape}")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Warmup: caché vacío después de actualizar")
+                        return False
+                else:
+                    logger.warning(f"⚠️ Warmup: no se obtuvieron datos para {symbol}")
+                    return False
+            else:
+                logger.warning(f"⚠️ Warmup: data_feed no disponible")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error en force_warmup: {e}")
+            return False
+    
+    async def is_warmed_up(self) -> bool:
+        """
+        Verifica si el sistema tiene datos en caché.
+        
+        Returns:
+            True si hay datos válidos en caché
+        """
+        async with self._cache_lock:
+            if self._cache is None:
+                return False
+            if self._cache.data is None or len(self._cache.data) == 0:
+                return False
+            return True
     
     def get_stats(self) -> Dict[str, Any]:
         """Obtiene estadísticas de operación."""

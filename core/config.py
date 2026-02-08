@@ -1,16 +1,108 @@
 # core/config.py - Environment Configuration Management
+"""
+HRM Configuration - Strongly Typed Configuration Object
+
+✅ USA config.paper_mode EN LUGAR DE config['paper_mode']
+✅ Type safety con dataclasses
+✅ Autocompletado en IDE
+"""
 import os
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
 from core.logging import logger
 
-# HRM Path Mode Configuration
-HRM_PATH_MODE = "PATH2"  # opciones: PATH1, PATH2, PATH3 (PATH2 = HYBRID INTELLIGENT - BALANCED MULTI-SIGNAL)
+# =============================================================================
+# HRM PATH MODE CONFIGURATION
+# =============================================================================
+HRM_PATH_MODE = "PATH2"  # opciones: PATH1, PATH2, PATH3
 MAX_CONTRA_ALLOCATION_PATH2 = 0.2  # 20% limit for contra-allocation in PATH2
-
-# Signal source constants for PATH mode validation
 PATH3_SIGNAL_SOURCE = "path3_full_l3_dominance"  # Required signal source for PATH3 orders
+
+# =============================================================================
+# HRM CONFIG - ESTRUCTURA FUERTEMENTE TIPADA
+# =============================================================================
+
+@dataclass
+class BinanceConfig:
+    """Configuración de Binance"""
+    API_KEY: str = ""
+    API_SECRET: str = ""
+    MODE: str = "PAPER"  # PAPER, LIVE
+    USE_TESTNET: bool = True
+
+@dataclass
+class TradingConfig:
+    """Configuración de trading"""
+    SYMBOLS: List[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    TIMEFRAME: str = "1m"
+    INITIAL_BALANCE: float = 3000.0
+    MAX_POSITION_SIZE: float = 0.05  # 5% max position per symbol
+    MIN_ORDER_VALUE: float = 1.0
+    RISK_PER_TRADE: float = 0.02
+    PAPER_MODE: bool = True
+    
+    # Costs
+    ENABLE_COMMISSIONS: bool = True
+    ENABLE_SLIPPAGE: bool = True
+    COMMISSION_RATE: float = 0.001
+    SLIPPAGE_BPS: float = 2
+    
+    # Persistence
+    ENABLE_PERSISTENCE: bool = True
+    STATE_FILE: str = "portfolio_state.json"
+    LOG_FILE: str = "logs/hrm.log"
+
+@dataclass
+class ConvergenceConfig:
+    """Configuración de convergence"""
+    enabled: bool = True
+    rollout_phase: str = "monitoring_only"
+    safety_mode: str = "conservative"
+    confidence_min: float = 0.35
+    confidence_l2: float = 0.40
+
+@dataclass
+class HRMConfig:
+    """
+    Configuración principal de HRM - FUERTEMENTE TIPADA
+    
+    ✅ USA: config.paper_mode
+    ❌ NO USES: config['paper_mode']
+    """
+    trading: TradingConfig = field(default_factory=TradingConfig)
+    binance: BinanceConfig = field(default_factory=BinanceConfig)
+    convergence: ConvergenceConfig = field(default_factory=ConvergenceConfig)
+    
+    # Mode
+    mode: str = "simulated"
+    
+    def get(self, key: str, default=None) -> Any:
+        """Get config value by dotted path (legacy compatibility)"""
+        keys = key.split('.')
+        obj = self
+        try:
+            for k in keys:
+                obj = getattr(obj, k)
+            return obj
+        except AttributeError:
+            return default
+    
+    def __getitem__(self, key: str) -> Any:
+        """Legacy dict-like access for compatibility"""
+        return self.get(key)
+    
+    def __setitem__(self, key: str, value: Any):
+        """Legacy dict-like set for compatibility"""
+        if '.' in key:
+            parts = key.split('.')
+            obj = self
+            for p in parts[:-1]:
+                obj = getattr(obj, p)
+            setattr(obj, parts[-1], value)
+        else:
+            setattr(self, key, value)
 
 class EnvironmentConfig:
     """
@@ -319,12 +411,39 @@ else:
 
 # Global configuration instance
 _config_instance = None
+# Force mode override - set by SystemCleanup to force paper mode
+_forced_mode: str = None
 
-def get_config(mode: str = "live") -> EnvironmentConfig:
-    """Get global configuration instance"""
-    global _config_instance
-    if _config_instance is None or _config_instance.mode != mode:
-        _config_instance = EnvironmentConfig(mode)
+def set_forced_mode(mode: str):
+    """Force a specific mode - used by SystemCleanup"""
+    global _forced_mode
+    _forced_mode = mode
+    logger.info(f"🎯 MODE FORCED to: {mode}")
+
+def get_config(mode: str = None) -> EnvironmentConfig:
+    """
+    Get global configuration instance.
+    
+    IMPORTANT: If _forced_mode is set by SystemCleanup, it takes precedence.
+    After cleanup, mode will ALWAYS be forced to paper (unless overridden).
+    
+    🔥 PRIORIDAD 1: PROHIBIDO CARGAR "live" EN PAPER
+    Si mode es None o "paper", forzar a "paper" - nunca usar "live"
+    """
+    global _config_instance, _forced_mode
+    
+    # 🔥 PRIORIDAD 1: PROHIBIDO - Si viene "live" en paper mode, error
+    if _forced_mode is not None:
+        effective_mode = _forced_mode
+    elif mode is not None:
+        if mode == "live":
+            raise RuntimeError("🚨 FATAL: core.config NO puede cargar 'live' en modo paper. Use 'paper' explícitamente.")
+        effective_mode = mode
+    else:
+        effective_mode = "paper"  # Default to paper, never live
+    
+    if _config_instance is None or _config_instance.mode != effective_mode:
+        _config_instance = EnvironmentConfig(effective_mode)
     return _config_instance
 
 # Convenience functions

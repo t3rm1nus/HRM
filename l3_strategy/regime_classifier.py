@@ -163,7 +163,7 @@ class MarketRegimeClassifier:
             
             if abs_change > self.thresholds['trend']['strong_change'] and r_squared > 0.5:
                 subtype = f"STRONG_{'BULL' if direction == 'UP' else 'BEAR'}"
-                score = min(1.0, (abs_change / 0.03) * (r_squared / 0.7) * (adx / 35))
+                score = np.clip((abs_change / 0.03) * (r_squared / 0.7) * (adx / 35), 0.0, 1.0)
                 
             elif abs_change > self.thresholds['trend']['moderate_change'] and r_squared > 0.4:
                 subtype = f"MODERATE_{'BULL' if direction == 'UP' else 'BEAR'}"
@@ -175,7 +175,7 @@ class MarketRegimeClassifier:
                 
             else:
                 subtype = None
-                score = max(0.0, abs_change / 0.008)
+                score = np.clip(abs_change / 0.008, 0.0, 1.0)
 
             return {
                 'score': score,
@@ -399,25 +399,42 @@ class MarketRegimeClassifier:
             return {'score': 0.0, 'subtype': None, 'metrics': {}}
 
     def _determine_primary_regime(self, results: Dict, price_change: float) -> Tuple[str, float, Optional[str]]:
-        """Determine primary regime with proper hierarchy"""
+        """Determine primary regime with proper hierarchy and audit logging"""
         try:
             abs_price_change = abs(price_change)
+            
+            # Normalize all scores to [0, 1] range
+            for regime_type in results:
+                results[regime_type]['score'] = np.clip(results[regime_type]['score'], 0.0, 1.0)
 
             # 1. BREAKOUT priority
             if results['breakout']['score'] > 0.7:
-                return 'BREAKOUT', results['breakout']['score'], results['breakout']['subtype']
+                score = np.clip(results['breakout']['score'], 0.0, 1.0)
+                logger.info(f"Audit: Regime=BREAKOUT, Confidence={score:.2f}, PriceChange={price_change:.2%}")
+                return 'BREAKOUT', score, results['breakout']['subtype']
 
             # 2. TRENDING priority
             if abs_price_change > self.thresholds['trend']['weak_change'] and results['trending']['score'] > 0.45:
-                return 'TRENDING', results['trending']['score'], results['trending']['subtype']
+                score = np.clip(results['trending']['score'], 0.0, 1.0)
+                adx = results['trending']['metrics'].get('adx', 20)
+                rsi = results['trending']['metrics'].get('rsi', 50)
+                logger.info(f"Audit: Regime=TRENDING, Confidence={score:.2f}, PriceChange={price_change:.2%}, ADX={adx:.1f}, RSI={rsi:.1f}")
+                return 'TRENDING', score, results['trending']['subtype']
 
             # 3. VOLATILE
             if results['volatile']['score'] > 0.6:
-                return 'VOLATILE', results['volatile']['score'], results['volatile']['subtype']
+                score = np.clip(results['volatile']['score'], 0.0, 1.0)
+                logger.info(f"Audit: Regime=VOLATILE, Confidence={score:.2f}, PriceChange={price_change:.2%}")
+                return 'VOLATILE', score, results['volatile']['subtype']
 
             # 4. RANGE (including setups)
             if abs_price_change < self.thresholds['range']['max_directional_move'] and results['range']['score'] > 0.6:
-                return 'RANGE', results['range']['score'], results['range']['subtype']
+                score = np.clip(results['range']['score'], 0.0, 1.0)
+                bb_width = results['range']['metrics'].get('bb_width', 0)
+                rsi = results['range']['metrics'].get('rsi', 50)
+                adx = results['range']['metrics'].get('adx', 20)
+                logger.info(f"Audit: Regime=RANGE, Confidence={score:.2f}, PriceChange={price_change:.2%}, BBWidth={bb_width:.4f}, RSI={rsi:.1f}, ADX={adx:.1f}")
+                return 'RANGE', score, results['range']['subtype']
 
             # 5. Fallback
             scores = {
@@ -427,7 +444,25 @@ class MarketRegimeClassifier:
                 'BREAKOUT': results['breakout']['score']
             }
             primary_regime = max(scores, key=scores.get)
-            primary_score = scores[primary_regime]
+            primary_score = np.clip(scores[primary_regime], 0.0, 1.0)
+
+            # Log regime audit with detailed metrics
+            metrics = []
+            if primary_regime == 'TRENDING':
+                adx = results['trending']['metrics'].get('adx', 20)
+                rsi = results['trending']['metrics'].get('rsi', 50)
+                metrics.append(f"ADX={adx:.1f}")
+                metrics.append(f"RSI={rsi:.1f}")
+            elif primary_regime == 'RANGE':
+                bb_width = results['range']['metrics'].get('bb_width', 0)
+                rsi = results['range']['metrics'].get('rsi', 50)
+                adx = results['range']['metrics'].get('adx', 20)
+                metrics.append(f"BBWidth={bb_width:.4f}")
+                metrics.append(f"RSI={rsi:.1f}")
+                metrics.append(f"ADX={adx:.1f}")
+            
+            metrics_str = ', '.join(metrics)
+            logger.info(f"Audit: Regime={primary_regime}, Confidence={primary_score:.2f}, PriceChange={price_change:.2%}, {metrics_str}")
 
             # Log with appropriate severity based on confidence
             if primary_score > 0.4:
@@ -616,16 +651,23 @@ def ejecutar_estrategia_por_regimen(datos_mercado, symbol="BTCUSDT"):
         df = datos_mercado.get(symbol)
 
         if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            return _create_fallback_strategy()
+            fallback = _create_fallback_strategy()
+            logger.info(f"Audit: Regime=ERROR, Confidence={fallback['confidence']:.2f}, PriceChange=0.00%, BBWidth=0.0000, RSI=50.0, ADX=20.0")
+            return fallback
 
         result = classifier.classify_market_regime(df, symbol)
         strategy_result = _generate_strategy_from_regime(result)
-
+        
+        # Ensure confidence is normalized to [0, 1]
+        strategy_result['confidence'] = np.clip(strategy_result['confidence'], 0.0, 1.0)
+        
         return strategy_result
 
     except Exception as e:
         logger.error(f"Error ejecutando estrategia por régimen: {e}")
-        return _create_fallback_strategy()
+        fallback = _create_fallback_strategy()
+        logger.info(f"Audit: Regime=ERROR, Confidence={fallback['confidence']:.2f}, PriceChange=0.00%, BBWidth=0.0000, RSI=50.0, ADX=20.0")
+        return fallback
 
 
 def _generate_strategy_from_regime(regime_result: Dict) -> Dict:

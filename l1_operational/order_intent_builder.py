@@ -52,17 +52,30 @@ class OrderIntentBuilder:
     """
     Converts TacticalSignal objects to OrderIntent objects with validation and sizing.
     Addresses the Signal → Order Intent bottleneck.
+    
+    NOTE: paper_mode must be provided by SystemBootstrap, NOT decided internamente.
+    
+    🔥 PRIORIDAD 2: ELIMINADO FALLBACK - paper_mode debe ser explícito
+    Si no viene paper_mode → ERROR, no warning
     """
 
-    def __init__(self, position_manager: PositionManager, config: Dict):
+    def __init__(self, position_manager: PositionManager, config: Dict, paper_mode: bool):
         self.position_manager = position_manager
         self.config = config
         self.min_order_value = config.get("MIN_ORDER_USDT", 2.0)
         self.cooldown_seconds = config.get("COOLDOWN_SECONDS", 60)
         self.last_trade_time: Dict[str, float] = {}
-        # Check if we're in paper mode
-        self.paper_mode = config.get("PAPER_MODE", False) or config.get("OPERATION_MODE", "").upper() == "PAPER"
-        logger.info(f"✅ OrderIntentBuilder initialized (paper mode: {self.paper_mode})")
+        
+        # 🔥 PRIORIDAD 2: EXIGIR paper_mode EXPLÍCITO - ERROR si no viene
+        if paper_mode is None:
+            raise RuntimeError(
+                "🚨 FATAL: OrderIntentBuilder requiere paper_mode explícito. "
+                "No se permite fallback a config. Pass paper_mode=True o paper_mode=False."
+            )
+        
+        self.paper_mode = paper_mode
+        
+        logger.info(f"✅ OrderIntentBuilder initialized (paper_mode={self.paper_mode})")
 
     def _cooldown_ok(self, symbol: str) -> bool:
         """Check if cooldown period has elapsed for a symbol"""

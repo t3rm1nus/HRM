@@ -336,3 +336,17 @@ class SimulatedExchangeClient:
         self._trade_id_counter = 1
         logger.info("🔄 SimulatedExchangeClient reiniciado a estado inicial")
         logger.info(f"   Balances: {self.balances}")
+    
+    @classmethod
+    def cleanup(cls) -> bool:
+        """
+        Cleanup completo del singleton - USAR TRAS SystemCleanup.
+        Resetea los flags para permitir nueva inicialización.
+        
+        Returns:
+            True si cleanup fue exitoso
+        """
+        cls._instance = None
+        cls._initialized = False
+        logger.info("🔄 SimulatedExchangeClient.cleanup() completado - singleton listo para re-init")
+        return True
