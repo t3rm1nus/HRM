@@ -11,6 +11,7 @@ This module addresses the Signal → Order Intent bottleneck by:
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import time
+import asyncio
 
 from core.logging import logger
 from l2_tactic.models import TacticalSignal
@@ -83,26 +84,48 @@ class OrderIntentBuilder:
         return last is None or (time.time() - last) >= self.cooldown_seconds
 
     def _calculate_order_quantity(self, signal: TacticalSignal, current_price: float,
-                                 position_qty: float) -> float:
+                                 position_qty: float, available_usdt: Optional[float] = None) -> float:
         """Calculate appropriate order quantity based on signal and current state"""
         try:
-            if signal.side.lower() == "buy":
-                qty = self.position_manager.calculate_order_size(
-                    symbol=signal.symbol,
-                    action="buy",
-                    signal_confidence=signal.confidence,
-                    current_price=current_price,
-                    position_qty=position_qty
-                )
-            elif signal.side.lower() == "sell":
-                qty = min(position_qty, getattr(signal, 'quantity', position_qty))
-            else:
-                logger.warning(f"Unknown signal side: {signal.side}")
+            # Verificar que tenemos precio válido
+            if current_price is None or current_price <= 0:
+                logger.error(f"No hay precio válido en señal: {signal.symbol} - precio: {current_price}")
                 return 0.0
-
+            
+            # Verificar que tenemos balance disponible
+            if available_usdt is None or available_usdt <= 0:
+                logger.debug(f"Balance insuficiente o None: {available_usdt}")
+                return 0.0
+            
+            # Calcular cantidad basada en tamaño de posición
+            position_size = getattr(signal, 'confidence', 0.1)  # Usar confianza como tamaño de posición
+            if position_size <= 0:
+                position_size = 0.1  # Default 10%
+            
+            # Para órdenes BUY: calcular basado en USDT disponible
+            if signal.side.lower() == "buy":
+                if available_usdt is None or available_usdt <= 0:
+                    return 0.0
+                    
+                order_value = available_usdt * position_size
+                qty = order_value / current_price
+                
+            # Para órdenes SELL: usar el balance disponible del activo
+            elif signal.side.lower() == "sell":
+                qty = position_qty * position_size
+                
+            else:  # hold
+                return 0.0
+            
+            # Validar cantidad mínima
+            if qty <= 0:
+                return 0.0
+            
+            logger.debug(f"Calculada cantidad: {qty} para {signal.symbol}")
             return qty
+            
         except Exception as e:
-            logger.error(f"Error calculating order quantity for {signal.symbol}: {e}")
+            logger.error(f"Error calculando cantidad: {e}", exc_info=True)
             return 0.0
 
     def _validate_order_intent(self, intent: OrderIntent) -> bool:
@@ -122,8 +145,8 @@ class OrderIntentBuilder:
 
         return True
 
-    def build_order_intent(self, signal: TacticalSignal, market_data: Dict,
-                          position_qty: float, current_price: float) -> Optional[OrderIntent]:
+    async def build_order_intent(self, signal: TacticalSignal, market_data: Dict,
+                                  position_qty: float, current_price: float) -> Optional[OrderIntent]:
         """
         Build OrderIntent from TacticalSignal with complete validation and sizing.
         """
@@ -162,98 +185,49 @@ class OrderIntentBuilder:
                 logger.error(f"QTY_CALCULATION_ABORTED_REASON=INVALID_POSITION_QTY POSITION_QTY={position_qty}")
                 return None
             
-            # --- VALIDACIÓN DURAS: BALANCES ---
-            if self.paper_mode:
-                balances = None
-                if hasattr(self.position_manager.portfolio, 'client'):
-                    client = self.position_manager.portfolio.client
-                    if hasattr(client, 'get_account_balances'):
-                        import inspect
-                        if inspect.iscoroutinefunction(client.get_account_balances):
-                            import asyncio
-                            try:
-                                if not asyncio.get_running_loop():
-                                    balances = asyncio.run(client.get_account_balances())
-                                else:
-                                    # Si ya hay un loop, usar await directamente (no compatible con test sync)
-                                    logger.error("QTY_CALCULATION_ABORTED_REASON=CANNOT_GET_BALANCES_IN_ASYNC")
-                                    # Para pruebas, usar balances mock
-                                    balances = {
-                                        "USDT": 1000.0,
-                                        "BTC": 0.0,
-                                        "ETH": 0.0
-                                    }
-                            except Exception as e:
-                                logger.error(f"QTY_CALCULATION_ABORTED_REASON=BALANCE_FETCH_ERROR ERROR={e}")
-                                # Fallback para pruebas
-                                balances = {
-                                    "USDT": 1000.0,
-                                    "BTC": 0.0,
-                                    "ETH": 0.0
-                                }
-                        else:
-                            balances = client.get_account_balances()
-                    elif hasattr(client, 'get_balance'):
-                        balances = {}
-                        asset = signal.symbol.replace("USDT", "") if signal.symbol != "USDT" else "USDT"
-                        if inspect.iscoroutinefunction(client.get_balance):
-                            import asyncio
-                            try:
-                                if not asyncio.get_running_loop():
-                                    balances['USDT'] = asyncio.run(client.get_balance("USDT"))
-                                    balances[asset] = asyncio.run(client.get_balance(asset))
-                                else:
-                                    logger.error("QTY_CALCULATION_ABORTED_REASON=CANNOT_GET_BALANCE_IN_ASYNC")
-                                    balances['USDT'] = 1000.0
-                                    balances[asset] = 0.0
-                            except Exception as e:
-                                logger.error(f"QTY_CALCULATION_ABORTED_REASON=BALANCE_FETCH_ERROR ERROR={e}")
-                                balances['USDT'] = 1000.0
-                                balances[asset] = 0.0
-                        else:
-                            balances['USDT'] = client.get_balance("USDT")
-                            balances[asset] = client.get_balance(asset)
-                    else:
-                        logger.error("QTY_CALCULATION_ABORTED_REASON=CLIENT_NO_BALANCE_METHOD")
-                        # Fallback para pruebas
-                        balances = {
-                            "USDT": 1000.0,
-                            "BTC": 0.0,
-                            "ETH": 0.0
-                        }
-                else:
-                    # Si no hay cliente, usar balances mock para pruebas
-                    balances = {
-                        "USDT": 1000.0,
-                        "BTC": 0.0,
-                        "ETH": 0.0
-                    }
+            # --- VALIDACIÓN DURAS: BALANCES (ASYNC FIRST) ---
+            # CRITICAL FIX: Use async balance access in async contexts
+            # This ensures we get real balances from exchange, not stale cache
+            
+            portfolio_manager = self.position_manager.portfolio
+            asset = signal.symbol.replace("USDT", "") if signal.symbol != "USDT" else "USDT"
+            
+            # Use async balance methods
+            if signal.side.lower() == "sell":
+                # For SELL orders, verify we have the asset to sell
+                asset_balance = await portfolio_manager.get_asset_balance_async(asset)
                 
-                logger.debug(f"BALANCES_SOURCE=SIMULATED BALANCES_RAW={balances}")
-                
-                if balances is None:
-                    logger.error("QTY_CALCULATION_ABORTED_REASON=BALANCES_NONE")
+                if asset_balance is None or asset_balance <= 0:
+                    logger.error(
+                        f"QTY_CALCULATION_ABORTED_REASON=INSUFFICIENT_ASSET_BALANCE "
+                        f"ASSET={asset} BALANCE={asset_balance} "
+                        f"SIGNAL_SIDE={signal.side}"
+                    )
                     return None
                 
-                if signal.side.lower() == "sell":
-                    asset = signal.symbol.replace("USDT", "") if signal.symbol != "USDT" else "USDT"
-                    asset_balance = balances.get(asset, 0.0)
-                    if asset_balance is None or asset_balance <= 0:
-                        logger.error(f"QTY_CALCULATION_ABORTED_REASON=INSUFFICIENT_ASSET_BALANCE ASSET={asset} BALANCE={asset_balance}")
-                        return None
-                elif signal.side.lower() == "buy":
-                    usdt_balance = balances.get('USDT', 0.0)
-                    if usdt_balance is None or usdt_balance <= 0:
-                        logger.error(f"QTY_CALCULATION_ABORTED_REASON=INSUFFICIENT_USDT_BALANCE USDT_BALANCE={usdt_balance}")
-                        return None
-            else:
-                # Real mode validation
-                if signal.side.lower() == "sell" and (position_qty is None or position_qty <= 0):
-                    logger.error(f"QTY_CALCULATION_ABORTED_REASON=INSUFFICIENT_POSITION_POSITION_QTY={position_qty}")
+                logger.info(f"[BALANCE_CHECK] SELL {asset}: Available={asset_balance:.6f}")
+                
+            elif signal.side.lower() == "buy":
+                # For BUY orders, verify we have USDT
+                usdt_balance = await portfolio_manager.get_asset_balance_async("USDT")
+                
+                if usdt_balance is None or usdt_balance <= 0:
+                    logger.error(
+                        f"QTY_CALCULATION_ABORTED_REASON=INSUFFICIENT_USDT_BALANCE "
+                        f"USDT_BALANCE={usdt_balance}"
+                    )
                     return None
+                
+                logger.info(f"[BALANCE_CHECK] BUY {asset}: USDT Available=${usdt_balance:.2f}")
+            
+            # Get all balances for position sizing
+            balances = await portfolio_manager.get_balances_async()
+            logger.debug(f"[BALANCE_ACCESS] ASYNC | All balances for sizing | Values: {balances}")
 
             # Calculate order quantity
-            qty = self._calculate_order_quantity(signal, current_price, position_qty)
+            # CRITICAL FIX: Pass pre-fetched USDT balance for BUY orders to avoid ASYNC_VIOLATION
+            usdt_balance_for_sizing = balances.get('USDT', 0.0) if signal.side.lower() == "buy" else None
+            qty = self._calculate_order_quantity(signal, current_price, position_qty, usdt_balance_for_sizing)
             
             # --- PAPER MODE: Ensure order quantity is within available USDT ---
             if self.paper_mode and signal.side.lower() == "buy":
@@ -339,8 +313,8 @@ class OrderIntentProcessor:
     def __init__(self, intent_builder: OrderIntentBuilder):
         self.intent_builder = intent_builder
 
-    def process_signals(self, signals: List[TacticalSignal], market_data: Dict,
-                       get_position_qty_func) -> List[OrderIntent]:
+    async def process_signals(self, signals: List[TacticalSignal], market_data: Dict,
+                             get_position_qty_func) -> List[OrderIntent]:
         """
         Process a list of TacticalSignals to create OrderIntents.
 
@@ -376,10 +350,16 @@ class OrderIntentProcessor:
                     continue
 
                 # Get current position quantity
-                position_qty = get_position_qty_func(signal.symbol)
+                # CRITICAL FIX: Handle both sync and async functions properly
+                if asyncio.iscoroutinefunction(get_position_qty_func):
+                    position_qty = await get_position_qty_func(signal.symbol)
+                else:
+                    # Si es sincrónica, llamarla directamente (pero esto debería ser raro)
+                    position_qty = get_position_qty_func(signal.symbol)
+                    logger.warning(f"⚠️ Usando función sincrónica para position_qty: {signal.symbol}")
 
-                # Build order intent
-                intent = self.intent_builder.build_order_intent(
+                # Build order intent (NOW ASYNC)
+                intent = await self.intent_builder.build_order_intent(
                     signal, market_data, position_qty, current_price
                 )
 
