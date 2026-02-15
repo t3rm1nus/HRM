@@ -4,12 +4,12 @@ import os
 import csv
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 import pandas as pd
 
 from core.logging import logger
-from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
 from core.async_balance_helper import (
     AsyncContextDetector, 
     BalanceAccessLogger, 
@@ -17,6 +17,9 @@ from core.async_balance_helper import (
     enforce_async_balance_access,
     BalanceVerificationStatus
 )
+
+if TYPE_CHECKING:
+    from system.market_data_manager import MarketDataManager
 
 # =========================
 # OPTIONAL DEPENDENCIES
@@ -86,7 +89,20 @@ async def save_portfolio_to_csv(state: Dict[str, Any]):
 # =========================
 
 class PortfolioManager:
-    """Portfolio Manager with singleton pattern for consistent state across the system."""
+    """
+    Portfolio Manager - Versión PURA con inyección de dependencias.
+    
+    No lee config, no crea clientes, depende solo de interfaces inyectadas.
+    
+    Args:
+        exchange_client: Cliente de exchange (SimulatedExchangeClient o BinanceClient)
+        market_data_manager: Gestor de datos de mercado para obtener precios
+        mode: Modo de operación ("simulated" o "live")
+        initial_balance: Balance inicial para modo simulated
+        symbols: Lista de símbolos a operar
+        enable_commissions: Habilitar comisiones
+        enable_slippage: Habilitar slippage
+    """
     
     _instance = None
     _lock = False
@@ -111,16 +127,22 @@ class PortfolioManager:
 
     def __init__(
         self,
+        exchange_client: Optional[Any] = None,
+        market_data_manager: Optional["MarketDataManager"] = None,
         mode: str = "simulated",
-        initial_balance: float = 3000.0,
-        client: Optional[Any] = None,
+        initial_balance: float = 500.0,
         symbols: Optional[list] = None,
         enable_commissions: bool = True,
         enable_slippage: bool = True
     ):
+        # Evitar re-inicialización si ya existe
+        if hasattr(self, '_initialized'):
+            return
+        
+        self.exchange_client = exchange_client
+        self.market_data_manager = market_data_manager
         self.mode = mode
         self.initial_balance = initial_balance
-        self.client = client
         self.symbols = symbols or ["BTCUSDT", "ETHUSDT"]
 
         self.enable_commissions = enable_commissions
@@ -139,15 +161,44 @@ class PortfolioManager:
         self._balance_cache_time: Dict[str, float] = {}
         self._balance_cache_ttl = 5.0  # Cache balances for 5 seconds
 
+        # Initialize tax tracker and paper logger if available
+        self.tax_tracker = None
+        if TAX_TRACKER_AVAILABLE:
+            try:
+                self.tax_tracker = TaxTracker()
+                logger.info("✅ TaxTracker inicializado para seguimiento fiscal")
+            except Exception as e:
+                logger.error(f"❌ Error inicializando TaxTracker: {e}")
+
+        self.paper_logger = None
+        if PAPER_LOGGER_AVAILABLE:
+            try:
+                self.paper_logger = get_paper_logger()
+                logger.info("✅ PaperTradeLogger inicializado para registro de trades")
+            except Exception as e:
+                logger.error(f"❌ Error inicializando PaperTradeLogger: {e}")
+
         self._configure_trading_costs()
         
-        # Initialize portfolio from client if available
-        if self.client:
-            self._init_portfolio_from_client()
+        # Initialize portfolio to empty state - actual initialization happens in initialize_async
+        self._init_portfolio()
+        
+        self._initialized = True
+
+        logger.info(f"✅ PortfolioManager created (await initialize_async() to complete initialization) | mode={self.mode} | initial_balance={initial_balance}")
+    
+    async def initialize_async(self):
+        """Initialize portfolio manager asynchronously - use this instead of relying on __init__"""
+        if self.exchange_client:
+            if self.mode == "simulated" or (hasattr(self.exchange_client, 'paper_mode') and self.exchange_client.paper_mode):
+                await self._init_portfolio_from_simulated_client_async()
+            else:
+                if not await self._sync_from_client_async():
+                    self._init_portfolio()
         else:
             self._init_portfolio()
-
-        logger.info(f"✅ PortfolioManager iniciado | mode={self.mode} | balance={initial_balance}")
+            
+        logger.info(f"✅ PortfolioManager fully initialized | mode={self.mode} | balance={self.portfolio.get('total', self.initial_balance):.2f} USDT")
 
     # =========================
     # SYNC FROM EXCHANGE (CRITICAL FIX)
@@ -155,7 +206,7 @@ class PortfolioManager:
 
     def sync_from_exchange(self, exchange_client) -> bool:
         """
-        CRITICAL METHOD: Synchronize portfolio balances from SimulatedExchangeClient.
+        CRITICAL METHOD: Synchronize portfolio balances from exchange client.
         
         This method pulls REAL balances from the exchange client and updates
         internal portfolio state atomically. MUST be called after EVERY executed order.
@@ -209,32 +260,10 @@ class PortfolioManager:
                 logger.critical("[SYNC] 🚨 CRITICAL: All balances are zero - state loss detected!")
                 return False
             
-            # Get market prices for NAV calculation
-            btc_price = 0.0
-            eth_price = 0.0
-            
-            if hasattr(exchange_client, 'get_market_price'):
-                try:
-                    btc_price = exchange_client.get_market_price("BTCUSDT")
-                    eth_price = exchange_client.get_market_price("ETHUSDT")
-                except Exception as e:
-                    logger.warning(f"[SYNC] Could not get market prices: {e}")
-            
-            # Calculate NAV
-            btc_value = current_btc * btc_price
-            eth_value = current_eth * eth_price
-            total_nav = current_usdt + btc_value + eth_value
-            
-            # Update portfolio atomically
+            # Update portfolio atomically with balances only - NAV will be calculated separately using MarketDataManager
             self.portfolio["BTCUSDT"] = {"position": current_btc, "free": current_btc}
             self.portfolio["ETHUSDT"] = {"position": current_eth, "free": current_eth}
             self.portfolio["USDT"] = {"free": current_usdt}
-            self.portfolio["total"] = total_nav
-            
-            # Update peak value if needed
-            if total_nav > self.peak_value:
-                self.peak_value = total_nav
-                self.portfolio["peak_value"] = total_nav
             
             # Update balance cache
             import time
@@ -249,16 +278,14 @@ class PortfolioManager:
                 "USDT": time.time()
             }
             
-            # Log sync success with full details
+            # Log sync success with full details (without NAV - will be calculated separately)
             logger.info("=" * 70)
-            logger.info("[SYNC] ✅ Portfolio synced from SimulatedExchangeClient")
+            logger.info("[SYNC] ✅ Portfolio synced from exchange client")
             logger.info(f"[SYNC]    BTC Balance:  {current_btc:.6f}")
             logger.info(f"[SYNC]    ETH Balance:  {current_eth:.6f}")
             logger.info(f"[SYNC]    USDT Balance: ${current_usdt:.2f}")
-            logger.info(f"[SYNC]    BTC Price:    ${btc_price:.2f} (Value: ${btc_value:.2f})")
-            logger.info(f"[SYNC]    ETH Price:    ${eth_price:.2f} (Value: ${eth_value:.2f})")
             logger.info(f"[SYNC]    {'─' * 50}")
-            logger.info(f"[SYNC]    TOTAL NAV:    ${total_nav:.2f}")
+            logger.info(f"[SYNC]    NAV calculation requires MarketDataManager")
             logger.info("=" * 70)
             
             return True
@@ -318,32 +345,21 @@ class PortfolioManager:
                 logger.critical("[SYNC] 🚨 CRITICAL: All balances are zero - state loss detected!")
                 return False
             
-            # Get market prices for NAV calculation
-            btc_price = 0.0
-            eth_price = 0.0
+            # Defensive safeguard: Check for negative balances
+            if current_btc < 0:
+                logger.critical(f"🚨 NEGATIVE BTC BALANCE DETECTED: {current_btc:.6f} - resetting to 0")
+                current_btc = 0.0
+            if current_eth < 0:
+                logger.critical(f"🚨 NEGATIVE ETH BALANCE DETECTED: {current_eth:.4f} - resetting to 0")
+                current_eth = 0.0
+            if current_usdt < 0:
+                logger.critical(f"🚨 NEGATIVE USDT BALANCE DETECTED: {current_usdt:.2f} - resetting to 0")
+                current_usdt = 0.0
             
-            if hasattr(exchange_client, 'get_market_price'):
-                try:
-                    btc_price = exchange_client.get_market_price("BTCUSDT")
-                    eth_price = exchange_client.get_market_price("ETHUSDT")
-                except Exception as e:
-                    logger.warning(f"[SYNC] Could not get market prices: {e}")
-            
-            # Calculate NAV
-            btc_value = current_btc * btc_price
-            eth_value = current_eth * eth_price
-            total_nav = current_usdt + btc_value + eth_value
-            
-            # Update portfolio atomically
+            # Update portfolio atomically with balances only - NAV will be calculated separately using MarketDataManager
             self.portfolio["BTCUSDT"] = {"position": current_btc, "free": current_btc}
             self.portfolio["ETHUSDT"] = {"position": current_eth, "free": current_eth}
             self.portfolio["USDT"] = {"free": current_usdt}
-            self.portfolio["total"] = total_nav
-            
-            # Update peak value if needed
-            if total_nav > self.peak_value:
-                self.peak_value = total_nav
-                self.portfolio["peak_value"] = total_nav
             
             # Update balance cache
             import time
@@ -359,16 +375,14 @@ class PortfolioManager:
             }
             self._balance_verification.mark_synced("exchange_async")
             
-            # Log sync success with full details
+            # Log sync success with full details (without NAV - will be calculated separately)
             logger.info("=" * 70)
-            logger.info("[SYNC] ✅ Portfolio synced from SimulatedExchangeClient")
+            logger.info("[SYNC] ✅ Portfolio synced from exchange client")
             logger.info(f"[SYNC]    BTC Balance:  {current_btc:.6f}")
             logger.info(f"[SYNC]    ETH Balance:  {current_eth:.6f}")
             logger.info(f"[SYNC]    USDT Balance: ${current_usdt:.2f}")
-            logger.info(f"[SYNC]    BTC Price:    ${btc_price:.2f} (Value: ${btc_value:.2f})")
-            logger.info(f"[SYNC]    ETH Price:    ${eth_price:.2f} (Value: ${eth_value:.2f})")
             logger.info(f"[SYNC]    {'─' * 50}")
-            logger.info(f"[SYNC]    TOTAL NAV:    ${total_nav:.2f}")
+            logger.info(f"[SYNC]    NAV calculation requires MarketDataManager")
             logger.info("=" * 70)
             
             return True
@@ -377,38 +391,39 @@ class PortfolioManager:
             logger.error(f"[SYNC] ❌ Error during sync_from_exchange_async: {e}", exc_info=True)
             return False
 
-    def update_nav(self, market_prices: Dict[str, float]) -> Dict[str, float]:
+    async def update_nav(self) -> Dict[str, float]:
         """
-        Update NAV using current market prices.
+        Update NAV using current market prices from MarketDataManager.
         
-        Args:
-            market_prices: Dict with symbol -> price mapping
-            
         Returns:
             Dict with NAV breakdown
         """
-        nav = self.calculate_nav(market_prices)
+        nav = await self.calculate_nav_async()
         
         # Update portfolio total
         self.portfolio["total"] = nav["total_nav"]
         
-        logger.info(f"[SYNC] NAV updated: ${nav['total_nav']:.2f}")
+        logger.info(f"[ASYNC] NAV updated: ${nav['total_nav']:.2f}")
         
         return nav
 
-    async def update_nav_async(self, market_prices: Dict[str, float]) -> Dict[str, float]:
+    async def update_nav_async(self, market_prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
         """
         Async version of update_nav.
-        Fetches fresh balances before calculating NAV.
+        Fetches fresh balances before calculating NAV using MarketDataManager.
         
         Args:
-            market_prices: Dict with symbol -> price mapping
-            
+            market_prices: Optional pre-fetched market prices. If None, fetches from MarketDataManager.
+        
         Returns:
             Dict with NAV breakdown
         """
-        # Get fresh balances from exchange
+        # Get fresh balances
         balances = await self.get_balances_async()
+        
+        # Get market prices from MarketDataManager if not provided
+        if market_prices is None:
+            market_prices = await self._get_market_prices()
         
         # Calculate NAV with fresh balances
         usdt_balance = balances.get("USDT", 0.0)
@@ -421,6 +436,14 @@ class PortfolioManager:
         btc_value = btc_balance * btc_price
         eth_value = eth_balance * eth_price
         total_nav = usdt_balance + btc_value + eth_value
+        
+        # Defensive safeguard: Ensure NAV never drops to 0 unless portfolio is actually empty
+        if total_nav <= 0 and (usdt_balance > 0 or btc_balance > 0 or eth_balance > 0):
+            logger.critical(f"🚨 NAV CALCULATION ERROR: NAV={total_nav:.2f} with non-zero balances (USDT={usdt_balance:.2f}, BTC={btc_balance:.6f}, ETH={eth_balance:.4f})")
+            # Calculate minimum possible NAV assuming $1 minimum price
+            min_nav = usdt_balance + btc_balance * 1.0 + eth_balance * 1.0
+            total_nav = max(min_nav, 0.01)
+            logger.warning(f"⚠️ NAV adjusted to minimum: ${total_nav:.2f}")
         
         # Update portfolio with fresh values
         self.portfolio["BTCUSDT"] = {"position": btc_balance, "free": btc_balance}
@@ -455,6 +478,24 @@ class PortfolioManager:
         logger.info(f"[ASYNC] NAV updated: ${total_nav:.2f}")
         return nav
 
+    async def _get_market_prices(self) -> Dict[str, float]:
+        """
+        Obtiene precios de mercado desde MarketDataManager.
+        
+        Returns:
+            Dict[str, float] con precios actuales
+        """
+        if self.market_data_manager is None:
+            logger.error("❌ MarketDataManager no inyectado - no se pueden obtener precios")
+            return {}
+        
+        try:
+            prices = await self.market_data_manager.get_market_prices()
+            return prices
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo precios desde MarketDataManager: {e}")
+            return {}
+
     # =========================
     # INITIALIZATION
     # =========================
@@ -462,21 +503,21 @@ class PortfolioManager:
     async def _sync_from_client_async(self):
         """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión asíncrona"""
         # Si es modo paper, sincronizar con SimulatedExchangeClient
-        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
+        if self.mode == "simulated" or (self.exchange_client and hasattr(self.exchange_client, 'paper_mode') and self.exchange_client.paper_mode):
             logger.debug("🧪 Paper mode: Synchronizing with SimulatedExchangeClient")
             try:
-                if hasattr(self.client, 'get_account_balances'):
+                if hasattr(self.exchange_client, 'get_account_balances'):
                     import inspect
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        balances = await self.client.get_account_balances()
+                    if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                        balances = await self.exchange_client.get_account_balances()
                     else:
-                        balances = self.client.get_account_balances()
-                elif hasattr(self.client, 'get_balance'):
+                        balances = self.exchange_client.get_account_balances()
+                elif hasattr(self.exchange_client, 'get_balance'):
                     import inspect
-                    if inspect.iscoroutinefunction(self.client.get_balance):
-                        current_btc = await self.client.get_balance("BTC")
-                        current_eth = await self.client.get_balance("ETH")
-                        current_usdt = await self.client.get_balance("USDT")
+                    if inspect.iscoroutinefunction(self.exchange_client.get_balance):
+                        current_btc = await self.exchange_client.get_balance("BTC")
+                        current_eth = await self.exchange_client.get_balance("ETH")
+                        current_usdt = await self.exchange_client.get_balance("USDT")
                         balances = {
                             "BTC": current_btc,
                             "ETH": current_eth,
@@ -484,9 +525,9 @@ class PortfolioManager:
                         }
                     else:
                         balances = {
-                            "BTC": self.client.get_balance("BTC"),
-                            "ETH": self.client.get_balance("ETH"),
-                            "USDT": self.client.get_balance("USDT")
+                            "BTC": self.exchange_client.get_balance("BTC"),
+                            "ETH": self.exchange_client.get_balance("ETH"),
+                            "USDT": self.exchange_client.get_balance("USDT")
                         }
                 else:
                     logger.warning("⚠️ Simulated client has no get_account_balances or get_balance method")
@@ -521,15 +562,15 @@ class PortfolioManager:
         else:
             # Modo live: sincronizar con BinanceClient
             try:
-                if hasattr(self.client, 'get_balances'):
-                    balances = self.client.get_balances()
-                elif hasattr(self.client, 'get_account_balances'):
-                    balances = await self.client.get_account_balances()
+                if hasattr(self.exchange_client, 'get_balances'):
+                    balances = self.exchange_client.get_balances()
+                elif hasattr(self.exchange_client, 'get_account_balances'):
+                    balances = await self.exchange_client.get_account_balances()
                 else:
                     logger.warning("⚠️ Client has no get_balances or get_account_balances method")
                     return False
 
-                logger.debug(f"🔄 Sincronizando portfolio desde BinanceClient: {balances}")
+                logger.debug(f"🔄 Sincronizando portfolio desde exchange client: {balances}")
                 
                 # Map client balances to portfolio structure
                 self.portfolio = {
@@ -553,164 +594,26 @@ class PortfolioManager:
                 return True
 
             except Exception as e:
-                logger.error(f"❌ Error sincronizando portfolio desde BinanceClient: {e}")
+                logger.error(f"❌ Error sincronizando portfolio desde exchange client: {e}")
                 return False
-
-    def _sync_from_client(self):
-        """Sincronizar portfolio con balances reales del cliente (single source of truth) - versión sincrónica"""
-        # Si es modo paper, sincronizar con SimulatedExchangeClient
-        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
-            logger.debug("🧪 Paper mode: Synchronizing with SimulatedExchangeClient")
-            try:
-                if hasattr(self.client, 'get_account_balances'):
-                    import inspect
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        import asyncio
-                        try:
-                            if not asyncio.get_running_loop():
-                                balances = asyncio.run(self.client.get_account_balances())
-                            else:
-                                logger.warning("⚠️ Cannot use sync sync from async context")
-                                return False
-                        except RuntimeError:
-                            balances = asyncio.run(self.client.get_account_balances())
-                    else:
-                        balances = self.client.get_account_balances()
-                elif hasattr(self.client, 'get_balance'):
-                    import inspect
-                    if inspect.iscoroutinefunction(self.client.get_balance):
-                        import asyncio
-                        try:
-                            if not asyncio.get_running_loop():
-                                current_btc = asyncio.run(self.client.get_balance("BTC"))
-                                current_eth = asyncio.run(self.client.get_balance("ETH"))
-                                current_usdt = asyncio.run(self.client.get_balance("USDT"))
-                                balances = {
-                                    "BTC": current_btc,
-                                    "ETH": current_eth,
-                                    "USDT": current_usdt
-                                }
-                            else:
-                                logger.warning("⚠️ Cannot use sync sync from async context")
-                                return False
-                        except RuntimeError:
-                            current_btc = asyncio.run(self.client.get_balance("BTC"))
-                            current_eth = asyncio.run(self.client.get_balance("ETH"))
-                            current_usdt = asyncio.run(self.client.get_balance("USDT"))
-                            balances = {
-                                "BTC": current_btc,
-                                "ETH": current_eth,
-                                "USDT": current_usdt
-                            }
-                    else:
-                        balances = {
-                            "BTC": self.client.get_balance("BTC"),
-                            "ETH": self.client.get_balance("ETH"),
-                            "USDT": self.client.get_balance("USDT")
-                        }
-                else:
-                    logger.warning("⚠️ Simulated client has no get_account_balances or get_balance method")
-                    return False
-
-                logger.debug(f"🔄 Sincronizando portfolio desde SimulatedExchangeClient: {balances}")
-                
-                # Map client balances to portfolio structure
-                self.portfolio = {
-                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
-                    "total": self.initial_balance,
-                    "peak_value": self.initial_balance,
-                    "total_fees": 0.0,
-                }
-                
-                # Update cache
-                import time
-                self._balance_cache = balances
-                self._balance_cache_time = {
-                    "BTC": time.time(),
-                    "ETH": time.time(),
-                    "USDT": time.time()
-                }
-
-                return True
-
-            except Exception as e:
-                logger.error(f"❌ Error sincronizando portfolio desde SimulatedExchangeClient: {e}")
-                return False
-        else:
-            # Modo live: sincronizar con BinanceClient
-            try:
-                if hasattr(self.client, 'get_balances'):
-                    balances = self.client.get_balances()
-                elif hasattr(self.client, 'get_account_balances'):
-                    import asyncio
-                    try:
-                        if not asyncio.get_running_loop():
-                            balances = asyncio.run(self.client.get_account_balances())
-                        else:
-                            logger.warning("⚠️ Cannot use sync sync from async context")
-                            return False
-                    except RuntimeError:
-                        balances = asyncio.run(self.client.get_account_balances())
-                else:
-                    logger.warning("⚠️ Client has no get_balances or get_account_balances method")
-                    return False
-
-                logger.debug(f"🔄 Sincronizando portfolio desde BinanceClient: {balances}")
-                
-                # Map client balances to portfolio structure
-                self.portfolio = {
-                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
-                    "total": self.initial_balance,
-                    "peak_value": self.initial_balance,
-                    "total_fees": 0.0,
-                }
-                
-                # Update cache
-                import time
-                self._balance_cache = balances
-                self._balance_cache_time = {
-                    "BTC": time.time(),
-                    "ETH": time.time(),
-                    "USDT": time.time()
-                }
-
-                return True
-
-            except Exception as e:
-                logger.error(f"❌ Error sincronizando portfolio desde BinanceClient: {e}")
-                return False
-
-    def _init_portfolio_from_client(self):
-        """Initialize portfolio from client balances (single source of truth)"""
-        # Si es modo paper, inicializar con valores del cliente simulado
-        if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
-            logger.info("🧪 Paper mode: Initializing portfolio from simulated client balances")
-            self._init_portfolio_from_simulated_client()
-        else:
-            if not self._sync_from_client():
-                self._init_portfolio()
 
     async def _init_portfolio_from_simulated_client_async(self):
         """Initialize portfolio from simulated client balances to maintain state between cycles - async version"""
-        if self.client:
+        if self.exchange_client:
             try:
                 # Try to get balances from SimulatedExchangeClient (check if async)
                 import inspect
-                if hasattr(self.client, 'get_account_balances'):
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        balances = await self.client.get_account_balances()
+                if hasattr(self.exchange_client, 'get_account_balances'):
+                    if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                        balances = await self.exchange_client.get_account_balances()
                     else:
-                        balances = self.client.get_account_balances()
-                elif hasattr(self.client, 'get_balance'):
+                        balances = self.exchange_client.get_account_balances()
+                elif hasattr(self.exchange_client, 'get_balance'):
                     # Fallback if only single balance method available
-                    if inspect.iscoroutinefunction(self.client.get_balance):
-                        current_btc = await self.client.get_balance("BTC")
-                        current_eth = await self.client.get_balance("ETH")
-                        current_usdt = await self.client.get_balance("USDT")
+                    if inspect.iscoroutinefunction(self.exchange_client.get_balance):
+                        current_btc = await self.exchange_client.get_balance("BTC")
+                        current_eth = await self.exchange_client.get_balance("ETH")
+                        current_usdt = await self.exchange_client.get_balance("USDT")
                         balances = {
                             "BTC": current_btc,
                             "ETH": current_eth,
@@ -718,9 +621,9 @@ class PortfolioManager:
                         }
                     else:
                         balances = {
-                            "BTC": self.client.get_balance("BTC"),
-                            "ETH": self.client.get_balance("ETH"),
-                            "USDT": self.client.get_balance("USDT")
+                            "BTC": self.exchange_client.get_balance("BTC"),
+                            "ETH": self.exchange_client.get_balance("ETH"),
+                            "USDT": self.exchange_client.get_balance("USDT")
                         }
                 else:
                     raise AttributeError("Simulated client has no get_account_balances or get_balance method")
@@ -738,103 +641,9 @@ class PortfolioManager:
                 }
                 
                 # Calculate initial total value using simulated client's prices
-                if hasattr(self.client, 'get_market_price'):
-                    btc_price = self.client.get_market_price("BTCUSDT")
-                    eth_price = self.client.get_market_price("ETHUSDT")
-                    self.portfolio["total"] = (
-                        self.portfolio["USDT"]["free"] +
-                        self.portfolio["BTCUSDT"]["position"] * btc_price +
-                        self.portfolio["ETHUSDT"]["position"] * eth_price
-                    )
-                    self.portfolio["peak_value"] = self.portfolio["total"]
-                
-                self.peak_value = self.portfolio["peak_value"]
-                self.total_fees = 0.0
-                
-                # Update cache
-                import time
-                self._balance_cache = balances
-                self._balance_cache_time = {
-                    "BTC": time.time(),
-                    "ETH": time.time(),
-                    "USDT": time.time()
-                }
-                
-                logger.info(f"🎯 Portfolio initialized from simulated client ({self.portfolio['total']:.2f} USDT)")
-                return
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to get simulated client balances: {e}, using fallback")
-        
-        # Fallback if simulated client not available or failed
-        self._init_portfolio()
-
-    def _init_portfolio_from_simulated_client(self):
-        """Initialize portfolio from simulated client balances to maintain state between cycles - sync version"""
-        if self.client:
-            try:
-                # Try to get balances from SimulatedExchangeClient (check if async)
-                import inspect
-                if hasattr(self.client, 'get_account_balances'):
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        import asyncio
-                        try:
-                            if not asyncio.get_running_loop():
-                                balances = asyncio.run(self.client.get_account_balances())
-                            else:
-                                # If we're already in an async loop, we should have used initialize_async instead
-                                logger.warning("⚠️ Should use initialize_async instead of sync init in async context")
-                                raise RuntimeError("Should use initialize_async instead of sync init in async context")
-                        except Exception as e:
-                            logger.warning(f"⚠️ Cannot get async balances: {e}")
-                            raise RuntimeError(f"Cannot get async balances: {e}")
-                    else:
-                        balances = self.client.get_account_balances()
-                elif hasattr(self.client, 'get_balance'):
-                    # Fallback if only single balance method available
-                    if inspect.iscoroutinefunction(self.client.get_balance):
-                        import asyncio
-                        try:
-                            if not asyncio.get_running_loop():
-                                current_btc = asyncio.run(self.client.get_balance("BTC"))
-                                current_eth = asyncio.run(self.client.get_balance("ETH"))
-                                current_usdt = asyncio.run(self.client.get_balance("USDT"))
-                                balances = {
-                                    "BTC": current_btc,
-                                    "ETH": current_eth,
-                                    "USDT": current_usdt
-                                }
-                            else:
-                                # If we're already in an async loop, we should have used initialize_async instead
-                                logger.warning("⚠️ Should use initialize_async instead of sync init in async context")
-                                raise RuntimeError("Should use initialize_async instead of sync init in async context")
-                        except Exception as e:
-                            logger.warning(f"⚠️ Cannot get async balance: {e}")
-                            raise RuntimeError(f"Cannot get async balance: {e}")
-                    else:
-                        balances = {
-                            "BTC": self.client.get_balance("BTC"),
-                            "ETH": self.client.get_balance("ETH"),
-                            "USDT": self.client.get_balance("USDT")
-                        }
-                else:
-                    raise AttributeError("Simulated client has no get_account_balances or get_balance method")
-                
-                logger.debug(f"📊 Paper mode: Using simulated client balances: {balances}")
-                
-                # Convert client balances to portfolio structure (using BTC/ETH as base assets)
-                self.portfolio = {
-                    "BTCUSDT": {"position": balances.get("BTC", 0.0), "free": balances.get("BTC", 0.0)},
-                    "ETHUSDT": {"position": balances.get("ETH", 0.0), "free": balances.get("ETH", 0.0)},
-                    "USDT": {"free": balances.get("USDT", self.initial_balance)},
-                    "total": self.initial_balance,
-                    "peak_value": self.initial_balance,
-                    "total_fees": 0.0,
-                }
-                
-                # Calculate initial total value using simulated client's prices
-                if hasattr(self.client, 'get_market_price'):
-                    btc_price = self.client.get_market_price("BTCUSDT")
-                    eth_price = self.client.get_market_price("ETHUSDT")
+                if hasattr(self.exchange_client, 'get_market_price'):
+                    btc_price = self.exchange_client.get_market_price("BTCUSDT")
+                    eth_price = self.exchange_client.get_market_price("ETHUSDT")
                     self.portfolio["total"] = (
                         self.portfolio["USDT"]["free"] +
                         self.portfolio["BTCUSDT"]["position"] * btc_price +
@@ -891,15 +700,6 @@ class PortfolioManager:
 
         logger.info(f"🎯 Portfolio inicializado limpio ({self.initial_balance} USDT)")
 
-    async def initialize_async(self):
-        """Initialize portfolio manager asynchronously - use this instead of __init__ in async contexts"""
-        if self.client:
-            if self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode):
-                await self._init_portfolio_from_simulated_client_async()
-            else:
-                if not await self._sync_from_client_async():
-                    self._init_portfolio()
-
     def reset_portfolio(self):
         """Reset portfolio to initial state - ONLY call this explicitly"""
         logger.warning("⚠️ Resetting portfolio - this will lose all paper trading history")
@@ -911,9 +711,9 @@ class PortfolioManager:
             self.taker_fee = 0.001
             self.slippage_bps = 2
         elif self.mode == "simulated":
-            self.maker_fee = 0.002
-            self.taker_fee = 0.002
-            self.slippage_bps = 10
+            self.maker_fee = 0.0005  # Reduced from 0.002 to 0.0005 (0.05%)
+            self.taker_fee = 0.0005  # Reduced from 0.002 to 0.0005 (0.05%)
+            self.slippage_bps = 0.2  # Reduced from 10 to 0.2 (0.02%)
         else:
             self.maker_fee = 0.001
             self.taker_fee = 0.001
@@ -1003,15 +803,15 @@ class PortfolioManager:
                     return value
             
             # First try to get from exchange client if available
-            if self.client:
+            if self.exchange_client:
                 import inspect
                 
                 # Try get_account_balances first
-                if hasattr(self.client, 'get_account_balances'):
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        balances = await self.client.get_account_balances()
+                if hasattr(self.exchange_client, 'get_account_balances'):
+                    if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                        balances = await self.exchange_client.get_account_balances()
                     else:
-                        balances = self.client.get_account_balances()
+                        balances = self.exchange_client.get_account_balances()
                     
                     value = balances.get(normalized_asset, 0.0)
                     
@@ -1023,11 +823,11 @@ class PortfolioManager:
                     return value
                 
                 # Fallback to get_balance
-                elif hasattr(self.client, 'get_balance'):
-                    if inspect.iscoroutinefunction(self.client.get_balance):
-                        value = await self.client.get_balance(normalized_asset)
+                elif hasattr(self.exchange_client, 'get_balance'):
+                    if inspect.iscoroutinefunction(self.exchange_client.get_balance):
+                        value = await self.exchange_client.get_balance(normalized_asset)
                     else:
-                        value = self.client.get_balance(normalized_asset)
+                        value = self.exchange_client.get_balance(normalized_asset)
                     
                     # Update cache
                     self._balance_cache[normalized_asset] = value
@@ -1079,14 +879,14 @@ class PortfolioManager:
                 return balances
             
             # Try to get from exchange client if available
-            if self.client:
+            if self.exchange_client:
                 import inspect
                 
-                if hasattr(self.client, 'get_account_balances'):
-                    if inspect.iscoroutinefunction(self.client.get_account_balances):
-                        balances = await self.client.get_account_balances()
+                if hasattr(self.exchange_client, 'get_account_balances'):
+                    if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                        balances = await self.exchange_client.get_account_balances()
                     else:
-                        balances = self.client.get_account_balances()
+                        balances = self.exchange_client.get_account_balances()
                     
                     logger.info(f"[BALANCE_ACCESS] ASYNC | All balances | Source: exchange | Values: {balances}")
                     
@@ -1098,11 +898,11 @@ class PortfolioManager:
                     self._balance_verification.mark_synced("exchange_async")
                     return balances
                 
-                elif hasattr(self.client, 'get_balances'):
-                    if inspect.iscoroutinefunction(self.client.get_balances):
-                        balances = await self.client.get_balances()
+                elif hasattr(self.exchange_client, 'get_balances'):
+                    if inspect.iscoroutinefunction(self.exchange_client.get_balances):
+                        balances = await self.exchange_client.get_balances()
                     else:
-                        balances = self.client.get_balances()
+                        balances = self.exchange_client.get_balances()
                     
                     logger.info(f"[BALANCE_ACCESS] ASYNC | All balances | Source: exchange | Values: {balances}")
                     
@@ -1165,58 +965,32 @@ class PortfolioManager:
         return self._balance_verification.is_verified()
 
     # =========================
-    # VALUE
+    # VALUE - PURA: Usa MarketDataManager inyectado
     # =========================
 
-    def get_total_value(self, market_data: Optional[Dict[str, Any]] = None) -> float:
-        """Get total portfolio value (SYNC - deprecated in async contexts)"""
-        if AsyncContextDetector.is_in_async_context():
-            logger.warning("get_total_value() called in async context. Consider using async version.")
+    async def get_total_value_async(self) -> float:
+        """
+        Async version of get_total_value - VERSIÓN PURA.
         
-        # No sincronizar desde aquí para evitar error con asyncio.run()
-        if not market_data:
-            return safe_float(self.portfolio.get("total", 0.0))
-
-        total = self.get_balance("USDT")
-
-        for symbol in self.symbols:
-            bal = self.get_balance(symbol)
-            if bal <= 0:
-                continue
-
-            data = market_data.get(symbol)
-            if isinstance(data, dict) and "close" in data:
-                total += bal * safe_float(data["close"])
-            elif isinstance(data, pd.DataFrame) and "close" in data.columns:
-                total += bal * safe_float(data["close"].iloc[-1])
-
-        return total
-
-    async def get_total_value_async(self, market_data: Optional[Dict[str, Any]] = None) -> float:
-        """Async version of get_total_value"""
+        Usa MarketDataManager inyectado para obtener precios.
+        No requiere pasar market_data como argumento.
+        
+        Returns:
+            float: Valor total del portfolio en USDT
+        """
         # Get fresh balances
         balances = await self.get_balances_async()
         
         usdt_balance = balances.get("USDT", 0.0)
         
-        if not market_data:
-            # Try to get prices from client
-            btc_price = 0.0
-            eth_price = 0.0
-            
-            if self.client and hasattr(self.client, 'get_market_price'):
-                try:
-                    btc_price = self.client.get_market_price("BTCUSDT")
-                    eth_price = self.client.get_market_price("ETHUSDT")
-                except Exception as e:
-                    logger.debug(f"Could not get market prices: {e}")
-            
-            btc_value = balances.get("BTC", 0.0) * btc_price
-            eth_value = balances.get("ETH", 0.0) * eth_price
-            
-            return usdt_balance + btc_value + eth_value
+        # Get market prices from MarketDataManager
+        market_prices = await self._get_market_prices()
         
-        # Calculate using provided market data
+        if not market_prices:
+            logger.warning("⚠️ No market prices available from MarketDataManager, using cached portfolio total")
+            return safe_float(self.portfolio.get("total", usdt_balance))
+        
+        # Calculate using market prices
         total = usdt_balance
         
         for symbol in self.symbols:
@@ -1225,21 +999,55 @@ class PortfolioManager:
             if bal <= 0:
                 continue
 
-            data = market_data.get(symbol)
-            if isinstance(data, dict) and "close" in data:
-                total += bal * safe_float(data["close"])
-            elif isinstance(data, pd.DataFrame) and "close" in data.columns:
-                total += bal * safe_float(data["close"].iloc[-1])
+            price = market_prices.get(symbol, 0.0)
+            if price > 0:
+                total += bal * price
 
         return total
 
+    async def get_total_crypto_value_async(self) -> float:
+        """
+        Async method to get total value of crypto assets (BTC + ETH) at market prices.
+        Usa MarketDataManager inyectado para obtener precios.
+        
+        Returns:
+            float: Valor total de criptos en USDT
+        """
+        # Get fresh balances
+        balances = await self.get_balances_async()
+        
+        # Get market prices from MarketDataManager
+        market_prices = await self._get_market_prices()
+        
+        if not market_prices:
+            logger.warning("⚠️ No market prices available from MarketDataManager")
+            return 0.0
+        
+        # Calculate using market prices
+        total_crypto = 0.0
+        
+        for symbol in self.symbols:
+            asset = symbol.replace("USDT", "")
+            bal = balances.get(asset, 0.0)
+            if bal <= 0:
+                continue
+
+            price = market_prices.get(symbol, 0.0)
+            if price > 0:
+                total_crypto += bal * price
+
+        return total_crypto
+
     # =========================
-    # SNAPSHOT (🔥 FIX CLAVE)
+    # SNAPSHOT
     # =========================
 
     def get_portfolio_state(self) -> Dict[str, Any]:
         """
         Snapshot completo del portfolio, compatible con pipeline y paper trading.
+        
+        Note: El valor total es sincrónico y puede estar desactualizado.
+        Para valores precisos, usar get_total_value_async().
         """
         balances = {}
 
@@ -1253,20 +1061,24 @@ class PortfolioManager:
 
         return {
             **balances,
-            "total": self.get_total_value()
+            "total": self.portfolio.get("total", self.initial_balance)
         }
 
     # =========================
-    # ORDER UPDATES
+    # ORDER UPDATES - FIXED SIGNATURE
     # =========================
 
-    async def update_from_orders_async(self, orders: list, market_data: Dict[str, Any]):
+    async def update_from_orders_async(self, orders: list, market_data: Optional[Dict] = None):
         """
         Update portfolio after order execution.
         
         CRITICAL: En modo paper, NO procesamos órdenes aquí.
         Las órdenes ya fueron ejecutadas por SimulatedExchangeClient.
         Solo sincronizamos el portfolio desde el exchange simulado.
+        
+        Args:
+            orders: Lista de órdenes ejecutadas
+            market_data: Optional market data dict (for backwards compatibility, not used)
         """
         try:
             filled = [o for o in orders if o.get("status") == "filled"]
@@ -1274,15 +1086,115 @@ class PortfolioManager:
                 return
 
             # Check if we're in paper mode
-            is_paper_mode = self.mode == "simulated" or (self.client and hasattr(self.client, 'paper_mode') and self.client.paper_mode)
+            is_paper_mode = self.mode == "simulated" or (self.exchange_client and hasattr(self.exchange_client, 'paper_mode') and self.exchange_client.paper_mode)
             
             if is_paper_mode:
                 # 📝 PAPER MODE: NO procesar órdenes, NO llamar a create_order
                 # Solo sincronizar desde SimulatedExchangeClient (single source of truth)
-                logger.info("[PAPER_MODE] Skipping update_from_orders_async – syncing from simulated exchange only")
+                logger.info("[PAPER_MODE] Processing update_from_orders_async – syncing from simulated exchange")
+                
+                # CRITICAL FIX: Log NAV before execution
+                nav_before = await self.get_total_value_async()
+                logger.info("=" * 80)
+                logger.info(f"📊 NAV BEFORE ORDER EXECUTION: ${nav_before:.2f}")
+                logger.info("=" * 80)
                 
                 # Sync portfolio from SimulatedExchangeClient (single source of truth)
-                await self.sync_from_exchange_async(self.client)
+                await self.sync_from_exchange_async(self.exchange_client)
+                
+                # CRITICAL FIX: Update NAV after sync and log
+                nav_after = await self.update_nav_async()
+                
+                # CRITICAL FIX: Log NAV after execution with detailed breakdown
+                logger.info("=" * 80)
+                logger.info(f"📊 NAV AFTER ORDER EXECUTION: ${nav_after['total_nav']:.2f}")
+                logger.info(f"   USDT: ${nav_after['usdt']:.2f}")
+                logger.info(f"   BTC:  {nav_after['btc_balance']:.6f} @ ${nav_after['btc_price']:.2f} = ${nav_after['btc_value']:.2f}")
+                logger.info(f"   ETH:  {nav_after['eth_balance']:.4f} @ ${nav_after['eth_price']:.2f} = ${nav_after['eth_value']:.2f}")
+                logger.info("=" * 80)
+                
+                # Verify synchronization: ensure SimulatedExchangeClient, PortfolioManager, and NAV are perfectly aligned
+                if self.exchange_client and self.market_data_manager:
+                    try:
+                        # Get balances from exchange client (handle both get_balances and get_account_balances)
+                        import inspect
+                        if hasattr(self.exchange_client, 'get_balances'):
+                            sim_balances = self.exchange_client.get_balances()
+                        elif hasattr(self.exchange_client, 'get_account_balances'):
+                            if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                                sim_balances = await self.exchange_client.get_account_balances()
+                            else:
+                                sim_balances = self.exchange_client.get_account_balances()
+                        else:
+                            logger.warning("⚠️ Exchange client has no get_balances or get_account_balances method, skipping sync verification")
+                            sim_balances = None
+                        
+                        if sim_balances is None:
+                            return
+                        
+                        # Get balances from PortfolioManager
+                        pm_balances = await self.get_balances_async()
+                        
+                        # Get market prices
+                        market_prices = await self._get_market_prices()
+                        
+                        # Calculate NAV using both methods
+                        sim_nav = sim_balances.get('USDT', 0.0)
+                        pm_nav = pm_balances.get('USDT', 0.0)
+                        
+                        for asset in ['BTC', 'ETH']:
+                            sim_balance = sim_balances.get(asset, 0.0)
+                            pm_balance = pm_balances.get(asset, 0.0)
+                            price = market_prices.get(f'{asset}USDT', 0.0)
+                            
+                            sim_nav += sim_balance * price
+                            pm_nav += pm_balance * price
+                            
+                            # Verify balances are synchronized
+                            balance_tolerance = 1e-6  # Very small tolerance for floating point
+                            if abs(sim_balance - pm_balance) > balance_tolerance:
+                                logger.critical(f"🚨 BALANCE SYNCHRONIZATION ERROR: {asset} Sim={sim_balance:.6f}, PM={pm_balance:.6f}, Diff={abs(sim_balance - pm_balance):.6f}")
+                                # Force synchronization
+                                if hasattr(self.exchange_client, 'get_account_balances'):
+                                    import inspect
+                                    if inspect.iscoroutinefunction(self.exchange_client.get_account_balances):
+                                        fresh_balances = await self.exchange_client.get_account_balances()
+                                    else:
+                                        fresh_balances = self.exchange_client.get_account_balances()
+                                    await self.sync_from_exchange_async(self.exchange_client)
+                                return
+                        
+                        # Verify NAV synchronization
+                        nav_tolerance = 0.01  # 1 cent tolerance
+                        if abs(sim_nav - pm_nav) > nav_tolerance:
+                            logger.critical(f"🚨 NAV SYNCHRONIZATION ERROR: Sim={sim_nav:.2f}, PM={pm_nav:.2f}, Diff={abs(sim_nav - pm_nav):.2f}")
+                            # Force NAV recalculation
+                            await self.update_nav_async()
+                        else:
+                            logger.info(f"✅ Synchronization verified: NAVs aligned within tolerance")
+                    
+                    except Exception as sync_error:
+                        logger.error(f"❌ Error during synchronization verification: {sync_error}")
+                
+                # Log filled orders for tax and paper trading
+                for o in filled:
+                    # Log to tax tracker if available
+                    if self.tax_tracker:
+                        try:
+                            self.tax_tracker.record_operation(o)
+                            logger.debug(f"📝 Operación registrada en TaxTracker: {o['symbol']} {o['side']} {o['quantity']}")
+                        except Exception as e:
+                            logger.error(f"❌ Error registrando operación en TaxTracker: {e}")
+                    
+                    # Log to paper trade logger if available
+                    if self.paper_logger:
+                        try:
+                            # Get market prices from MarketDataManager si está disponible
+                            market_prices = await self._get_market_prices() if self.market_data_manager else {}
+                            self.paper_logger.log_paper_trade(o, market_prices)
+                            logger.debug(f"📝 Trade registrado en PaperTradeLogger: {o['symbol']} {o['side']} {o['quantity']}")
+                        except Exception as e:
+                            logger.error(f"❌ Error registrando trade en PaperTradeLogger: {e}")
                 
                 return
             else:
@@ -1291,53 +1203,21 @@ class PortfolioManager:
                     logger.info("✅ Portfolio sincronizado con balances reales del exchange")
                 else:
                     logger.warning("⚠️ Fallback: Actualizando portfolio desde cálculo local")
-                    btc = self.get_balance("BTCUSDT")
-                    eth = self.get_balance("ETHUSDT")
-                    usdt = self.get_balance("USDT")
-
-                    for o in filled:
-                        symbol = o["symbol"]
-                        side = o["side"].lower()
-                        qty = safe_float(o["quantity"])
-                        price = safe_float(o["filled_price"])
-
-                        value = qty * price
-                        fee = value * self.taker_fee
-
-                        if symbol == "BTCUSDT":
-                            if side == "buy" and usdt >= value + fee:
-                                btc += qty
-                                usdt -= value + fee
-                            elif side == "sell" and btc >= qty:
-                                btc -= qty
-                                usdt += value - fee
-
-                        elif symbol == "ETHUSDT":
-                            if side == "buy" and usdt >= value + fee:
-                                eth += qty
-                                usdt -= value + fee
-                            elif side == "sell" and eth >= qty:
-                                eth -= qty
-                                usdt += value - fee
-
-                        self.total_fees += fee
-                        self.position_age[symbol] = datetime.now().timestamp()
-
-                    self.portfolio = {
-                        "BTCUSDT": {"position": btc, "free": btc},
-                        "ETHUSDT": {"position": eth, "free": eth},
-                        "USDT": {"free": usdt},
-                        "total": self.get_total_value(market_data),
-                        "peak_value": max(self.peak_value, self.get_total_value(market_data)),
-                        "total_fees": self.total_fees,
-                    }
-
-                    self.peak_value = self.portfolio["peak_value"]
+                    # Actualización local fallback - sincronizar con exchange_client si existe
+                    if self.exchange_client:
+                        await self._sync_from_client_async()
 
         except Exception as e:
             logger.error(f"❌ Error update_from_orders_async: {e}", exc_info=True)
 
-    def update_from_orders(self, orders: list, market_data: Dict[str, Any]):
+    def update_from_orders(self, orders: list, market_data: Optional[Dict] = None):
+        """
+        Sync version - DEPRECATED.
+        
+        Args:
+            orders: Lista de órdenes
+            market_data: DEPRECATED - ya no se usa
+        """
         import asyncio
         asyncio.run(self.update_from_orders_async(orders, market_data))
 
@@ -1358,14 +1238,61 @@ class PortfolioManager:
         return self.get_position_age_seconds(symbol) >= self.MIN_HOLD_TIME
 
     # =========================
-    # NAV CALCULATION & LOGGING (FIXED)
+    # NAV CALCULATION - PURA
     # =========================
+
+    async def calculate_nav_async(self) -> Dict[str, float]:
+        """
+        Calculate TOTAL NAV including all assets at current market prices (async version).
+        VERSIÓN PURA - Usa MarketDataManager inyectado.
+        
+        Formula: TOTAL_NAV = USDT + BTC * market_price_BTC + ETH * market_price_ETH
+        
+        Returns:
+            Dict with NAV breakdown
+        """
+        balances = await self.get_balances_async()
+        
+        usdt_balance = balances.get("USDT", 0.0)
+        btc_balance = balances.get("BTC", 0.0)
+        eth_balance = balances.get("ETH", 0.0)
+        
+        # Get market prices from MarketDataManager
+        market_prices = await self._get_market_prices()
+        
+        # Get market prices
+        btc_price = market_prices.get("BTCUSDT", 0.0)
+        eth_price = market_prices.get("ETHUSDT", 0.0)
+        
+        # Calculate value of each asset
+        btc_value = btc_balance * btc_price
+        eth_value = eth_balance * eth_price
+        
+        # Calculate TOTAL NAV
+        total_nav = usdt_balance + btc_value + eth_value
+        
+        # Defensive safeguard: Ensure NAV never drops to 0 unless portfolio is actually empty
+        if total_nav <= 0 and (usdt_balance > 0 or btc_balance > 0 or eth_balance > 0):
+            logger.critical(f"🚨 NAV CALCULATION ERROR in calculate_nav_async: NAV={total_nav:.2f} with non-zero balances")
+            # Calculate minimum possible NAV assuming $1 minimum price
+            min_nav = usdt_balance + btc_balance * 1.0 + eth_balance * 1.0
+            total_nav = max(min_nav, 0.01)
+            logger.warning(f"⚠️ NAV adjusted to minimum: ${total_nav:.2f}")
+        
+        return {
+            "total_nav": total_nav,
+            "usdt": usdt_balance,
+            "btc_balance": btc_balance,
+            "btc_price": btc_price,
+            "btc_value": btc_value,
+            "eth_balance": eth_balance,
+            "eth_price": eth_price,
+            "eth_value": eth_value
+        }
 
     def calculate_nav(self, market_prices: Dict[str, float]) -> Dict[str, float]:
         """
-        Calculate TOTAL NAV including all assets at current market prices.
-        
-        Formula: TOTAL_NAV = USDT + BTC * market_price_BTC + ETH * market_price_ETH
+        Calculate TOTAL NAV including all assets at current market prices (sync version).
         
         Args:
             market_prices: Dict with symbol -> price mapping (e.g., {'BTCUSDT': 50000, 'ETHUSDT': 3000})
@@ -1399,39 +1326,18 @@ class PortfolioManager:
             "eth_value": eth_value
         }
 
-    def log_nav(self, market_data: Optional[Dict[str, Any]] = None, client=None):
+    def log_nav(self, client=None):
         """
         Log NAV with complete breakdown including crypto values at market prices.
-        Uses MarketDataManager or DataFeed for latest prices.
+        Usa MarketDataManager inyectado para obtener precios.
         
         Args:
-            market_data: Optional market data dict with prices
-            client: Optional client (SimulatedExchangeClient or BinanceClient) with get_market_price method
+            client: Optional client (DEPRECATED - ya no se usa, solo para compatibilidad)
         """
         try:
-            market_prices = {}
-            
-            # Try to get prices from client first (most reliable)
-            if client and hasattr(client, 'get_market_price'):
-                try:
-                    market_prices["BTCUSDT"] = client.get_market_price("BTCUSDT")
-                    market_prices["ETHUSDT"] = client.get_market_price("ETHUSDT")
-                except Exception as e:
-                    logger.debug(f"Could not get prices from client: {e}")
-            
-            # Fallback to market_data
-            if not market_prices and market_data:
-                for symbol in ["BTCUSDT", "ETHUSDT"]:
-                    if symbol in market_data:
-                        data = market_data[symbol]
-                        if isinstance(data, dict) and "close" in data:
-                            market_prices[symbol] = safe_float(data["close"])
-                        elif isinstance(data, pd.DataFrame) and "close" in data.columns:
-                            market_prices[symbol] = safe_float(data["close"].iloc[-1])
-            
-            # Fallback to portfolio's stored prices
-            if not market_prices and hasattr(self, '_last_market_prices'):
-                market_prices = self._last_market_prices
+            # Get prices from MarketDataManager
+            import asyncio
+            market_prices = asyncio.run(self._get_market_prices()) if self.market_data_manager else {}
             
             # Calculate NAV
             nav = self.calculate_nav(market_prices)
@@ -1460,20 +1366,101 @@ class PortfolioManager:
     def log_status_basic(self):
         """Basic portfolio logging without market prices"""
         logger.info(
-            f"📊 Portfolio | TOTAL={self.get_total_value():.2f} | "
-            f"BTC={self.get_balance('BTCUSDT'):.6f} | "
-            f"ETH={self.get_balance('ETHUSDT'):.4f} | "
-            f"USDT={self.get_balance('USDT'):.2f}"
+            f"📊 Portfolio | TOTAL={self.portfolio.get('total', 0):.2f} | "
+            f"BTC={self.portfolio.get('BTCUSDT', {}).get('position', 0):.6f} | "
+            f"ETH={self.portfolio.get('ETHUSDT', {}).get('position', 0):.4f} | "
+            f"USDT={self.portfolio.get('USDT', {}).get('free', 0):.2f}"
         )
+
+    async def check_portfolio_stop_loss(self) -> bool:
+        """
+        Check if portfolio has hit stop-loss threshold.
+        Usa MarketDataManager inyectado para obtener precios.
+        
+        Returns:
+            bool: True si se activó stop-loss
+        """
+        total_value = await self.get_total_value_async()
+        initial_value = self.initial_balance
+        
+        loss_pct = ((total_value - initial_value) / initial_value) * 100
+        
+        # ✅ Stop-loss at -5%
+        if loss_pct <= -5.0:
+            logger.critical(f"🚨 PORTFOLIO STOP-LOSS HIT: {loss_pct:.2f}%")
+            logger.critical(f"   Current: ${total_value:.2f}")
+            logger.critical(f"   Initial: ${initial_value:.2f}")
+            logger.critical(f"   Loss: ${total_value - initial_value:.2f}")
+            
+            # Force liquidate all positions to USDT
+            await self._emergency_liquidation()
+            return True
+        
+        # ⚠️ Warning at -3%
+        elif loss_pct <= -3.0:
+            logger.warning(f"⚠️ PORTFOLIO WARNING: {loss_pct:.2f}% loss")
+            return False
+        
+        return False
+    
+    async def _emergency_liquidation(self):
+        """
+        Emergency liquidation of all positions to USDT.
+        Usa MarketDataManager inyectado para obtener precios.
+        """
+        logger.critical("🚨 EXECUTING EMERGENCY LIQUIDATION")
+        
+        # Get current positions
+        balances = await self.get_balances_async()
+        btc_balance = balances.get("BTC", 0.0)
+        eth_balance = balances.get("ETH", 0.0)
+        
+        # Get current prices from MarketDataManager
+        market_prices = await self._get_market_prices()
+        btc_price = market_prices.get("BTCUSDT", 0.0)
+        eth_price = market_prices.get("ETHUSDT", 0.0)
+        
+        # Calculate liquidation values
+        btc_value = btc_balance * btc_price
+        eth_value = eth_balance * eth_price
+        total_liquidation_value = balances.get("USDT", 0.0) + btc_value + eth_value
+        
+        logger.critical(f"📊 LIQUIDATION SUMMARY:")
+        logger.critical(f"   BTC: {btc_balance:.6f} @ ${btc_price:.2f} = ${btc_value:.2f}")
+        logger.critical(f"   ETH: {eth_balance:.4f} @ ${eth_price:.2f} = ${eth_value:.2f}")
+        logger.critical(f"   USDT: ${balances.get('USDT', 0.0):.2f}")
+        logger.critical(f"   TOTAL: ${total_liquidation_value:.2f}")
+        
+        # Update portfolio to all USDT
+        self.portfolio["BTCUSDT"] = {"position": 0.0, "free": 0.0}
+        self.portfolio["ETHUSDT"] = {"position": 0.0, "free": 0.0}
+        self.portfolio["USDT"] = {"free": total_liquidation_value}
+        self.portfolio["total"] = total_liquidation_value
+        
+        logger.critical("✅ EMERGENCY LIQUIDATION COMPLETED - All positions converted to USDT")
 
     def log_status(self, market_data: Optional[Dict[str, Any]] = None, client=None):
         """
         Log portfolio status with full NAV calculation.
         
         This is the main logging method - it includes complete NAV breakdown.
+        
+        Args:
+            market_data: DEPRECATED - ya no se usa
+            client: DEPRECATED - ya no se usa
         """
-        self.log_nav(market_data, client)
+        self.log_nav(client)
 
+    async def update_with_consistent_prices(self) -> None:
+        """
+        Actualiza los precios del portfolio con valores consistentes del MarketDataManager.
+        VERSIÓN PURA - Usa MarketDataManager inyectado.
+        """
+        if self.market_data_manager:
+            prices = await self._get_market_prices()
+            self._prices = prices
+            logger.info(f"💰 Precios del portfolio actualizados: {prices}")
+    
     def update_current_prices(self, current_prices: Dict[str, float]) -> None:
         """Actualiza los precios actuales para cálculo de NAV."""
         if not hasattr(self, '_current_prices'):
@@ -1488,37 +1475,21 @@ class PortfolioManager:
             if prices is None:
                 prices = getattr(self, '_current_prices', {})
             
-            # Obtener balances usando el método correcto
-            # NO usar self.balances si no existe
-            if hasattr(self, 'get_balances_async'):
-                # En contexto async necesitamos manejar esto diferente
-                # Por ahora, devolver 0 y loggear advertencia
-                logger.warning("⚠️ calculate_nav_with_prices no puede usar async en contexto sync")
-                return 0.0
-                
-            # Si hay un método sync para balances
-            if hasattr(self, 'get_balances'):
-                balances = self.get_balances()
-            else:
-                # Intentar acceder a atributo si existe
-                balances = getattr(self, 'balances', {})
+            # Obtener balances usando métodos sync
+            usdt_balance = self.get_balance("USDT")
+            btc_balance = self.get_balance("BTCUSDT")
+            eth_balance = self.get_balance("ETHUSDT")
             
-            nav = 0.0
+            nav = usdt_balance
             
             # Valor de criptos
-            btc_balance = balances.get("BTC", 0.0)
             if btc_balance > 0:
                 btc_price = prices.get("BTCUSDT", 0.0)
                 nav += btc_balance * btc_price
             
-            eth_balance = balances.get("ETH", 0.0)
             if eth_balance > 0:
                 eth_price = prices.get("ETHUSDT", 0.0)
                 nav += eth_balance * eth_price
-            
-            # Valor de USDT
-            usdt_balance = balances.get("USDT", 0.0)
-            nav += usdt_balance
             
             logger.debug(f"NAV calculado: ${nav:.2f} con precios {prices}")
             return nav

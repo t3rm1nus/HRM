@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 from .config import *  # Import L2 config settings
 from .models import TacticalSignal
-from .utils import safe_float
+from .l2_utils import safe_float
 from .similarity_detector import SignalSimilarityDetector, SimilarityConfig, SimilarityAlgorithm
 from datetime import datetime
 from core.logging import logger

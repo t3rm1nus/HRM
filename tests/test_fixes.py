@@ -13,8 +13,8 @@ def test_blind_mode():
 
     from l3_strategy.decision_maker import make_decision
 
-    # Test BLIND MODE (balances_synced=False)
-    blind_decision = make_decision({}, balances_synced=False)
+    # Test BLIND MODE (system state not NORMAL)
+    blind_decision = make_decision({}, state={'system_state_type': 'NOT_NORMAL'})
 
     # Verify BLIND MODE properties
     assert blind_decision['market_opinion'] == 'hold', f"Expected 'hold', got {blind_decision['market_opinion']}"
@@ -64,8 +64,8 @@ def test_normal_operation():
 
     from l3_strategy.decision_maker import make_decision
 
-    # Test normal mode (balances_synced=True)
-    normal_decision = make_decision({}, balances_synced=True)
+    # Test normal mode (system state NORMAL)
+    normal_decision = make_decision({}, state={'system_state_type': 'NORMAL'})
 
     # Should not be in BLIND MODE
     assert normal_decision.get('strategic_control', {}).get('blind_mode_active') != True, "Should not be in BLIND MODE"

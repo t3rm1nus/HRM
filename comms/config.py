@@ -124,9 +124,9 @@ class HRMAppConfig:
     # Símbolos
     symbols: List[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     
-    # Balances iniciales simulados
+    # Balances iniciales simulados - desde initial_state.json
     simulated_initial_balances: Dict[str, float] = field(
-        default_factory=lambda: {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0}
+        default_factory=lambda: {"BTC": 0.0, "ETH": 0.0, "USDT": 3000.0}
     )
     
     # API Keys

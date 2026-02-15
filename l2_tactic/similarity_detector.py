@@ -25,7 +25,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from .models import TacticalSignal
-from .utils import safe_float
+from .l2_utils import safe_float
 from core.logging import logger
 
 

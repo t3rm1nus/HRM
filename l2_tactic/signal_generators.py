@@ -59,7 +59,7 @@ from abc import ABC, abstractmethod
 from core.logging import logger
 from l2_tactic.models import TacticalSignal
 import pandas as pd
-from utils import safe_float
+from l2_tactic.l2_utils import safe_float
 
 
 class BaseSignalGenerator(ABC):

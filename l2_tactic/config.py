@@ -267,7 +267,7 @@ class L2Config:
         if os.getenv('L2_AI_MODEL_TYPE'):
             config.ai_model.model_type = os.getenv('L2_AI_MODEL_TYPE')
         if os.getenv('L2_PREDICTION_THRESHOLD'):
-            from l2_tactic.utils import safe_float
+            from l2_tactic.l2_utils import safe_float
             config.ai_model.prediction_threshold = safe_float(os.getenv('L2_PREDICTION_THRESHOLD'))
 
         # Signal config desde env

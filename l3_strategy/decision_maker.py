@@ -19,8 +19,8 @@ import numpy as np  # Needed for generate_strategic_signal
 INFER_DIR = "data/datos_inferencia"
 OUTPUT_FILE = os.path.join(INFER_DIR, "strategic_decision.json")
 
-# WEAK SIGNALS BLOCKED - New threshold logic
-WEAK_THRESHOLD = 0.55
+# WEAK SIGNALS BLOCKED - Aggressive mode enabled (lowered from 0.55 to 0.45)
+WEAK_THRESHOLD = 0.45
 
 
 def ensure_dir(directory: str):
@@ -85,6 +85,69 @@ def _check_real_balances(state: Dict) -> bool:
     return has_valid_portfolio
 
 
+def generate_strategic_decision(regime_data):
+    """Generate strategic decision based on regime and indicators"""
+    
+    regime = regime_data.get('regime', 'NEUTRAL')
+    confidence = regime_data.get('confidence', 0.5)
+    rsi = regime_data.get('rsi', 50.0)
+    adx = regime_data.get('adx', 20.0)
+    
+    # ✅ FIX 1: TRENDING con RSI > 70 → SELL
+    if regime == "TRENDING":
+        if rsi > 80:
+            return {
+                'signal': 'sell',
+                'confidence': confidence,
+                'allow_l2_signals': True,
+                'reason': f'TRENDING + EXTREME_OVERBOUGHT (RSI={rsi:.1f})',
+                'allocation': {'BTC': 0.0, 'ETH': 0.0, 'USDT': 1.0}
+            }
+        elif rsi > 70:
+            return {
+                'signal': 'sell',
+                'confidence': confidence * 0.8,
+                'allow_l2_signals': True,
+                'reason': f'TRENDING + OVERBOUGHT (RSI={rsi:.1f})',
+                'allocation': {'BTC': 0.2, 'ETH': 0.1, 'USDT': 0.7}
+            }
+        elif rsi < 30:
+            return {
+                'signal': 'buy',
+                'confidence': confidence,
+                'allow_l2_signals': True,
+                'reason': f'TRENDING + OVERSOLD (RSI={rsi:.1f})',
+                'allocation': {'BTC': 0.5, 'ETH': 0.3, 'USDT': 0.2}
+            }
+        else:
+            # Neutral trending - let L2 decide
+            return {
+                'signal': 'hold',
+                'confidence': confidence,
+                'allow_l2_signals': True,  # ✅ PERMITIR L2
+                'reason': 'TRENDING - L2 can act',
+                'allocation': None  # L2 decides
+            }
+    
+    # ✅ FIX 2: RANGE regime
+    elif regime == "RANGE":
+        return {
+            'signal': 'hold',
+            'confidence': confidence,
+            'allow_l2_signals': True,  # ✅ PERMITIR L2 mean-reversion
+            'reason': 'RANGE - L2 handles oscillations',
+            'allocation': None
+        }
+    
+    # Default fallback
+    return {
+        'signal': 'hold',
+        'confidence': 0.5,
+        'allow_l2_signals': True,
+        'reason': 'NEUTRAL - L2 can act',
+        'allocation': None
+    }
+
 def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict = None, regime_decision: dict = None, state: dict = None):
     """
     Combina todos los outputs de L3 en una decisión estratégica.
@@ -102,6 +165,34 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     - opinion: Lo que L3 "piensa" del mercado
     - order: Lo que L3 ORDENA hacer (solo cuando puede ver balances)
     """
+
+    # ========================================================================================
+    # OBTENER RSI DEL MERCADO PARA INCLUIRLO EN EL CONTEXTO L3
+    # ========================================================================================
+    rsi = 50.0  # Valor predeterminado neutral
+    if market_data:
+        # Calcular RSI promedio de BTC y ETH (símbolos principales)
+        rsi_values = []
+        for symbol in ["BTCUSDT", "ETHUSDT"]:
+            if symbol in market_data:
+                symbol_data = market_data[symbol]
+                if isinstance(symbol_data, dict) and 'historical_data' in symbol_data:
+                    df = symbol_data['historical_data']
+                    if isinstance(df, pd.DataFrame) and len(df) > 14:
+                        try:
+                            # Calcular RSI (14 periodos)
+                            delta = df['close'].diff()
+                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            rs = gain / loss
+                            symbol_rsi = 100 - (100 / (1 + rs))
+                            rsi_values.append(symbol_rsi.iloc[-1])
+                        except Exception as e:
+                            logger.debug(f"Error calculating RSI for {symbol}: {e}")
+                            continue
+        if rsi_values:
+            rsi = sum(rsi_values) / len(rsi_values)
+            logger.debug(f"Calculated average RSI: {rsi:.1f}")
 
     # ========================================================================================
     # CRÍTICO: SYSTEM STATE CHECK - PRIORITY 1 - USE STATE COORDINATOR SOURCE OF TRUTH
@@ -173,7 +264,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                 "profit_taking_strategy": "immediate",
                 "setup_trading_enabled": False
             },
-            "blind_mode": True
+            "blind_mode": True,
+            "rsi": rsi  # Incluir RSI en el contexto
         }
     
     # If state is NORMAL or not provided, proceed with normal L3 logic
@@ -267,18 +359,18 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     regime_signal = 'hold'
     regime_confidence = 0.5
     setup_type = None
-    allow_l2_signal = False
+    allow_l2_signal = True  # ✅ DEFAULT: L2 siempre activo
     risk_appetite = 'moderate'
-    portfolio = {'BTCUSDT': 0.20, 'ETHUSDT': 0.15, 'USDT': 0.65}  # Default portfolio
+    portfolio = {'BTC': 0.40, 'ETH': 0.30, 'USDT': 0.30}  # Default portfolio
     strategic_hold_reason = None
     strategic_hold_type = None
     l3_dominance_state = {
-        'allow_l2_signals': False,
-        'strategic_hold_active': False,
+        'allow_l2_signals': True,  # ✅ DEFAULT: L2 siempre activo
+        'strategic_hold_active': False,  # Default: no bloqueo estratégico
         'strategic_hold_type': None,
         'strategic_hold_reason': None,
         'capital_preservation_mode': False,
-        'l2_signals_blocked': True
+        'l2_signals_blocked': False  # ✅ DEFAULT: L2 siempre activo
     }
 
     # ========================================================================================
@@ -291,7 +383,7 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         regime_confidence = float(np.clip(regime_decision.get('confidence', 0.5), 0.0, 1.0))
         setup_type = regime_decision.get('setup_type', None)
         setup_active = setup_type is not None  # True when setup is detected
-        allow_l2_signal = regime_decision.get('allow_l2_signal', False)
+        allow_l2_signal = True  # ✅ DEFAULT: L2 siempre activo
 
         # ========================================================================================
         # PRELIMINARY LOSS PREVENTION FILTERS FOR STRATEGIC HOLD LOGIC
@@ -312,12 +404,12 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         # ========================================================================================
         # Estado persistente del ciclo - se evalúa UNA sola vez
         l3_dominance_state = {
-            'allow_l2_signals': False,  # Default: bloqueado
+            'allow_l2_signals': True,  # ✅ DEFAULT: L2 siempre activo
             'strategic_hold_active': False,  # Default: no bloqueo estratégico
             'strategic_hold_type': None,
             'strategic_hold_reason': None,
             'capital_preservation_mode': False,
-            'l2_signals_blocked': True  # Default: bloqueado
+            'l2_signals_blocked': False  # ✅ DEFAULT: L2 siempre activo
         }
 
         # ========================================================================================
@@ -355,7 +447,7 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                 # Si hay asset allocation, permitir rebalance pero bloquear señales L2
                 if portfolio and sum(portfolio.values()) > 0:
                     l3_dominance_state.update({
-                        'allow_l2_signals': False,
+                        'allow_l2_signals': True,  # ✅ PERMITIR L2
                         'strategic_hold_active': True,
                         'strategic_hold_reason': f"Strategic HOLD active but asset allocation present - allowing rebalance",
                         'strategic_hold_type': "HOLD_L3_STRATEGIC_ALLOCATION",
@@ -363,31 +455,31 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                         'block_autorebalancer': False,  # Permitir AutoRebalancer
                         'freeze_positions': False  # No congelar posiciones
                     })
-                    logger.info(f"🎯 STRATEGIC HOLD CON ALLOCATION: Permitiendo rebalance pero bloqueando señales L2")
+                    logger.info(f"🎯 STRATEGIC HOLD CON ALLOCATION: Permitiendo rebalance y señales L2")
                 else:
                     l3_dominance_state.update({
-                        'allow_l2_signals': False,
+                        'allow_l2_signals': True,  # ✅ PERMITIR L2
                         'strategic_hold_active': True,
-                        'strategic_hold_reason': f"Strategic HOLD active - L2 signals blocked",
+                        'strategic_hold_reason': f"Strategic HOLD active - L2 signals allowed",
                         'strategic_hold_type': "HOLD_L3_STRATEGIC",
-                        'l2_signals_blocked': True,
-                        'block_autorebalancer': True,
-                        'freeze_positions': True
+                        'l2_signals_blocked': False,
+                        'block_autorebalancer': False,
+                        'freeze_positions': False
                     })
-                    logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - blocking all L2 signals and rebalance")
+                    logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - allowing L2 signals and rebalance")
 
             # RULE 2: WEAK SIGNALS BLOCKED - Apply WEAK_THRESHOLD logic
             elif regime_confidence < WEAK_THRESHOLD:
                 # WEAK_THRESHOLD: Block signals when confidence < 0.55
                 l3_dominance_state.update({
-                    'allow_l2_signals': False,
+                    'allow_l2_signals': True,  # ✅ PERMITIR L2
                     'strategic_hold_active': True,
                     'strategic_hold_reason': f"WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} threshold",
                     'strategic_hold_type': "HOLD_L3_WEAK_SIGNALS_BLOCKED",
                     'capital_preservation_mode': True,
-                    'l2_signals_blocked': True,
-                    'block_autorebalancer': True,
-                    'freeze_positions': True
+                    'l2_signals_blocked': False,
+                    'block_autorebalancer': False,
+                    'freeze_positions': False
                 })
                 regime_signal = 'hold'
                 logger.warning(f"🚨 WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} - FORCING HOLD")
@@ -397,12 +489,12 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                 if regime_confidence < 0.7:
                     # CONFIDENCE OVERRIDE: Force HOLD when confidence < 0.7 in RANGE (but >= WEAK_THRESHOLD)
                     l3_dominance_state.update({
-                        'allow_l2_signals': False,
+                        'allow_l2_signals': True,  # ✅ PERMITIR L2
                         'strategic_hold_active': True,
                         'strategic_hold_reason': f"RANGE regime confidence {regime_confidence:.2f} < 0.7 threshold (but >= {WEAK_THRESHOLD})",
                         'strategic_hold_type': "HOLD_L3_CONFIDENCE_OVERRIDE",
                         'capital_preservation_mode': True,
-                        'l2_signals_blocked': True
+                        'l2_signals_blocked': False
                     })
                     regime_signal = 'hold'
                     logger.warning(f"🚨 STRATEGIC HOLD: RANGE regime confidence {regime_confidence:.2f} < 0.7 - FORCING HOLD (L3 dominance)")
@@ -413,13 +505,13 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                     if regime == "RANGE" and not preliminary_loss_filters["allow_setup_trades"]:
                         strategic_hold = True
                         l3_dominance_state.update({
-                            'allow_l2_signals': False,
+                            'allow_l2_signals': True,  # ✅ PERMITIR L2
                             'strategic_hold_active': True,
-                            'strategic_hold_reason': "RANGE regime default - blocking weak signals",
+                            'strategic_hold_reason': "RANGE regime default - allowing L2 signals",
                             'strategic_hold_type': "HOLD_L3_RANGE_DEFAULT",
-                            'l2_signals_blocked': True
+                            'l2_signals_blocked': False
                         })
-                        logger.info(f"🔒 STRATEGIC CONTROL: RANGE regime detected - allow_l2_signals = False (except when setup_active or allow_setup_trades)")
+                        logger.info(f"🔒 STRATEGIC CONTROL: RANGE regime detected - allow_l2_signals = True")
                     else:
                         strategic_hold = False
                         logger.info(f"🔓 RANGE SETUP ALLOWED: allow_setup_trades={preliminary_loss_filters['allow_setup_trades']} - skipping strategic hold")
@@ -433,15 +525,15 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                 })
                 logger.info(f"✅ L3 ALLOWANCE: {regime} regime with high confidence ({regime_confidence:.2f}) - L2 signals allowed")
 
-            # RULE 5: Default - block weak signals
+            # RULE 5: Default - allow L2 signals
             else:
                 l3_dominance_state.update({
-                    'allow_l2_signals': False,
+                    'allow_l2_signals': True,
                     'strategic_hold_active': False,
-                    'strategic_hold_reason': f"Weak signals blocked in {regime} regime",
-                    'l2_signals_blocked': True
+                    'strategic_hold_reason': f"Allowing L2 signals in {regime} regime",
+                    'l2_signals_blocked': False
                 })
-                logger.info(f"🔒 WEAK SIGNALS BLOCKED: L3 blocking weak signals in {regime} regime")
+                logger.info(f"✅ L2 SIGNALS ALLOWED: L3 allowing L2 signals in {regime} regime")
 
         # ========================================================================================
         # SETUP OVERRIDE: Allow controlled L2 signals for documented setups
@@ -498,8 +590,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         if setup_type == 'oversold':
             # OVERSOLD SETUP: Small buy allocation for mean reversion
             portfolio = {
-                'BTCUSDT': 0.15,  # 15% allocation
-                'ETHUSDT': 0.10,  # 10% allocation
+                'BTC': 0.15,  # 15% allocation
+                'ETH': 0.10,  # 10% allocation
                 'USDT': 0.75      # Keep 75% liquid
             }
             risk_appetite = 'moderate'
@@ -509,8 +601,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         elif setup_type == 'overbought':
             # OVERBOUGHT SETUP: Small short allocation or exit longs
             portfolio = {
-                'BTCUSDT': 0.05,  # Reduce to 5%
-                'ETHUSDT': 0.05,  # Reduce to 5%
+                'BTC': 0.05,  # Reduce to 5%
+                'ETH': 0.05,  # Reduce to 5%
                 'USDT': 0.90      # Move to 90% cash
             }
             risk_appetite = 'low'
@@ -524,30 +616,30 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
             if regime == 'bull':
                 # Aggressive allocations in bull markets
                 portfolio = {
-                    'BTCUSDT': regime_confidence * 0.40,
-                    'ETHUSDT': regime_confidence * 0.30,
-                    'USDT': max(0.10, 1.0 - regime_confidence * 0.70)
+                    'BTC': 0.60,
+                    'ETH': 0.30,
+                    'USDT': 0.10
                 }
             elif regime == 'bear':
                 # Conservative allocations in bear markets
                 portfolio = {
-                    'BTCUSDT': regime_confidence * 0.02,
-                    'ETHUSDT': regime_confidence * 0.02,
-                    'USDT': max(0.10, 1.0 - regime_confidence * 0.04)
+                    'BTC': 0.00,
+                    'ETH': 0.00,
+                    'USDT': 1.00
                 }
             else:  # range, neutral
                 # Balanced allocations
                 portfolio = {
-                    'BTCUSDT': regime_confidence * 0.20,
-                    'ETHUSDT': regime_confidence * 0.15,
-                    'USDT': max(0.10, 1.0 - regime_confidence * 0.35)
+                    'BTC': 0.40,
+                    'ETH': 0.30,
+                    'USDT': 0.30
                 }
         else:
             # Default HOLD allocations
             portfolio = {
-                'BTCUSDT': 0.20,
-                'ETHUSDT': 0.15,
-                'USDT': 0.65
+                'BTC': 0.40,
+                'ETH': 0.30,
+                'USDT': 0.30
             }
 
         logger.info(f"🎯 REGIME PRIORITY: {regime.upper()} regime (subtype: {subtype}) with {regime_confidence:.2f} confidence")
@@ -591,22 +683,22 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         # FIX: Provide default exposure decisions instead of empty dict
         # Default allocations based on regime
         if regime.lower() == "bear":
-            target_allocations = {'BTCUSDT': 0.20, 'ETHUSDT': 0.20, 'USDT': 0.60}
+            target_allocations = {'BTC': 0.00, 'ETH': 0.00, 'USDT': 1.00}
         elif regime.lower() == "bull":
-            target_allocations = {'BTCUSDT': 0.60, 'ETHUSDT': 0.30, 'USDT': 0.10}
+            target_allocations = {'BTC': 0.60, 'ETH': 0.30, 'USDT': 0.10}
         else:
-            target_allocations = {'BTCUSDT': 0.50, 'ETHUSDT': 0.30, 'USDT': 0.20}
+            target_allocations = {'BTC': 0.40, 'ETH': 0.30, 'USDT': 0.30}
         
         # Create default exposure decisions
         exposure_decisions = {
-            'BTCUSDT': {
+            'BTC': {
                 'action': 'hold',
-                'target_allocation': target_allocations['BTCUSDT'],
+                'target_allocation': target_allocations['BTC'],
                 'reason': 'Default allocation - insufficient data'
             },
-            'ETHUSDT': {
+            'ETH': {
                 'action': 'hold',
-                'target_allocation': target_allocations['ETHUSDT'],
+                'target_allocation': target_allocations['ETH'],
                 'reason': 'Default allocation - insufficient data'
             },
             'USDT': {
@@ -716,7 +808,8 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
             "require_stop_loss": True,
             "profit_taking_strategy": "scaled" if winning_trade_rules["scale_out_profits"] else "single_target",
             "setup_trading_enabled": True
-        }
+        },
+        "rsi": rsi  # Incluir RSI en el contexto L3 para TIGHT_RANGE
     }
     
     # ========================================================================================
@@ -731,39 +824,44 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         logger.info(f"🛡️ RANGE REGIME HOLD: HOLD_L3_RANGE_DEFAULT - Blocking L2 signals in sideways market")
     elif setup_type:
         logger.info(f"✅ SETUP STRATEGY ACTIVE: {setup_type} setup allows controlled L2 signals")
-        logger.info(f"📊 Setup allocation: BTC {portfolio.get('BTCUSDT', 0):.1%}, ETH {portfolio.get('ETHUSDT', 0):.1%}, USDT {portfolio.get('USDT', 0):.1%}")
+        logger.info(f"📊 Setup allocation: BTC {portfolio.get('BTC', 0):.1%}, ETH {portfolio.get('ETH', 0):.1%}, USDT {portfolio.get('USDT', 0):.1%}")
 
     return decision
 
 
-def generate_strategic_signal(regime: str, confidence: float, sentiment: float, price_change: float) -> str:
+def generate_strategic_signal(regime: str, confidence: float, sentiment: float, price_change: float, market_indicators: dict = None) -> str:
+    if market_indicators is None:
+        market_indicators = {}
     """
-    Generate strategic signal with HOLD as dominant decision.
+    Generate strategic signal with lower bias threshold for more active signals.
 
-    FUNDAMENTAL RULE: HOLD is the default unless overwhelming statistical evidence.
-    No more over-trading - only signal when confidence is extremely high (>= 0.80).
+    FUNDAMENTAL RULE: Lowered threshold to detect more moderate trends while avoiding over-trading.
+    Signal when confidence is moderate (>= 0.60) and price movement is meaningful (>= 0.5) for BUY,
+    and stricter thresholds for SELL to preserve capital.
     """
 
     # ========================================================================================
-    # FUNDAMENTAL RULE: HOLD IS DOMINANT - ONLY SIGNAL WITH EXTREME CONFIDENCE
+    # LOWERED BIAS THRESHOLD: More permissive for BUY, stricter for SELL
     # ========================================================================================
 
-    # TRENDING regime: Require confidence >= 0.80 (not 0.55) to avoid over-trading
-    if regime == 'TRENDING' and confidence >= 0.80:
-        # Even with high confidence, validate trend direction
-        if price_change > 0.3:  # Clear uptrend
-            if sentiment > 0.6:  # Sentiment confirmation
-                logger.info(f"✅ TRENDING BUY: conf={confidence:.3f}, price_change={price_change:.3f}, sentiment={sentiment:.3f}")
-                return 'buy'
-            else:
-                logger.info(f"⏸️ TRENDING HOLD: uptrend detected but sentiment weak ({sentiment:.3f} < 0.6)")
-                return 'hold'
-        elif price_change < -0.3:  # Clear downtrend
-            logger.info(f"✅ TRENDING SELL: conf={confidence:.3f}, price_change={price_change:.3f}")
-            return 'sell'
-        else:
-            logger.info(f"⏸️ TRENDING HOLD: trend unclear (price_change={price_change:.3f})")
-            return 'hold'
+    # Log detailed bias calculation for debugging - enhanced with more metrics
+    logger.info(f"Bias calc: regime={regime}, confidence={confidence:.2f}, price_change={price_change:.2f}, sentiment={sentiment:.2f}")
+    
+    # Calculate and log bull/bear scores for more detailed analysis
+    bull_score = confidence * max(0, price_change) * (1 + max(0, sentiment))
+    bear_score = confidence * max(0, -price_change) * (1 + max(0, -sentiment))
+    directional_score = abs(bull_score - bear_score)
+    logger.info(f"Detailed bias scores: bull={bull_score:.2f}, bear={bear_score:.2f}, directional={directional_score:.2f}")
+
+    # More permissive BUY signals (lower thresholds)
+    if confidence > 0.60 and price_change > 0.4 and (market_indicators.get('rsi', 50) < 50 or market_indicators.get('adx', 0) > 18):
+        logger.info(f"✅ BUY: conf={confidence:.3f}, price_change={price_change:.3f}, sentiment={sentiment:.3f}, rsi={market_indicators.get('rsi', 50):.1f}, adx={market_indicators.get('adx', 0):.1f}")
+        return 'buy'
+    
+    # Stricter SELL signals to preserve capital
+    if confidence > 0.65 and price_change < -0.8:
+        logger.info(f"✅ SELL: conf={confidence:.3f}, price_change={price_change:.3f}")
+        return 'sell'
 
     # RANGE regime: HOLD dominant - only allow setups, never force directional signals
     elif regime == 'RANGE':

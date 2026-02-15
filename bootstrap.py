@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from core.state_manager import initialize_state, validate_state_structure
 from core.portfolio_manager import PortfolioManager
 from core.logging import logger
-from core.config import get_config
+from core.config import get_config, set_forced_mode
 from core.incremental_signal_verifier import get_signal_verifier, start_signal_verification, stop_signal_verification
 from core.trading_metrics import get_trading_metrics
 
@@ -46,6 +46,7 @@ from sentiment.sentiment_manager import update_sentiment_texts
 
 from system.system_cleanup import perform_full_cleanup
 from storage.paper_trade_logger import get_paper_logger
+from config_loader import get_initial_balances, get_capital_usd
 
 
 # 🔥 PRIORIDAD 4: SESSION IS FRESH - Flag global para nueva sesión
@@ -71,6 +72,11 @@ class HRMBootstrap:
         self.portfolio_manager = None
         self.order_manager = None
         self.runtime_loop = None
+        self._mode = "paper"  # Default mode, will be set in bootstrap_system
+    
+    def _get_mode_from_bootstrap(self) -> str:
+        """Get the mode from the single source of truth (bootstrap)."""
+        return self._mode
         
     async def bootstrap_system(self, mode: str = "paper") -> Tuple[PortfolioManager, OrderManager]:
         """
@@ -79,8 +85,12 @@ class HRMBootstrap:
         🔥 PRIORIDAD 4: session_is_fresh determina si es nueva sesión,
         NO los balances. Esto evita dependencia de estado externo.
         """
+        # Store mode as single source of truth for this bootstrap instance
+        self._mode = mode
+        
         logger.info("🚀 Starting HRM System Bootstrap")
         logger.info(f"🔥 SESSION_IS_FRESH: {is_session_fresh()}")
+        logger.info(f"🎯 BOOTSTRAP MODE: {mode}")
         
         try:
             # 1. System Cleanup
@@ -156,6 +166,11 @@ class HRMBootstrap:
         # Load environment variables
         load_dotenv()
         
+        # 🔥 CRITICAL: Set the forced mode in core.config BEFORE getting config
+        # This establishes the single source of truth for the mode
+        set_forced_mode(mode)
+        logger.info(f"🎯 Mode set as single source of truth: {mode}")
+        
         # Get environment configuration
         # 🔥 PRIORIDAD 4: Usar mode explícito, no depender de configuración previa
         env_config = get_config(mode)
@@ -173,7 +188,7 @@ class HRMBootstrap:
         # Initialize state with symbols and initial balance
         # 🔥 PRIORIDAD 4: session_is_fresh determina si es nueva sesión
         symbols = env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"])
-        initial_balance = 3000.0  # Fixed initial balance, not dependent on previous state
+        initial_balance = get_capital_usd()  # Cargar desde initial_state.json
         
         state = initialize_state(symbols, initial_balance)
         state = validate_state_structure(state)
@@ -209,20 +224,21 @@ class HRMBootstrap:
         """Initialize L1 operational components."""
         logger.info("🔧 Initializing L1 operational components...")
         
-        # Initialize Binance client (solo para datos públicos en paper mode)
-        binance_client = BinanceClient()
+        # Determine mode from the single source of truth
+        mode = self._get_mode_from_bootstrap()
+        
+        # Initialize Binance client with injected mode (single source of truth)
+        binance_client = BinanceClient(mode=mode)
         self.components['binance_client'] = binance_client
         
         # Initialize SimulatedExchangeClient (para paper trading)
         from l1_operational.simulated_exchange_client import SimulatedExchangeClient
         
-        # 🔥 PRIORIDAD 4: Siempre usar balances iniciales fijos para nueva sesión
-        # No depender de balances previos - usar valores conocidos
-        initial_balances = {
-            "BTC": 0.01549,
-            "ETH": 0.385,
-            "USDT": 3000.0
-        }
+        # 🔥 PRIORIDAD 4: Cargar balances desde initial_state.json
+        # Usar config_loader para centralizar la configuración
+        initial_balances = get_initial_balances()
+        
+        logger.info(f"📊 Cargando balances desde initial_state.json: {initial_balances}")
         
         # Limpiar cualquier estado previo y crear nuevo
         SimulatedExchangeClient._instance = None
@@ -310,8 +326,8 @@ class HRMBootstrap:
         else:
             # Test mode: use simulated balance
             portfolio_mode = "simulated"
-            initial_balance = 3000.0  # Fixed balance for paper trading
-            logger.info(f"🧪 TESTING MODE: Using fixed initial balance of {initial_balance} USDT")
+            initial_balance = get_capital_usd()  # Cargar desde initial_state.json
+            logger.info(f"🧪 TESTING MODE: Using initial balance of {initial_balance} USDT from initial_state.json")
         
         # Initialize Portfolio Manager
         portfolio_manager = PortfolioManager(
@@ -358,14 +374,21 @@ class HRMBootstrap:
         """Initialize Order Manager."""
         logger.info("💰 Initializing Order Manager...")
         
+        # Determine mode based on configuration
+        binance_mode = os.getenv("BINANCE_MODE", "TEST").upper()
+        if binance_mode == "LIVE":
+            mode = "live"
+        else:
+            mode = "simulated"
+            
         order_manager = OrderManager(
             state_manager=self.state,
             portfolio_manager=self.portfolio_manager,
-            config=config,
+            mode=mode,
             simulated_client=self.components['simulated_client']
         )
         
-        logger.info("✅ Order Manager initialized")
+        logger.info(f"✅ Order Manager initialized (mode: {mode})")
         return order_manager
     
     async def _initialize_sentiment_manager(self):
@@ -446,3 +469,251 @@ def reset_session():
     session_is_fresh = True
     logger.info("🔄 Session reset to fresh state")
     return True
+
+
+# =============================================================================
+# SHUTDOWN LIMPIO GLOBAL
+# =============================================================================
+
+# Variable global para almacenar referencias a componentes para shutdown
+_shutdown_components = {
+    'market_data_manager': None,
+    'realtime_loader': None,
+    'exchange_client': None,
+    'binance_client': None,
+    'data_feed': None,
+    'portfolio_manager': None,
+    'order_manager': None,
+}
+
+
+def register_component_for_shutdown(name: str, component: Any):
+    """
+    Registra un componente para ser cerrado durante el shutdown global.
+    
+    Args:
+        name: Nombre identificador del componente
+        component: Instancia del componente a registrar
+    """
+    global _shutdown_components
+    _shutdown_components[name] = component
+    logger.debug(f"🔧 Componente '{name}' registrado para shutdown")
+
+
+def unregister_component_for_shutdown(name: str):
+    """
+    Desregistra un componente del shutdown global.
+    
+    Args:
+        name: Nombre identificador del componente
+    """
+    global _shutdown_components
+    if name in _shutdown_components:
+        _shutdown_components[name] = None
+        logger.debug(f"🔧 Componente '{name}' desregistrado del shutdown")
+
+
+async def shutdown():
+    """
+    Shutdown limpio global - cierra todas las conexiones y sesiones.
+    
+    Esta función DEBE ser llamada al finalizar el sistema para asegurar:
+    - Todas las sesiones aiohttp se cierran correctamente
+    - No quedan warnings asyncio al terminar
+    - Los recursos se liberan en el orden correcto
+    
+    Orden de cierre:
+    1. MarketDataManager (cierra RealTimeLoader y DataFeed internamente)
+    2. RealTimeLoader (WebSocket connections)
+    3. ExchangeClient / BinanceClient (sesiones aiohttp)
+    4. DataFeed
+    5. PortfolioManager (guarda estado)
+    6. OrderManager
+    7. Cancelar todas las tareas pendientes de asyncio
+    8. Cerrar sesiones aiohttp huérfanas
+    """
+    global _shutdown_components
+    
+    logger.info("🧹 Iniciando shutdown limpio global...")
+    
+    # 1. Cerrar MarketDataManager
+    if _shutdown_components.get('market_data_manager') is not None:
+        try:
+            await _shutdown_components['market_data_manager'].close()
+            logger.info("✅ MarketDataManager cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando MarketDataManager: {e}")
+    
+    # 2. Cerrar RealTimeLoader directamente si existe
+    if _shutdown_components.get('realtime_loader') is not None:
+        try:
+            await _shutdown_components['realtime_loader'].close()
+            logger.info("✅ RealTimeLoader cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando RealTimeLoader: {e}")
+    
+    # 3. Cerrar ExchangeClient / BinanceClient
+    for client_name in ['exchange_client', 'binance_client']:
+        if _shutdown_components.get(client_name) is not None:
+            try:
+                client = _shutdown_components[client_name]
+                if hasattr(client, 'close'):
+                    await client.close()
+                elif hasattr(client, 'close_connection'):
+                    await client.close_connection()
+                logger.info(f"✅ {client_name} cerrado")
+            except Exception as e:
+                logger.warning(f"⚠️ Error cerrando {client_name}: {e}")
+    
+    # 4. Cerrar DataFeed
+    if _shutdown_components.get('data_feed') is not None:
+        try:
+            await _shutdown_components['data_feed'].close()
+            logger.info("✅ DataFeed cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando DataFeed: {e}")
+    
+    # 5. Guardar estado del PortfolioManager
+    if _shutdown_components.get('portfolio_manager') is not None:
+        try:
+            pm = _shutdown_components['portfolio_manager']
+            if hasattr(pm, 'save_to_json'):
+                pm.save_to_json()
+                logger.info("✅ PortfolioManager estado guardado")
+            if hasattr(pm, 'close'):
+                await pm.close()
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando PortfolioManager: {e}")
+    
+    # 6. Cerrar OrderManager
+    if _shutdown_components.get('order_manager') is not None:
+        try:
+            om = _shutdown_components['order_manager']
+            if hasattr(om, 'close'):
+                await om.close()
+            logger.info("✅ OrderManager cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando OrderManager: {e}")
+    
+    # 7. Cerrar todas las sesiones aiohttp pendientes
+    await _close_aiohttp_sessions()
+    
+    # 8. Cancelar todas las tareas pendientes de asyncio (excepto la actual)
+    await _cancel_pending_tasks()
+    
+    logger.info("🧹 Shutdown limpio global completado")
+
+
+async def _close_aiohttp_sessions():
+    """
+    Cierra todas las sesiones aiohttp abiertas.
+    """
+    try:
+        import aiohttp
+        
+        # Buscar y cerrar todas las sesiones aiohttp
+        closed_count = 0
+        for obj in list(globals().values()) + list(_shutdown_components.values()):
+            if obj is None:
+                continue
+            
+            # Buscar atributos que sean sesiones aiohttp
+            if hasattr(obj, 'session') and hasattr(obj.session, 'closed'):
+                try:
+                    if not obj.session.closed:
+                        await obj.session.close()
+                        closed_count += 1
+                except Exception:
+                    pass
+            
+            # Buscar atributos que sean ClientSession directamente
+            if isinstance(obj, aiohttp.ClientSession):
+                try:
+                    if not obj.closed:
+                        await obj.close()
+                        closed_count += 1
+                except Exception:
+                    pass
+        
+        if closed_count > 0:
+            logger.info(f"✅ {closed_count} sesiones aiohttp cerradas")
+    except Exception as e:
+        logger.warning(f"⚠️ Error cerrando sesiones aiohttp: {e}")
+
+
+async def _cancel_pending_tasks():
+    """
+    Cancela todas las tareas pendientes de asyncio excepto la tarea actual.
+    Esto evita warnings de "task was destroyed but it is pending".
+    """
+    try:
+        import asyncio
+        
+        loop = asyncio.get_running_loop()
+        current_task = asyncio.current_task()
+        
+        # Obtener todas las tareas pendientes excepto la actual
+        pending_tasks = [
+            task for task in asyncio.all_tasks(loop) 
+            if task is not current_task and not task.done()
+        ]
+        
+        if pending_tasks:
+            logger.info(f"🛑 Cancelando {len(pending_tasks)} tareas pendientes...")
+            
+            # Cancelar todas las tareas
+            for task in pending_tasks:
+                task.cancel()
+            
+            # Esperar a que todas las tareas se completen (o se cancelen)
+            results = await asyncio.gather(*pending_tasks, return_exceptions=True)
+            
+            cancelled_count = sum(1 for r in results if isinstance(r, asyncio.CancelledError))
+            logger.info(f"✅ {cancelled_count} tareas canceladas, {len(results) - cancelled_count} completadas")
+    except Exception as e:
+        logger.warning(f"⚠️ Error cancelando tareas pendientes: {e}")
+
+
+async def shutdown_with_signal_handling():
+    """
+    Versión del shutdown que maneja señales del sistema.
+    Usar esta función cuando se quiera un shutdown completo con manejo de señales.
+    """
+    logger.info("🛑 Ejecutando shutdown con manejo de señales...")
+    await shutdown()
+
+
+# Manejadores de señales para shutdown limpio
+_shutdown_event = asyncio.Event()
+
+def _signal_handler(signum, frame):
+    """
+    Manejador de señales que activa el evento de shutdown.
+    """
+    import signal
+    sig_name = signal.Signals(signum).name
+    logger.info(f"🛑 Señal {sig_name} recibida, iniciando shutdown...")
+    _shutdown_event.set()
+
+
+def setup_signal_handlers():
+    """
+    Configura los manejadores de señales para SIGINT y SIGTERM.
+    Llama a esta función al inicio de la aplicación para habilitar shutdown limpio.
+    """
+    import signal
+    
+    # Configurar manejadores para SIGINT (Ctrl+C) y SIGTERM
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    
+    logger.info("✅ Manejadores de señales configurados (SIGINT, SIGTERM)")
+
+
+async def wait_for_shutdown_signal():
+    """
+    Espera hasta que se reciba una señal de shutdown.
+    Útil para mantener el programa corriendo hasta que se presione Ctrl+C.
+    """
+    await _shutdown_event.wait()
+    logger.info("🛑 Señal de shutdown recibida, procediendo...")

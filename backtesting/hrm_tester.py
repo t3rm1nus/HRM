@@ -26,7 +26,7 @@ from l1_operational.binance_client import BinanceClient
 from l3_strategy.l3_processor import generate_l3_output
 from l3_strategy.sentiment_inference import download_reddit, download_news
 from core.state_manager import initialize_state, validate_state_structure
-from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
 from core.portfolio_manager import PortfolioManager
 
 # Import L1 AI models

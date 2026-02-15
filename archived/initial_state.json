@@ -1,0 +1,13 @@
+{
+  "capital_usdt": 3000.0,
+  "btc": 0.0,
+  "eth": 0.0,
+  "mode": "paper",
+  "auto_learning": "fix",
+  "initial_balances": {
+    "USDT": 3000.0,
+    "BTC": 0.0,
+    "ETH": 0.0
+  },
+  "timestamp": "2026-02-08T15:30:19.162057"
+}

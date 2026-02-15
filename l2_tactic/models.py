@@ -64,6 +64,11 @@ class TacticalSignal:
             # Don't overwrite features if it's being set via kwargs
             if key != 'features':
                 setattr(self, key, value)
+        
+        # Log active trade signals (not hold)
+        from core.logging import logger
+        if self.side.lower() != "hold":
+            logger.info(f"🚨 L2 ACTIVE TRADE SIGNAL 🚨 {self.side.upper()} {self.confidence:.2f} | {self.symbol} | Source: {self.source}")
 
     def is_long(self) -> bool:
         return self.side.lower() == "buy"
@@ -96,7 +101,7 @@ class TacticalSignal:
         if price is None and 'close' in self.features:
             price = self.features['close']
         
-        from .utils import safe_float
+        from .l2_utils import safe_float
         return {
             'signal_id': str(uuid.uuid4()),
             'strategy_id': 'L2_TACTIC',

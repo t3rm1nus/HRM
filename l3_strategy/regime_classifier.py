@@ -171,7 +171,8 @@ class MarketRegimeClassifier:
                 
             elif abs_change > self.thresholds['trend']['weak_change'] and r_squared > 0.3:
                 subtype = f"WEAK_{'BULL' if direction == 'UP' else 'BEAR'}"
-                score = 0.55
+                # AGGRESSIVE: Allow BUY signals for WEAK_BULL (lowered from 0.55 to 0.45 threshold)
+                score = 0.50  # Lower score but still allow directional signal
                 
             else:
                 subtype = None
@@ -731,7 +732,10 @@ def _generate_strategy_from_regime(regime_result: Dict) -> Dict:
                 'signal': 'hold',
                 'strategy_type': 'mean_reversion_ready',
                 'profit_target': 0.008,
-                'stop_loss': 0.006
+                'stop_loss': 0.006,
+                'allow_l2_signal': True,
+                'allow_partial_rebalance': True,
+                'market_making_enabled': True
             })
         else:
             base_strategy.update({

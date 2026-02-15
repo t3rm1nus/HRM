@@ -128,7 +128,7 @@ class RiskControlManager:
         if liquidity_usd is None:
             try:
                 # fallback crudo
-                from .utils import safe_float
+                from .l2_utils import safe_float
                 last_vol = safe_float(getattr(mf, "last_volume", 0) or 0)
                 last_px = safe_float(getattr(mf, "last_close", 0) or 0)
                 liquidity_usd = last_vol * last_px

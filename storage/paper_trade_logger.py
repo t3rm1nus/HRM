@@ -400,6 +400,9 @@ def log_paper_trade(order: Dict[str, Any], **kwargs):
     logger = get_paper_logger()
     logger.log_paper_trade(order, **kwargs)
 
+# Flag para indicar disponibilidad del logger
+PAPER_LOGGER_AVAILABLE = True
+
 # Ejemplo de uso:
 """
 from storage.paper_trade_logger import log_paper_trade, get_paper_logger

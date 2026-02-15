@@ -16,8 +16,8 @@ from colorama import Fore, Style
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add project root to path (insert at beginning for priority)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import SystemBootstrap for centralized system initialization
 from system.bootstrap import SystemBootstrap
@@ -27,6 +27,9 @@ from system.market_data_manager import MarketDataManager
 
 # Import TradingPipelineManager for trading cycle orchestration
 from system.trading_pipeline_manager import TradingPipelineManager
+
+# Import funciones de shutdown global desde bootstrap
+from bootstrap import shutdown, register_component_for_shutdown, setup_signal_handlers
 
 # Import modularized components
 from core.state_manager import log_cycle_data
@@ -106,6 +109,11 @@ async def main():
     try:
         
         # ================================================================
+        # CONFIGURAR MANEJADORES DE SEÑALES PARA SHUTDOWN LIMPIO
+        # ================================================================
+        setup_signal_handlers()
+        
+        # ================================================================
         # STEP 1: SYSTEM CLEANUP - USAR perform_full_cleanup()
         # ================================================================
         logger.info("🧹 Running system cleanup...")
@@ -145,7 +153,15 @@ async def main():
         # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
         # ================================================================
         logger.info("🔧 Initializing StateCoordinator...")
-        state_coordinator = StateCoordinator()
+        # Determine mode based on configuration
+        mode = "simulated"  # Default to simulated mode
+        try:
+            live_config = get_config("live")
+            if not getattr(live_config, 'PAPER_MODE', True):
+                mode = "live"
+        except Exception:
+            mode = "simulated"
+        state_coordinator = StateCoordinator(mode=mode)
         
         # ✅ CRITICAL: Verify StateCoordinator is not None
         if state_coordinator is None:
@@ -193,7 +209,34 @@ async def main():
             raise RuntimeError("StateCoordinator is None - cannot continue")
 
         # ================================================================
-        # STEP 4: ENSURE CRITICAL COMPONENTS EXIST
+        # STEP 4: INITIALIZE MARKET DATA MANAGER FIRST (REORDERED)
+        # ================================================================
+        logger.info("🔧 Initializing MarketDataManager...")
+        try:
+            market_data_manager = MarketDataManager(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                fallback_enabled=True
+            )
+            logger.info("✅ MarketDataManager initialized successfully")
+        except Exception as mkt_error:
+            logger.error(f"❌ MarketDataManager initialization failed: {mkt_error}")
+            # CRITICAL: Create a minimal fallback MarketDataManager
+            market_data_manager = MarketDataManager(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                fallback_enabled=True
+            )
+            logger.warning("⚠️ Using fallback MarketDataManager initialization")
+    
+        # ✅ CRITICAL: Verify MarketDataManager is not None
+        if market_data_manager is None:
+            logger.critical("🚨 FATAL: MarketDataManager is None after initialization!")
+            raise RuntimeError("MarketDataManager cannot be None - trading loop cannot start")
+
+        # 🔧 REGISTRAR MarketDataManager para shutdown global
+        register_component_for_shutdown('market_data_manager', market_data_manager)
+
+        # ================================================================
+        # STEP 5: ENSURE CRITICAL COMPONENTS EXIST (WITH MARKET DATA MANAGER INJECTED)
         # ================================================================
         logger.info("🔧 Verifying critical components...")
         
@@ -205,8 +248,15 @@ async def main():
             # ✅ CRITICAL FIX: Create BinanceClient for paper trading with testnet
             binance_client = BinanceClient()
             
-            # ✅ Create PortfolioManager with BinanceClient in simulated mode
-            portfolio_manager = PortfolioManager(client=binance_client, mode="simulated")
+            # 🔧 REGISTRAR BinanceClient para shutdown global
+            register_component_for_shutdown('binance_client', binance_client)
+            
+            # ✅ Create PortfolioManager with BinanceClient AND MarketDataManager in simulated mode
+            portfolio_manager = PortfolioManager(
+                exchange_client=binance_client, 
+                market_data_manager=market_data_manager,
+                mode="simulated"
+            )
             
             # ✅ If PortfolioManager has async initialization, call it
             if hasattr(portfolio_manager, 'initialize_async'):
@@ -217,9 +267,13 @@ async def main():
                     logger.warning(f"⚠️ Async initialization failed: {async_init_error}")
             
             components['portfolio_manager'] = portfolio_manager
-            logger.info("✅ PortfolioManager created with PaperExchangeAdapter")
+            logger.info("✅ PortfolioManager created with MarketDataManager injected")
         else:
             portfolio_manager = components['portfolio_manager']
+            # Inject MarketDataManager if not already injected
+            if not hasattr(portfolio_manager, 'market_data_manager') or portfolio_manager.market_data_manager is None:
+                portfolio_manager.market_data_manager = market_data_manager
+                logger.info("✅ MarketDataManager injected into existing PortfolioManager")
             logger.info("✅ PortfolioManager from bootstrap")
             
         # Order Manager
@@ -230,12 +284,16 @@ async def main():
             # Bootstrap simulated exchange client if in paper mode
             simulated_client = bootstrap_simulated_exchange(config)
             
-            order_manager = OrderManager(state_coordinator, portfolio_manager, config, simulated_client=simulated_client)
+            order_manager = OrderManager(state_coordinator, portfolio_manager, mode=mode, simulated_client=simulated_client)
             components['order_manager'] = order_manager
             logger.info("✅ OrderManager created manually with simulated client")
         else:
             order_manager = components['order_manager']
             logger.info("✅ OrderManager from bootstrap")
+        
+        # 🔧 REGISTRAR componentes para shutdown global
+        register_component_for_shutdown('portfolio_manager', portfolio_manager)
+        register_component_for_shutdown('order_manager', order_manager)
             
         # L2 Processor
         if 'l2_processor' not in components or components.get('l2_processor') is None:
@@ -385,6 +443,15 @@ async def main():
         # STEP 9: INITIALIZE TRADING PIPELINE MANAGER
         # ================================================================
         logger.info("🔧 Initializing TradingPipelineManager...")
+        # Determine mode based on configuration
+        mode = "simulated"  # Default to simulated mode
+        try:
+            live_config = get_config("live")
+            if not getattr(live_config, 'PAPER_MODE', True):
+                mode = "live"
+        except Exception:
+            mode = "simulated"
+        
         trading_pipeline = TradingPipelineManager(
             portfolio_manager=portfolio_manager,
             order_manager=order_manager,
@@ -393,9 +460,9 @@ async def main():
             auto_rebalancer=auto_rebalancer,
             signal_verifier=signal_verifier,
             state_coordinator=state_coordinator,
-            config=config
+            mode=mode
         )
-        logger.info("✅ TradingPipelineManager ready")
+        logger.info(f"✅ TradingPipelineManager ready (mode: {mode})")
 
         # ================================================================
         # STEP 10: INITIALIZE ERROR RECOVERY
@@ -405,62 +472,7 @@ async def main():
         logger.info("✅ ErrorRecoveryManager ready")
 
         # ================================================================
-        # STEP 11: INITIALIZE MARKET DATA MANAGER - CRITICAL FIX
-        # ================================================================
-        logger.info("🔧 Initializing MarketDataManager...")
-        try:
-            market_data_manager = MarketDataManager(
-                symbols=["BTCUSDT", "ETHUSDT"],
-                fallback_enabled=True
-            )
-            logger.info("✅ MarketDataManager initialized successfully")
-        except Exception as mkt_error:
-            logger.error(f"❌ MarketDataManager initialization failed: {mkt_error}")
-            # CRITICAL: Create a minimal fallback MarketDataManager
-            market_data_manager = MarketDataManager(
-                symbols=["BTCUSDT", "ETHUSDT"],
-                fallback_enabled=True
-            )
-            logger.warning("⚠️ Using fallback MarketDataManager initialization")
-    
-        # ✅ CRITICAL: Verify MarketDataManager is not None
-        if market_data_manager is None:
-            logger.critical("🚨 FATAL: MarketDataManager is None after initialization!")
-            raise RuntimeError("MarketDataManager cannot be None - trading loop cannot start")
-    
-        # ================================================================
-        # STEP 12: VERIFY INITIAL PORTFOLIO STATE
-        # ================================================================
-        logger.info("🔍 INITIAL PORTFOLIO STATE:")
-        try:
-            # Sincronizar con el exchange para obtener balances reales (single source of truth)
-            if hasattr(portfolio_manager, '_sync_from_client'):
-                portfolio_manager._sync_from_client()
-            
-            btc_bal = portfolio_manager.get_balance('BTCUSDT')
-            eth_bal = portfolio_manager.get_balance('ETHUSDT')
-            usdt_bal = portfolio_manager.get_balance('USDT')
-            total_val = portfolio_manager.get_total_value()
-        
-            logger.info(f"   BTC: {btc_bal:.6f}")
-            logger.info(f"   ETH: {eth_bal:.3f}")
-            logger.info(f"   USDT: ${usdt_bal:.2f}")
-            logger.info(f"   Total: ${total_val:.2f}")
-        
-            # Store initial portfolio values for comparison
-            initial_portfolio = {
-                'btc_balance': btc_bal,
-                'eth_balance': eth_bal,
-                'usdt_balance': usdt_bal,
-                'total_value': total_val
-            }
-            logger.info("✅ Initial portfolio values stored for comparison")
-        except Exception as portfolio_error:
-            logger.error(f"❌ Error reading portfolio: {portfolio_error}")
-            initial_portfolio = None
-
-        # ================================================================
-        # STEP 13: GET INITIAL MARKET DATA
+        # STEP 11: GET INITIAL MARKET DATA
         # ================================================================
         logger.info("🔄 Fetching initial market data...")
         try:
@@ -482,21 +494,23 @@ async def main():
         if validate_market_data(market_data):
             logger.info("🚀 Calculating bootstrap deployment...")
             try:
-                # First try bootstrap deployment (guaranteed initial entry)
-                bootstrap_orders = position_rotator.calculate_bootstrap_deployment(market_data)
+            # First try bootstrap deployment (guaranteed initial entry)
+                # CRITICAL FIX: Usar await para métodos async
+                bootstrap_orders = await position_rotator.calculate_bootstrap_deployment(market_data)
                 
                 if bootstrap_orders:
                     logger.info(f"🔥 Bootstrap deployment: {len(bootstrap_orders)} orders will be executed")
                     processed_orders = await order_manager.execute_orders(bootstrap_orders)
-                    await portfolio_manager.update_from_orders_async(processed_orders, market_data)
+                    await portfolio_manager.update_from_orders_async(processed_orders)
                     logger.info(f"✅ Bootstrap deployment completed: {len(processed_orders)} orders executed")
                 else:
                     logger.info("⏸️ No bootstrap deployment needed - checking initial deployment")
                     # Fallback to initial deployment if bootstrap failed or is disabled
-                    orders = position_rotator.calculate_initial_deployment(market_data)
+                    # CRITICAL FIX: Usar await para método async
+                    orders = await position_rotator.calculate_initial_deployment(market_data)
                     if orders:
                         processed_orders = await order_manager.execute_orders(orders)
-                        await portfolio_manager.update_from_orders_async(processed_orders, market_data)
+                        await portfolio_manager.update_from_orders_async(processed_orders)
                         logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
                     else:
                         logger.info("⚠️ No initial deployment needed")
@@ -507,14 +521,48 @@ async def main():
             logger.warning("⚠️ Skipping deployment - invalid market data")
 
         # ================================================================
-        # STEP 15: INTEGRATE AUTO-LEARNING
+        # STEP 15: INTEGRATE AUTO-LEARNING (FIXED)
         # ================================================================
         logger.info("🤖 Integrating Auto-Learning System...")
+        auto_learning_system = None
         try:
-            auto_learning_system = await integrate_with_main_system()
-            logger.info("✅ Auto-Learning System integrated")
+            from integration_auto_learning import AutoLearningIntegration
+            
+            # ✅ FIX: Crear integración con argumentos requeridos
+            auto_learning_system = AutoLearningIntegration()
+            
+            # ✅ FIX: Inicializar con todos los componentes necesarios
+            success = await auto_learning_system.initialize_integration(
+                state_manager=state_coordinator,
+                order_manager=order_manager,
+                portfolio_manager=portfolio_manager,
+                l2_processor=l2_processor,
+                trading_metrics=get_trading_metrics(),
+                config=config
+            )
+            
+            if success:
+                logger.info("✅ Auto-Learning System integrated successfully")
+                
+                # ✅ FIX: Conectar AutoLearningBridge al Trading Pipeline
+                from system.auto_learning_bridge import AutoLearningBridge
+                bridge = AutoLearningBridge(auto_learning_system)
+                trading_pipeline.auto_learning_bridge = bridge
+                logger.info("✅ Auto-Learning Bridge conectado al Trading Pipeline")
+                
+                # Verificar protección anti-overfitting
+                status = await auto_learning_system.get_learning_status()
+                if status.get('learning_system', {}).get('anti_overfitting_active', False):
+                    logger.info("🛡️  Anti-overfitting protection: ACTIVE")
+                else:
+                    logger.warning("⚠️  Anti-overfitting protection not confirmed")
+            else:
+                logger.warning("⚠️  Auto-Learning System initialization returned False")
+                
         except Exception as learning_error:
             logger.error(f"❌ Auto-Learning integration failed: {learning_error}")
+            import traceback
+            logger.error(traceback.format_exc())
 
         # ================================================================
         # STEP 16: APPLY FUNDAMENTAL RULE - CRITICAL FIX
@@ -529,23 +577,30 @@ async def main():
             # Continue anyway - this is not a critical failure
         
         # ================================================================
-        # 💥 PRIORIDAD 2: FORCE WARMUP - Ensure market data cache is populated
+        # 💥 PRIORIDAD 2: WARMUP ALL SYMBOLS - Ensure ALL market data is cached
         # ================================================================
-        logger.info("🔥 PRIORIDAD 2: Ejecutando force_warmup()...")
-        warmup_success = await market_data_manager.force_warmup(
-            symbol="BTCUSDT",
+        logger.info("🔥 PRIORIDAD 2: Ejecutando warmup_all_symbols()...")
+        warmup_success = await market_data_manager.warmup_all_symbols(
             timeframe="1m",
             limit=100
         )
         
         if not warmup_success:
-            # Fallback: try ETHUSDT
-            logger.warning("⚠️ Warmup BTCUSDT falló, intentando ETHUSDT...")
+            # Fallback: try individual symbols
+            logger.warning("⚠️ warmup_all_symbols falló, intentando BTCUSDT...")
             warmup_success = await market_data_manager.force_warmup(
-                symbol="ETHUSDT",
+                symbol="BTCUSDT",
                 timeframe="1m",
                 limit=100
             )
+            
+            if not warmup_success:
+                logger.warning("⚠️ Warmup BTCUSDT falló, intentando ETHUSDT...")
+                warmup_success = await market_data_manager.force_warmup(
+                    symbol="ETHUSDT",
+                    timeframe="1m",
+                    limit=100
+                )
         
         # ================================================================
         # 💥 PRIORIDAD 3: FAIL FAST - No market data = No trading loop
@@ -728,7 +783,8 @@ async def main():
                 # ============================================================
                 cycle_result = await trading_pipeline.process_trading_cycle(
                     state=state,
-                    market_data=market_data  # ✅ CRITICAL: Pass market_data explicitly
+                    market_data=market_data,  # ✅ CRITICAL: Pass market_data explicitly
+                    cycle_id=cycle_id
                 )
                 
                 # Update state from cycle result
@@ -739,9 +795,52 @@ async def main():
                 total_orders_all_cycles += cycle_result.orders_executed
                 total_rejected_all_cycles += cycle_result.orders_rejected
                 total_cooldown_blocked_all_cycles += cycle_result.cooldown_blocked
+
+                # ============================================================
+                # CYCLE STEP 3: SYNC PORTFOLIO FROM EXCHANGE (CRITICAL FIX)
+                # ============================================================
+                # MUST sync after EVERY order execution to maintain state consistency
+                if cycle_result.orders_executed > 0:
+                    logger.info(f"🔄 Syncing portfolio after {cycle_result.orders_executed} executed orders...")
+                    
+                    # Get the simulated client for paper mode
+                    simulated_client = None
+                    if hasattr(order_manager, 'simulated_client'):
+                        simulated_client = order_manager.simulated_client
+                    elif hasattr(order_manager, 'client'):
+                        simulated_client = order_manager.client
+                    
+                    if simulated_client:
+                        # CRITICAL: Sync portfolio from exchange client
+                        sync_success = await portfolio_manager.sync_from_exchange_async(simulated_client)
+                        
+                        if sync_success:
+                            logger.info("✅ Portfolio synced successfully after order execution")
+                        else:
+                            logger.error("❌ Portfolio sync failed after order execution")
+                    
+                    # Update NAV with current market prices
+                    market_prices = {}
+                    if simulated_client and hasattr(simulated_client, 'get_market_price'):
+                        market_prices = {
+                            "BTCUSDT": simulated_client.get_market_price("BTCUSDT"),
+                            "ETHUSDT": simulated_client.get_market_price("ETHUSDT")
+                        }
+                    else:
+                        # Fallback to market_data
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            if symbol in market_data:
+                                data = market_data[symbol]
+                                if isinstance(data, dict) and "close" in data:
+                                    market_prices[symbol] = data["close"]
+                                elif hasattr(data, 'iloc'):
+                                    market_prices[symbol] = data.iloc[-1]["close"]
+                    
+                    if market_prices:
+                        await portfolio_manager.update_nav_async(market_prices)
                 
                 # ============================================================
-                # CYCLE STEP 3: LOG SUMMARY (every 5 cycles)
+                # CYCLE STEP 4: LOG SUMMARY (every 5 cycles)
                 # ============================================================
                 if cycle_id % 5 == 0:
                     logger.info("="*80)
@@ -763,15 +862,23 @@ async def main():
                     logger.info("="*80)
                 
                 # ============================================================
-                # CYCLE STEP 4: PORTFOLIO COMPARISON LOG (every cycle)
+                # CYCLE STEP 4B: EXTRAER Y MOSTRAR PRECIOS ACTUALES
                 # ============================================================
-                # Sincronizar portfolio con exchange antes de mostrar la comparación
-                if hasattr(portfolio_manager, '_sync_from_client_async'):
-                    await portfolio_manager._sync_from_client_async()
-                elif hasattr(portfolio_manager, '_sync_from_client'):
-                    portfolio_manager._sync_from_client()
+                # Mejorar la extracción de precios en el ciclo
+                current_prices = {}
+                for symbol, df in market_data.items():
+                    if df is not None and not df.empty:
+                        current_prices[symbol] = float(df.iloc[-1]['close'])
+                        logger.info(f"📊 {symbol}: ${current_prices[symbol]:.2f}")
                 
+                # ============================================================
+                # CYCLE STEP 5: PORTFOLIO COMPARISON LOG (every cycle)
+                # ============================================================
+                # CRITICAL FIX: Log portfolio comparison using cycle_context snapshot
+                # Esto evita llamadas adicionales a get_balances_async()
+                cycle_context = trading_pipeline.get_cycle_context()
                 await log_portfolio_comparison(
+                    cycle_context=cycle_context,
                     portfolio_manager=portfolio_manager,
                     cycle_id=cycle_id,
                     market_data=market_data
@@ -825,8 +932,16 @@ async def main():
         logger.critical(traceback.format_exc())
             
     finally:
-        # Cleanup
-        logger.info("🧹 Cleaning up...")
+        # 🔧 SHUTDOWN LIMPIO GLOBAL desde bootstrap
+        logger.info("🧹 Ejecutando shutdown limpio global desde bootstrap...")
+        try:
+            # Usar la función shutdown global de bootstrap
+            await shutdown()
+            logger.info("✅ Shutdown global completado exitosamente")
+        except Exception as shutdown_error:
+            logger.error(f"❌ Error en shutdown global: {shutdown_error}")
+        
+        # Cleanup adicional de verificación de señales
         try:
             await stop_signal_verification()
             logger.info("✓ Signal verification stopped")
@@ -835,122 +950,238 @@ async def main():
         
         logger.info("👋 HRM System shutdown complete")
 
-async def log_portfolio_comparison(portfolio_manager, cycle_id, market_data):
-    """Log portfolio comparison with colored output every cycle using real SimulatedExchangeClient balances"""
+async def update_portfolio_nav_from_simulated_exchange(portfolio_manager, market_data):
+    """
+    Actualizar el NAV del PortfolioManager usando balances reales del SimulatedExchangeClient.
+    
+    Esta función se ejecuta después de cada ciclo de trading para asegurar que el NAV
+    refleje los balances actuales del cliente simulado y los precios de mercado.
+    """
     try:
-        # Get current portfolio values directly from client (single source of truth)
-        # This ensures we're using real paper trading balances, not cached values
-        if hasattr(portfolio_manager, 'client') and portfolio_manager.client:
-            client = portfolio_manager.client
-            client_type = "SIMULATED"
-            
-            # Determine if we're in paper/simulated mode
-            is_paper_mode = False
-            if hasattr(client, 'paper_mode'):
-                is_paper_mode = client.paper_mode
-            elif portfolio_manager.mode == "simulated":
-                is_paper_mode = True
-            
-            # Get real balances from the client with proper async handling
-            if hasattr(client, 'get_account_balances'):
-                # Check if method is async (coroutine)
-                import inspect
-                if inspect.iscoroutinefunction(client.get_account_balances):
-                    balances = await client.get_account_balances()
-                else:
-                    balances = client.get_account_balances()
-            elif hasattr(client, 'get_balance'):
-                # Check if method is async (coroutine)
-                import inspect
-                if inspect.iscoroutinefunction(client.get_balance):
-                    current_btc = await client.get_balance("BTC")
-                    current_eth = await client.get_balance("ETH")
-                    current_usdt = await client.get_balance("USDT")
-                    balances = {
-                        "BTC": current_btc,
-                        "ETH": current_eth,
-                        "USDT": current_usdt
-                    }
-                else:
-                    current_btc = client.get_balance("BTC")
-                    current_eth = client.get_balance("ETH")
-                    current_usdt = client.get_balance("USDT")
-                    balances = {
-                        "BTC": current_btc,
-                        "ETH": current_eth,
-                        "USDT": current_usdt
-                    }
+        # Verificar que tenemos un cliente disponible
+        if not hasattr(portfolio_manager, 'client') or not portfolio_manager.client:
+            logger.debug("⚠️ No client available for NAV update")
+            return
+        
+        client = portfolio_manager.client
+        
+        # Solo actualizar en modo paper/simulated
+        is_paper_mode = False
+        if hasattr(client, 'paper_mode'):
+            is_paper_mode = client.paper_mode
+        elif portfolio_manager.mode == "simulated":
+            is_paper_mode = True
+        
+        if not is_paper_mode:
+            return
+        
+        # Obtener balances del SimulatedExchangeClient
+        if hasattr(client, 'get_balances'):
+            import inspect
+            if inspect.iscoroutinefunction(client.get_balances):
+                balances = await client.get_balances()
             else:
-                logger.warning("⚠️ Client has no get_account_balances or get_balance method")
-                return
-                
-            # Log raw balances for debugging
-            logger.debug(f"SOURCE={client_type} BALANCES_RAW={balances}")
+                balances = client.get_balances()
+        elif hasattr(client, 'get_account_balances'):
+            import inspect
+            if inspect.iscoroutinefunction(client.get_account_balances):
+                balances = await client.get_account_balances()
+            else:
+                balances = client.get_account_balances()
+        else:
+            return
+        
+        # Extraer balances
+        current_btc = balances.get("BTC", 0.0)
+        current_eth = balances.get("ETH", 0.0)
+        current_usdt = balances.get("USDT", 0.0)
+        
+        # Validar que no todos los balances sean cero
+        if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
+            logger.warning("⚠️ NAV Update: All balances are zero, skipping update")
+            return
+        
+        # Obtener precios de mercado
+        btc_price = 0.0
+        eth_price = 0.0
+        
+        if hasattr(client, 'get_market_price'):
+            btc_price = client.get_market_price("BTCUSDT")
+            eth_price = client.get_market_price("ETHUSDT")
+        elif market_data:
+            # Fallback a market_data si no hay get_market_price
+            btc_data = market_data.get("BTCUSDT", {})
+            eth_data = market_data.get("ETHUSDT", {})
             
-            # Validate balances are not empty or zero
+            if isinstance(btc_data, dict) and "close" in btc_data:
+                btc_price = btc_data["close"]
+            elif hasattr(btc_data, 'iloc'):
+                btc_price = btc_data.iloc[-1]["close"]
+                
+            if isinstance(eth_data, dict) and "close" in eth_data:
+                eth_price = eth_data["close"]
+            elif hasattr(eth_data, 'iloc'):
+                eth_price = eth_data.iloc[-1]["close"]
+        
+        # Calcular NAV total
+        btc_value = current_btc * btc_price
+        eth_value = current_eth * eth_price
+        total_nav = current_usdt + btc_value + eth_value
+        
+        # Actualizar el portfolio del PortfolioManager
+        portfolio_manager.portfolio["BTCUSDT"] = {"position": current_btc, "free": current_btc}
+        portfolio_manager.portfolio["ETHUSDT"] = {"position": current_eth, "free": current_eth}
+        portfolio_manager.portfolio["USDT"] = {"free": current_usdt}
+        portfolio_manager.portfolio["total"] = total_nav
+        
+        # Actualizar peak_value si es necesario
+        if total_nav > portfolio_manager.peak_value:
+            portfolio_manager.peak_value = total_nav
+            portfolio_manager.portfolio["peak_value"] = total_nav
+        
+        # Log de actualización (solo en debug para no saturar)
+        logger.debug(f"📊 NAV Updated: BTC={current_btc:.6f} @ ${btc_price:.2f}, ETH={current_eth:.4f} @ ${eth_price:.2f}, USDT=${current_usdt:.2f}, TOTAL=${total_nav:.2f}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating NAV from SimulatedExchangeClient: {e}")
+
+
+async def shutdown_cleanup(market_data_manager=None, exchange_client=None, realtime_loader=None):
+    """
+    Shutdown limpio global - cierra todas las conexiones y sesiones.
+    
+    Asegura que:
+    - Todas las sesiones aiohttp se cierran
+    - No quedan warnings asyncio al terminar
+    - Los recursos se liberan correctamente
+    """
+    logger.info("🧹 Iniciando shutdown limpio global...")
+    
+    # Cerrar MarketDataManager
+    if market_data_manager is not None:
+        try:
+            await market_data_manager.close()
+            logger.info("✅ MarketDataManager cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando MarketDataManager: {e}")
+    
+    # Cerrar RealTimeLoader si existe
+    if realtime_loader is not None:
+        try:
+            await realtime_loader.close()
+            logger.info("✅ RealTimeLoader cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando RealTimeLoader: {e}")
+    
+    # Cerrar ExchangeClient
+    if exchange_client is not None:
+        try:
+            if hasattr(exchange_client, 'close'):
+                await exchange_client.close()
+            elif hasattr(exchange_client, 'close_connection'):
+                await exchange_client.close_connection()
+            logger.info("✅ ExchangeClient cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando ExchangeClient: {e}")
+    
+    # Cerrar todas las sesiones aiohttp pendientes
+    try:
+        import aiohttp
+        import asyncio
+        
+        # Cerrar todas las sesiones aiohttp abiertas
+        for task in asyncio.all_tasks():
+            if 'aiohttp' in str(task):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        logger.info("✅ Sesiones aiohttp cerradas")
+    except Exception as e:
+        logger.warning(f"⚠️ Error cerrando sesiones aiohttp: {e}")
+    
+    # Forzar cierre del event loop para evitar warnings
+    try:
+        loop = asyncio.get_running_loop()
+        # Cancelar todas las tareas pendientes
+        pending_tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        for task in pending_tasks:
+            task.cancel()
+        
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+            logger.info(f"✅ {len(pending_tasks)} tareas pendientes canceladas")
+    except Exception as e:
+        logger.warning(f"⚠️ Error cancelando tareas pendientes: {e}")
+    
+    logger.info("🧹 Shutdown limpio completado")
+
+
+async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, market_data):
+        """
+        Log portfolio comparison using cycle_context snapshot.
+        
+        🔑 CRITICAL FIX: Uses cycle_context snapshot instead of calling get_asset_balance_async()
+        🔑 This ensures we use the SAME balances throughout the entire cycle
+        
+        CRITICAL FIX: Uses cycle_context to avoid multiple balance calls
+        """
+        try:
+            # ================================================================
+            # STEP 1: VERIFICAR CYCLE_CONTEXT DISPONIBLE
+            # ================================================================
+            if cycle_context is None:
+                logger.warning("⚠️ cycle_context is None, cannot log portfolio comparison")
+                return
+            
+            # ================================================================
+            # STEP 2: EXTRAER BALANCES DEL SNAPSHOT DEL CICLO
+            # ================================================================
+            # 🔑 CRITICAL: Usar el snapshot del ciclo en lugar de llamar a get_balances_async()
+            balances = cycle_context.get("balances", {})
+            prices = cycle_context.get("prices", {})
+            
             current_btc = balances.get("BTC", 0.0)
             current_eth = balances.get("ETH", 0.0)
             current_usdt = balances.get("USDT", 0.0)
             
+            # ================================================================
+            # STEP 3: VALIDACIÓN - PROTECCIÓN CONTRA PÉRDIDA DE ESTADO
+            # ================================================================
             if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
-                logger.error("ERROR: Pérdida de estado - todos los balances son cero")
+                logger.critical("🚨 ERROR: cycle_context shows all balances zero!")
                 return
-                
-        else:
-            logger.warning("⚠️ No client available for portfolio comparison")
-            return
             
-        # Calculate real NAV using market prices (USDT + crypto at market value)
-        current_total = current_usdt
-        for symbol in ["BTCUSDT", "ETHUSDT"]:
-            if symbol == "BTCUSDT":
-                bal = current_btc
-            else:
-                bal = current_eth
-                
-            if bal > 0:
-                data = market_data.get(symbol)
-                if isinstance(data, dict) and "close" in data:
-                    current_total += bal * data["close"]
-                elif isinstance(data, pd.DataFrame) and "close" in data.columns:
-                    current_total += bal * data["close"].iloc[-1]
+            # ================================================================
+            # STEP 4: OBTENER PRECIOS DEL SNAPSHOT Y CALCULAR NAV
+            # ================================================================
+            btc_price = prices.get("BTCUSDT", 0.0)
+            eth_price = prices.get("ETHUSDT", 0.0)
+            
+            # Calcular NAV
+            btc_value = current_btc * btc_price
+            eth_value = current_eth * eth_price
+            current_total = current_usdt + btc_value + eth_value
+            
+            # ================================================================
+            # STEP 5: LOG DEL ESTADO REAL DEL PORTFOLIO (DESDE SNAPSHOT)
+            # ================================================================
+            initial_capital = portfolio_manager.initial_balance if hasattr(portfolio_manager, 'initial_balance') else 500.0
+            color = Fore.GREEN if current_total >= initial_capital else Fore.RED
+            
+            logger.info("=" * 70)
+            logger.info(f"{color}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} (CYCLE SNAPSHOT){Style.RESET_ALL}")
+            logger.info(f"   BTC:  {current_btc:.6f} @ ${btc_price:.2f} = ${btc_value:.2f}")
+            logger.info(f"   ETH:  {current_eth:.6f} @ ${eth_price:.2f} = ${eth_value:.2f}")
+            logger.info(f"   USDT: ${current_usdt:.2f}")
+            logger.info(f"   {'─' * 50}")
+            logger.info(f"{color}   TOTAL NAV: ${current_total:.2f} (Initial: ${initial_capital:.2f}){Style.RESET_ALL}")
+            logger.info("=" * 70)
         
-        # Get initial portfolio values for comparison (to determine if we made profit or loss)
-        initial_btc = 0.01549
-        initial_eth = 0.385
-        initial_usdt = 3000.0
-        initial_total = initial_usdt
-        for symbol in ["BTCUSDT", "ETHUSDT"]:
-            if symbol == "BTCUSDT":
-                bal = initial_btc
-            else:
-                bal = initial_eth
-                
-            if bal > 0:
-                data = market_data.get(symbol)
-                if isinstance(data, dict) and "close" in data:
-                    initial_total += bal * data["close"]
-                elif isinstance(data, pd.DataFrame) and "close" in data.columns:
-                    initial_total += bal * data["close"].iloc[-1]
-        
-        # Determine color based on profit/loss
-        if current_total >= initial_total:
-            color = Fore.GREEN
-        else:
-            color = Fore.RED
-        
-        # Log the real portfolio state with colored output
-        logger.info(f"{color}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} ({client_type} Balances){Style.RESET_ALL}")
-        logger.info(f"   BTC: {current_btc:.6f}")
-        logger.info(f"   ETH: {current_eth:.3f}")
-        logger.info(f"   USDT: ${current_usdt:.2f}")
-        logger.info(f"{color}   TOTAL NAV: ${current_total:.2f}{Style.RESET_ALL}")
-        
-        # Debug: Verify portfolio state consistency
-        logger.debug(f"🔍 Portfolio state verify - BTC: {current_btc}, ETH: {current_eth}, USDT: {current_usdt}")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in portfolio comparison: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error in portfolio comparison: {e}", exc_info=True)
 
 
 if __name__ == "__main__":

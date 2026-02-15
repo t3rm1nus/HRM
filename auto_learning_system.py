@@ -2,6 +2,8 @@
 """
 Sistema de Auto-Aprendizaje con Protección Total Anti-Overfitting
 Implementa aprendizaje continuo completamente automático con 9 capas de protección
+
+CRITICAL FIX: Eliminado todo asyncio.run() - ahora 100% async-compatible
 """
 
 import asyncio
@@ -474,14 +476,14 @@ class AutoRetrainingSystem:
         self.model_versions = {}
         self.performance_history = []
 
-        # Componentes anti-overfitting
+        # Componentes anti-overfitting (5 capas)
         self.validator = AntiOverfitValidator()
         self.regularizer = AdaptiveRegularizer()
         self.ensemble_builder = DiverseEnsembleBuilder()
         self.drift_detector = ConceptDriftDetector()
         self.early_stopper = SmartEarlyStopper()
 
-        # Triggers automáticos
+        # Triggers automáticos (4 capas adicionales = 9 total)
         self.auto_triggers = {
             'time_based': {
                 'enabled': True,
@@ -508,6 +510,20 @@ class AutoRetrainingSystem:
         # Modelos base
         self.models = self._load_base_models()
 
+        # LOG de las 9 capas de protección
+        logger.info("=" * 70)
+        logger.info("🛡️  9 CAPAS DE PROTECCIÓN ANTI-OVERFITTING INICIALIZADAS")
+        logger.info("=" * 70)
+        logger.info("   1️⃣  AntiOverfitValidator       - Validación cruzada continua")
+        logger.info("   2️⃣  AdaptiveRegularizer        - Regularización adaptativa")
+        logger.info("   3️⃣  DiverseEnsembleBuilder     - Ensemble diverso")
+        logger.info("   4️⃣  ConceptDriftDetector       - Detección de concept drift")
+        logger.info("   5️⃣  SmartEarlyStopper          - Early stopping inteligente")
+        logger.info("   6️⃣  TimeBasedTrigger           - Trigger por tiempo (7 días)")
+        logger.info("   7️⃣  PerformanceBasedTrigger    - Trigger por performance")
+        logger.info("   8️⃣  RegimeChangeTrigger        - Trigger por cambio de régimen")
+        logger.info("   9️⃣  DataVolumeTrigger          - Trigger por volumen de datos")
+        logger.info("=" * 70)
         logger.info("🤖 Auto-Retraining System initialized with full anti-overfitting protection")
 
     def _load_base_models(self) -> Dict[str, Any]:
@@ -791,8 +807,32 @@ class AutoRetrainingSystem:
 # Sistema principal de auto-aprendizaje
 class SelfImprovingTradingSystem:
     """Sistema de trading que se mejora solo con protección total anti-overfitting"""
+    
+    _instance = None
+
+    def __new__(cls):
+        """Singleton pattern - ensure only one instance exists."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    def get_instance(cls):
+        """Get the singleton instance of SelfImprovingTradingSystem."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance (useful for testing)."""
+        cls._instance = None
 
     def __init__(self):
+        # Evitar reinicialización si ya existe
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+            
         self.auto_retrainer = AutoRetrainingSystem()
         self.performance_monitor = PerformanceMonitor()
         self.online_learners = {}  # Para componentes que pueden aprender online
@@ -800,8 +840,43 @@ class SelfImprovingTradingSystem:
         # Estado del sistema
         self.is_running = False
         self.last_update = datetime.now()
+        
+        # Componentes integrados
+        self.state_manager = None
+        self.order_manager = None
+        self.portfolio_manager = None
+        self.l2_processor = None
+        self.trading_metrics = None
+        self._initialized = True
 
         logger.info("🤖 Self-Improving Trading System initialized with maximum anti-overfitting protection")
+
+    def integrate(self, state_manager=None, order_manager=None, portfolio_manager=None, 
+                  l2_processor=None, trading_metrics=None):
+        """
+        Integrar el sistema de auto-aprendizaje con los componentes del sistema HRM.
+        
+        Args:
+            state_manager: StateCoordinator para gestión de estado global
+            order_manager: OrderManager para gestión de órdenes
+            portfolio_manager: PortfolioManager para gestión de portfolio
+            l2_processor: L2TacticProcessor para señales tácticas
+            trading_metrics: TradingMetrics para métricas de trading
+        """
+        self.state_manager = state_manager
+        self.order_manager = order_manager
+        self.portfolio_manager = portfolio_manager
+        self.l2_processor = l2_processor
+        self.trading_metrics = trading_metrics
+        
+        logger.info("=" * 70)
+        logger.info("🔗 Auto-Learning System Integration:")
+        logger.info(f"   State Manager:     {'✅' if state_manager else '❌'}")
+        logger.info(f"   Order Manager:     {'✅' if order_manager else '❌'}")
+        logger.info(f"   Portfolio Manager: {'✅' if portfolio_manager else '❌'}")
+        logger.info(f"   L2 Processor:      {'✅' if l2_processor else '❌'}")
+        logger.info(f"   Trading Metrics:   {'✅' if trading_metrics else '❌'}")
+        logger.info("=" * 70)
 
     def start_auto_improvement(self):
         """Iniciar el ciclo de auto-mejora"""
@@ -813,34 +888,41 @@ class SelfImprovingTradingSystem:
 
     def record_trade(self, trade_data: Dict[str, Any]):
         """Registrar trade para aprendizaje automático"""
+        try:
+            # Convertir a TradeData
+            trade = TradeData(
+                timestamp=datetime.now(),
+                symbol=trade_data.get('symbol', 'UNKNOWN'),
+                side=trade_data.get('side', 'buy'),
+                entry_price=trade_data.get('entry_price', 0.0),
+                exit_price=trade_data.get('exit_price', 0.0),
+                quantity=trade_data.get('quantity', 0.0),
+                pnl=trade_data.get('pnl', 0.0),
+                pnl_pct=trade_data.get('pnl_pct', 0.0),
+                model_used=trade_data.get('model_used', 'unknown'),
+                confidence=trade_data.get('confidence', 0.5),
+                regime_at_entry=trade_data.get('regime', 'neutral'),
+                features=trade_data.get('features', {}),
+                market_data=trade_data.get('market_data', {})
+            )
 
-        # Convertir a TradeData
-        trade = TradeData(
-            timestamp=datetime.now(),
-            symbol=trade_data.get('symbol', 'UNKNOWN'),
-            side=trade_data.get('side', 'buy'),
-            entry_price=trade_data.get('entry_price', 0.0),
-            exit_price=trade_data.get('exit_price', 0.0),
-            quantity=trade_data.get('quantity', 0.0),
-            pnl=trade_data.get('pnl', 0.0),
-            pnl_pct=trade_data.get('pnl_pct', 0.0),
-            model_used=trade_data.get('model_used', 'unknown'),
-            confidence=trade_data.get('confidence', 0.5),
-            regime_at_entry=trade_data.get('regime', 'neutral'),
-            features=trade_data.get('features', {}),
-            market_data=trade_data.get('market_data', {})
-        )
+            # Añadir al sistema de auto-reentrenamiento
+            self.auto_retrainer.add_trade_data(trade)
 
-        # Añadir al sistema de auto-reentrenamiento
-        self.auto_retrainer.add_trade_data(trade)
+            # Actualizar métricas de performance
+            self.performance_monitor.update_metrics(trade)
 
-        # Actualizar métricas de performance
-        self.performance_monitor.update_metrics(trade)
-
-        logger.info(f"📊 Trade recorded for auto-learning: {trade.symbol} {trade.side} PnL: {trade.pnl:.2f}")
+            logger.info(f"📊 Trade recorded for auto-learning: {trade.symbol} {trade.side} PnL: {trade.pnl:.2f}")
+        except Exception as e:
+            logger.error(f"❌ Error recording trade: {e}")
 
     def get_system_status(self) -> Dict[str, Any]:
-        """Obtener estado del sistema de auto-mejora"""
+        """
+        Obtener estado del sistema de auto-mejora.
+        
+        CRITICAL FIX: Ya NO llama a _get_current_portfolio_data() que usaba asyncio.run()
+        En su lugar, devuelve un placeholder que debe ser llenado por el caller async
+        """
         return {
             'is_running': self.is_running,
             'last_update': self.last_update,
@@ -848,8 +930,197 @@ class SelfImprovingTradingSystem:
             'models_count': len(self.auto_retrainer.models),
             'ensemble_size': len(self.auto_retrainer.ensemble_builder.ensemble_models),
             'performance_metrics': self.performance_monitor.get_summary(),
-            'anti_overfitting_active': True
+            'anti_overfitting_active': True,
+            'portfolio_data': None,  # CRITICAL FIX: Placeholder - use get_system_status_async() para datos reales
+            'integration': {
+                'state_manager': self.state_manager is not None,
+                'order_manager': self.order_manager is not None,
+                'portfolio_manager': self.portfolio_manager is not None,
+                'l2_processor': self.l2_processor is not None,
+                'trading_metrics': self.trading_metrics is not None
+            }
         }
+    
+    async def get_system_status_async(self) -> Dict[str, Any]:
+        """
+        CRITICAL FIX: Versión async que obtiene datos reales del portfolio.
+        Esta es la versión que debe usarse desde contextos async.
+        """
+        # Obtener datos del portfolio de forma async
+        portfolio_data = await self._get_current_portfolio_data_async()
+        
+        return {
+            'is_running': self.is_running,
+            'last_update': self.last_update,
+            'data_buffer_size': len(self.auto_retrainer.data_buffer),
+            'models_count': len(self.auto_retrainer.models),
+            'ensemble_size': len(self.auto_retrainer.ensemble_builder.ensemble_models),
+            'performance_metrics': self.performance_monitor.get_summary(),
+            'anti_overfitting_active': True,
+            'portfolio_data': portfolio_data,  # CRITICAL: Datos reales obtenidos async
+            'integration': {
+                'state_manager': self.state_manager is not None,
+                'order_manager': self.order_manager is not None,
+                'portfolio_manager': self.portfolio_manager is not None,
+                'l2_processor': self.l2_processor is not None,
+                'trading_metrics': self.trading_metrics is not None
+            }
+        }
+    
+    async def _get_current_portfolio_data_async(self) -> Dict[str, Any]:
+        """
+        CRITICAL FIX: Get CURRENT portfolio data from PortfolioManager (ASYNC VERSION).
+        This ensures AutoLearning trains on actual balances, not stale/initial values.
+        
+        CRITICAL FIX: Solo retorna balances verificados desde sync async. Si los balances
+        fueron obtenidos vía fallback o error, esto se marca y el entrenamiento debe bloquearse.
+        """
+        try:
+            if self.portfolio_manager is None:
+                return {'error': 'PortfolioManager not available', 'is_verified': False}
+            
+            # Check if balances are verified (from async sync)
+            is_verified = False
+            verification_status = {}
+            if hasattr(self.portfolio_manager, 'are_balances_verified'):
+                is_verified = self.portfolio_manager.are_balances_verified()
+            if hasattr(self.portfolio_manager, 'get_balance_verification_status'):
+                verification_status = self.portfolio_manager.get_balance_verification_status()
+            
+            # Get balances using async methods
+            btc_balance = 0.0
+            eth_balance = 0.0
+            usdt_balance = 0.0
+            
+            if hasattr(self.portfolio_manager, 'get_balances_async'):
+                balances = await self.portfolio_manager.get_balances_async()
+                btc_balance = balances.get('BTC', 0.0)
+                eth_balance = balances.get('ETH', 0.0)
+                usdt_balance = balances.get('USDT', 0.0)
+            elif hasattr(self.portfolio_manager, 'get_asset_balance_async'):
+                btc_balance = await self.portfolio_manager.get_asset_balance_async('BTC')
+                eth_balance = await self.portfolio_manager.get_asset_balance_async('ETH')
+                usdt_balance = await self.portfolio_manager.get_asset_balance_async('USDT')
+            else:
+                # Fallback - but mark as not verified
+                logger.warning("[AUTO_LEARNING] No async balance methods available - data will be unverified")
+                is_verified = False
+                # No sync fallback - esto es intencional para prevenir violaciones async
+                return {
+                    'error': 'No async balance methods available in PortfolioManager',
+                    'is_verified': False,
+                    'data_source': 'error_no_async_methods'
+                }
+            
+            # Get current NAV using async method if available
+            current_nav = 0.0
+            if hasattr(self.portfolio_manager, 'get_total_value_async'):
+                current_nav = await self.portfolio_manager.get_total_value_async()
+            elif hasattr(self.portfolio_manager, 'portfolio'):
+                current_nav = self.portfolio_manager.portfolio.get('total', 0.0)
+            
+            # Calculate PnL
+            initial_balance = getattr(self.portfolio_manager, 'initial_balance', 500.0)
+            pnl = current_nav - initial_balance
+            pnl_pct = (pnl / initial_balance * 100) if initial_balance > 0 else 0.0
+            
+            # Calculate exposure
+            total_crypto_value = 0.0
+            if hasattr(self.portfolio_manager, 'client') and self.portfolio_manager.client:
+                client = self.portfolio_manager.client
+                if hasattr(client, 'get_market_price'):
+                    try:
+                        btc_price = client.get_market_price('BTCUSDT')
+                        eth_price = client.get_market_price('ETHUSDT')
+                        total_crypto_value = (btc_balance * btc_price) + (eth_balance * eth_price)
+                    except:
+                        pass
+            
+            exposure_pct = (total_crypto_value / current_nav * 100) if current_nav > 0 else 0.0
+            
+            return {
+                'btc_balance': btc_balance,
+                'eth_balance': eth_balance,
+                'usdt_balance': usdt_balance,
+                'current_nav': current_nav,
+                'initial_balance': initial_balance,
+                'pnl': pnl,
+                'pnl_pct': pnl_pct,
+                'exposure_pct': exposure_pct,
+                'data_source': 'PortfolioManager (async_synced)' if is_verified else 'PortfolioManager (unverified)',
+                'is_verified': is_verified,
+                'verification_status': verification_status,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting portfolio data: {e}")
+            return {'error': str(e), 'is_verified': False}
+
+    def can_train(self) -> Tuple[bool, str]:
+        """
+        CRITICAL FIX: Versión sincrona que NO usa asyncio.run().
+        Solo verifica el estado de verificación sincronizado - no obtiene datos nuevos.
+        
+        Para verificación completa con datos frescos, usar can_train_async().
+        """
+        try:
+            if self.portfolio_manager is None:
+                return False, "PortfolioManager not available"
+            
+            # Check verification status (síncrono - solo lee estado cacheado)
+            if hasattr(self.portfolio_manager, 'are_balances_verified'):
+                if not self.portfolio_manager.are_balances_verified():
+                    verification_status = {}
+                    if hasattr(self.portfolio_manager, 'get_balance_verification_status'):
+                        verification_status = self.portfolio_manager.get_balance_verification_status()
+                    
+                    if verification_status.get('was_fallback_used'):
+                        return False, f"Balances from fallback source - training blocked. Errors: {verification_status.get('sync_errors', [])}"
+                    
+                    return False, "Balances not verified from async sync"
+            
+            # Check if balances are fresh
+            if hasattr(self.portfolio_manager, 'get_balance_verification_status'):
+                status = self.portfolio_manager.get_balance_verification_status()
+                seconds_since_sync = status.get('seconds_since_sync')
+                
+                if seconds_since_sync is not None and seconds_since_sync > 60:
+                    return False, f"Balances are stale ({seconds_since_sync:.0f}s old) - sync required before training"
+            
+            return True, "Balances verified - training allowed"
+            
+        except Exception as e:
+            return False, f"Error checking training eligibility: {e}"
+
+    async def can_train_async(self) -> Tuple[bool, str]:
+        """
+        CRITICAL FIX: Versión async que obtiene datos frescos y verifica estado.
+        Esta es la versión preferida para usar desde contextos async.
+        """
+        try:
+            if self.portfolio_manager is None:
+                return False, "PortfolioManager not available"
+            
+            # Get fresh portfolio data
+            portfolio_data = await self._get_current_portfolio_data_async()
+            
+            # Check if data is verified
+            if not portfolio_data.get('is_verified', False):
+                error = portfolio_data.get('error', 'Unknown error')
+                return False, f"Portfolio data not verified: {error}"
+            
+            # Check if balances are fresh
+            verification_status = portfolio_data.get('verification_status', {})
+            seconds_since_sync = verification_status.get('seconds_since_sync')
+            
+            if seconds_since_sync is not None and seconds_since_sync > 60:
+                return False, f"Balances are stale ({seconds_since_sync:.0f}s old) - sync required before training"
+            
+            return True, "Balances verified and fresh - training allowed"
+            
+        except Exception as e:
+            return False, f"Error checking training eligibility: {e}"
 
 # Clase auxiliar para monitoreo de performance
 class PerformanceMonitor:
@@ -918,7 +1189,7 @@ if __name__ == "__main__":
     for trade_data in sample_trades:
         system.record_trade(trade_data)
 
-    # Mostrar estado
+    # Mostrar estado (versión sync - sin datos de portfolio)
     status = system.get_system_status()
     print("🤖 Sistema de Auto-Aprendizaje con Anti-Overfitting Máximo:")
     print(f"   📊 Trades en buffer: {status['data_buffer_size']}")

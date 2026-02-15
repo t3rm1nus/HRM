@@ -159,6 +159,13 @@ class ExecutionConfig:
     operating_mode: str = "automatic"  # "semi_automatic", "simulation"
     confidence_threshold: float = 0.45  # minimum confidence for decisions
     
+    # AGGRESSIVE MODE SETTINGS - Subir agresividad temporal
+    aggressive_mode: bool = True  # Enable aggressive mode
+    cycle_interval_seconds: int = 3  # Faster cycle timing (was 5)
+    weak_bull_buy_enabled: bool = True  # Allow BUY in WEAK_BULL
+    weak_threshold: float = 0.45  # Lowered from 0.55 for more signals
+    range_setup_enabled: bool = True  # Allow setups in range
+    
     # Output Configuration
     output_format: str = "json"
     output_precision: int = 4

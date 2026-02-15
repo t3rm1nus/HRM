@@ -170,6 +170,7 @@ class PathModeSignalGenerator:
         subtype = str(l3_context.get('subtype', 'normal_range')).lower()  # SAFE: Convert to string then lower
         regime = str(l3_context.get('regime', 'range')).lower()  # SAFE: Convert to string then lower
         setup_type = l3_context.get('setup_type')
+        rsi = l3_context.get('rsi', 50)  # Obtener RSI del contexto L3
 
         # === CONSTRUCCIÓN DE SEÑAL POR DEFECTO ===
         signal = {
@@ -187,10 +188,22 @@ class PathModeSignalGenerator:
 
         # === MANEJO ESPECÍFICO POR SUBTIPO CON SEGURIDAD ===
         if subtype == 'tight_range':
-            # Tight range is more predictable - slightly more aggressive
-            signal['confidence'] = min(l3_conf + 0.1, 0.85)  # Boost confidence slightly
-            signal['size_multiplier'] = 0.0  # Still conservative but logging position
-            signal['reason'] = 'tight_range_ready_hold'
+            # Tight range - activate L2 signals based on RSI
+            signal['confidence'] = min(l3_conf + 0.15, 0.85)  # Boost confidence for tight range
+            signal['size_multiplier'] = 0.5  # Partial allocation for rebalancing
+            signal['reason'] = 'tight_range_l2_signals_activated'
+            signal['allow_partial_rebalance'] = True
+            signal['market_making_enabled'] = True
+            signal['allow_l2_signals'] = True
+            signal['range_specific'] = True
+
+            # Activar señales L2 basadas en RSI
+            if rsi < 40:
+                signal['action'] = 'BUY'
+                signal['reason'] = f'tight_range_buy_rsi_{rsi:.1f}_lt_40'
+            elif rsi > 60:
+                signal['action'] = 'SELL'
+                signal['reason'] = f'tight_range_sell_rsi_{rsi:.1f}_gt_60'
 
         elif subtype == 'normal_range':
             # Normal range - standard hold

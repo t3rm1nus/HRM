@@ -11,7 +11,7 @@ from loguru import logger
 from .finrl_processor import FinRLProcessor
 from .observation_builders import ObservationBuilders
 from .signal_generators import SignalGenerators
-from .utils import safe_float
+from .l2_utils import safe_float
 
 # Handle relative imports for when running as script
 try:

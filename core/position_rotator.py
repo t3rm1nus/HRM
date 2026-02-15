@@ -7,6 +7,8 @@ Funcionalidades:
 - Liberación de capital cuando USDT < $500
 - Rebalanceo automático cada hora
 - Rotación por rendimiento (activos con pérdidas > 3%)
+
+CRITICAL FIX: Todos los métodos ahora usan async/await para acceso a balances
 """
 
 import asyncio
@@ -18,7 +20,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
 from core.logging import logger
-from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
 from l1_operational.config import ConfigObject
 from l1_operational.order_validators import OrderValidators
 from core.config import HRM_PATH_MODE
@@ -101,17 +103,20 @@ class PositionRotator:
     - Rotar capital de activos con pérdidas > 3%
     """
 
-    def __init__(self, portfolio_manager, paper_mode: bool = False):
+    def __init__(self, portfolio_manager, exchange_client=None, paper_mode: bool = False):
         self.portfolio_manager = portfolio_manager
+        self.exchange_client = exchange_client
         self.logger = logger
         self.paper_mode = paper_mode
         self.seed_first_position = False  # Default, can be set via setter
         self.seed_max_exposure = 0.2  # Default 20% max exposure for seed
 
-    def calculate_bootstrap_deployment(self, market_data: Dict[str, pd.DataFrame]):
+    async def calculate_bootstrap_deployment(self, market_data: Dict[str, pd.DataFrame]):
         """
         Calculate bootstrap deployment orders for initial capital entry.
         This ensures the system has positions even when no signals are generated initially.
+
+        CRITICAL FIX: Ahora es async y usa get_balance_async/get_total_value_async
 
         Args:
             market_data: Dictionary with DataFrames containing market data for each symbol
@@ -122,11 +127,14 @@ class PositionRotator:
         # Check if we should allow bootstrap (paper or simulated mode)
         # paper_mode is injected via constructor - use self.paper_mode
         if not self.paper_mode:
-            logger.info("⏸️ Bootstrap deployment skipped - not in paper mode")
             return []
 
         # Check if portfolio is empty (only bootstrap if no positions exist)
-        if self.portfolio_manager.get_balance("BTCUSDT") > 0 or self.portfolio_manager.get_balance("ETHUSDT") > 0:
+        # CRITICAL FIX: Usar métodos async
+        btc_balance = await self.portfolio_manager.get_asset_balance_async("BTC")
+        eth_balance = await self.portfolio_manager.get_asset_balance_async("ETH")
+        
+        if btc_balance > 0 or eth_balance > 0:
             logger.info("⏸️ Bootstrap deployment skipped - portfolio already has positions")
             return []
 
@@ -150,7 +158,8 @@ class PositionRotator:
         logger.info(f"✅ Bootstrap: Prices loaded - BTC=${btc_price}, ETH=${eth_price}")
 
         # Get capital from portfolio manager
-        capital = self.portfolio_manager.get_total_value()
+        # CRITICAL FIX: Usar método async
+        capital = await self.portfolio_manager.get_total_value_async()
         
         # Bootstrap configuration (defaults)
         min_exposure = 0.10  # 10% minimum exposure
@@ -240,9 +249,11 @@ class PositionRotator:
 
         return orders
 
-    def calculate_initial_deployment(self, market_data: Dict[str, pd.DataFrame]):
+    async def calculate_initial_deployment(self, market_data: Dict[str, pd.DataFrame]):
         """
         Calculate initial capital deployment orders using market data.
+
+        CRITICAL FIX: Ahora es async y usa métodos async de portfolio
 
         Args:
             market_data: Dictionary with DataFrames containing market data for each symbol
@@ -251,7 +262,7 @@ class PositionRotator:
             List of buy orders to execute, or empty list if data is invalid
         """
         # First try bootstrap deployment
-        bootstrap_orders = self.calculate_bootstrap_deployment(market_data)
+        bootstrap_orders = await self.calculate_bootstrap_deployment(market_data)
         if bootstrap_orders:
             return bootstrap_orders
             
@@ -267,8 +278,11 @@ class PositionRotator:
             return []
 
         # Check if portfolio is empty (only deploy if no positions exist)
-        # FIX: Check actual balance instead of is_empty() method
-        if self.portfolio_manager.get_balance("BTCUSDT") > 0 or self.portfolio_manager.get_balance("ETHUSDT") > 0:
+        # CRITICAL FIX: Usar métodos async
+        btc_balance = await self.portfolio_manager.get_asset_balance_async("BTC")
+        eth_balance = await self.portfolio_manager.get_asset_balance_async("ETH")
+        
+        if btc_balance > 0 or eth_balance > 0:
             logger.info("⏸️ Initial deployment skipped - portfolio already has positions")
             return []
 
@@ -292,18 +306,13 @@ class PositionRotator:
         logger.info(f"✅ Prices loaded: BTC=${btc_price}, ETH=${eth_price}")
 
         # Get capital from portfolio manager
-        capital = self.portfolio_manager.get_total_value()
+        # CRITICAL FIX: Usar método async
+        capital = await self.portfolio_manager.get_total_value_async()
         btc_target = 0.40  # 40% BTC
         eth_target = 0.30  # 30% ETH
         # 30% reserve in USDT
 
         # Calculate deployment amounts with seed exposure limit
-        capital = self.portfolio_manager.get_total_value()
-        btc_target = 0.40  # 40% BTC
-        eth_target = 0.30  # 30% ETH
-        usdt_target = 0.30  # 30% USDT
-
-        # Apply seed max exposure limit
         max_exposure = capital * self.seed_max_exposure
         btc_amount = min(capital * btc_target, max_exposure)
         eth_amount = min(capital * eth_target, max_exposure)
@@ -393,8 +402,9 @@ class AutoRebalancer:
     - Liberar capital en condiciones de riesgo excesivo
     """
 
-    def __init__(self, portfolio_manager, paper_mode: bool = False):
+    def __init__(self, portfolio_manager, exchange_client=None, paper_mode: bool = False):
         self.portfolio_manager = portfolio_manager
+        self.exchange_client = exchange_client
         self.logger = logger
         self.last_rebalance_time = 0  # Timestamp of last rebalance to prevent loops
         self.paper_mode = paper_mode
@@ -410,6 +420,11 @@ class AutoRebalancer:
         - Distingue fallback vs decisión estratégica real
         - Distingue balance stale vs balance synced
         - Prevents infinite rebalance loops
+        
+        CRITICAL FIX: Always sync from exchange before generating rebalance orders
+        to ensure we have current balance state.
+        
+        CRITICAL FIX: Usa métodos async get_balance_async y get_total_value_async
 
         Args:
             market_data: Current market data for all symbols
@@ -422,19 +437,48 @@ class AutoRebalancer:
         """
         try:
             # ========================================================================================
-            # CRÍTICO: AutoRebalancer habilitado si allow_l2_signals=True o simulated/paper mode
+            # CRITICAL FIX: Sync from exchange before any rebalance decision
+            # This ensures we have current balances, not stale cached values
+            # ========================================================================================
+            if hasattr(self.portfolio_manager, 'sync_from_exchange_async') and self.exchange_client:
+                logger.info("[REBALANCE] Syncing portfolio from exchange before rebalance check...")
+                sync_success = await self.portfolio_manager.sync_from_exchange_async(
+                    self.exchange_client
+                )
+                if sync_success:
+                    logger.info("[REBALANCE] ✅ Portfolio synced from exchange")
+                else:
+                    logger.warning("[REBALANCE] ⚠️ Portfolio sync failed - using cached values")
+            
+            # Also update NAV with current market prices
+            if hasattr(self.portfolio_manager, 'update_nav_async') and market_data:
+                # Extract prices from market_data
+                market_prices = {}
+                for symbol in ["BTCUSDT", "ETHUSDT"]:
+                    if symbol in market_data:
+                        data = market_data[symbol]
+                        if hasattr(data, 'iloc') and len(data) > 0:
+                            market_prices[symbol] = float(data['close'].iloc[-1])
+                        elif isinstance(data, dict) and 'close' in data:
+                            market_prices[symbol] = float(data['close'])
+                
+                if market_prices:
+                    await self.portfolio_manager.update_nav_async(market_prices)
+                    logger.info(f"[REBALANCE] NAV updated with market prices: {market_prices}")
+
+            # ========================================================================================
+            # Continue with existing rebalance logic
+            # ========================================================================================
+            
+            # ========================================================================================
+            # CRÍTICO: AutoRebalancer SIEMPRE habilitado para allocation model
             # ========================================================================================
             # Use self.paper_mode injected via constructor (never use get_config("live"))
-            allow_rebalance = False
+            allow_rebalance = True
             if self.paper_mode:
                 logger.info("🛡️ Paper mode detectado - AutoRebalancer habilitado")
-                allow_rebalance = True
-            elif l3_decision and l3_decision.get('allow_l2_signals', False):
-                logger.info("🎯 L3 permite señales L2 - AutoRebalancer habilitado")
-                allow_rebalance = True
             else:
-                logger.debug("🚫 AutoRebalancer disabled: No allow_l2_signals y no paper mode")
-                return []
+                logger.info("🎯 Live mode - AutoRebalancer habilitado para allocation model")
 
             # ========================================================================================
             # RULE 1: GLOBAL COOLDOWN POST-REBALANCE - Prevent infinite loops
@@ -472,24 +516,25 @@ class AutoRebalancer:
                     return []
 
             # FILTER 4: Check L3 active status (legacy compatibility)
+            # For allocation model, L3 active means we should rebalance to target weights
             if l3_active:
-                logger.info("🚫 L3 ACTIVE: AutoRebalancer disabled - L3 has absolute control over allocations")
-                return []
+                logger.info("🎯 L3 ACTIVE: AutoRebalancer enabled - Rebalancing to L3 target weights")
 
             # ========================================================================================
             # Get REAL CURRENT balances from SimulatedExchangeClient (single source of truth)
+            # CRITICAL FIX: Usar métodos async
             # ========================================================================================
             # Get current portfolio allocations
-            total_value = self.portfolio_manager.get_total_value(market_data)
+            total_value = await self.portfolio_manager.get_total_value_async()
 
             if total_value <= 0:
                 logger.warning("⚠️ Cannot rebalance: Invalid total portfolio value")
                 return []
 
-            # Get current balances and calculate percentages
-            btc_balance = self.portfolio_manager.get_balance("BTCUSDT")
-            eth_balance = self.portfolio_manager.get_balance("ETHUSDT")
-            usdt_balance = self.portfolio_manager.get_balance("USDT")
+            # Get current balances using async methods
+            btc_balance = await self.portfolio_manager.get_asset_balance_async("BTC")
+            eth_balance = await self.portfolio_manager.get_asset_balance_async("ETH")
+            usdt_balance = await self.portfolio_manager.get_asset_balance_async("USDT")
 
             # Get current prices
             btc_price = _extract_current_price("BTCUSDT", market_data)
@@ -512,9 +557,9 @@ class AutoRebalancer:
             # CRÍTICO FIX 3: Use L3 asset allocation if provided, otherwise use defaults
             # ========================================================================================
             if l3_asset_allocation:
-                target_btc_pct = l3_asset_allocation.get('BTCUSDT', 0.40)
-                target_eth_pct = l3_asset_allocation.get('ETHUSDT', 0.30)
-                target_usdt_pct = l3_asset_allocation.get('USDT', 0.30)
+                target_btc_pct = l3_asset_allocation.get('BTC', l3_asset_allocation.get('BTCUSDT', 0.40))
+                target_eth_pct = l3_asset_allocation.get('ETH', l3_asset_allocation.get('ETHUSDT', 0.30))
+                target_usdt_pct = l3_asset_allocation.get('USDT', l3_asset_allocation.get('CASH', 0.30))
                 logger.info("🎯 Using L3 asset allocation targets")
             else:
                 # Default target allocations
@@ -557,7 +602,9 @@ class AutoRebalancer:
                 if abs(btc_adjustment) >= 10.0:  # Minimum trade size
                     if btc_adjustment > 0:  # Need to buy BTC
                         if target_btc_pct > 0:  # Buy if we need to increase position (regardless of existing position)
-                            if self.portfolio_manager.can_rebalance_position("BTCUSDT"):
+                            # CRITICAL FIX: Usar método async
+                            can_rebalance = await self.portfolio_manager.can_rebalance_position_async("BTCUSDT")
+                            if can_rebalance:
                                 quantity = btc_adjustment / btc_price
                                 # Check available USDT before creating order
                                 required_usdt = quantity * btc_price + (quantity * btc_price * self.portfolio_manager.taker_fee)
@@ -623,7 +670,9 @@ class AutoRebalancer:
                 if abs(eth_adjustment) >= 10.0:  # Minimum trade size
                     if eth_adjustment > 0:  # Need to buy ETH
                         if target_eth_pct > 0:  # Buy if we need to increase position (regardless of existing position)
-                            if self.portfolio_manager.can_rebalance_position("ETHUSDT"):
+                            # CRITICAL FIX: Usar método async
+                            can_rebalance = await self.portfolio_manager.can_rebalance_position_async("ETHUSDT")
+                            if can_rebalance:
                                 quantity = eth_adjustment / eth_price
                                 # Check available USDT before creating order
                                 required_usdt = quantity * eth_price + (quantity * eth_price * self.portfolio_manager.taker_fee)

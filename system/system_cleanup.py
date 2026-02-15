@@ -1,366 +1,324 @@
+# system/system_cleanup.py
 """
-System Cleanup Module - Resetear singletons y estado del sistema
-
-Este módulo proporciona funciones para limpiar y resetear completamente
-el estado del sistema HRM entre ejecuciones.
-
-Cleanup Strategy:
-- filesystem_cleanup(): Limpiar archivos de estado/persistent_state
-- memory_reset(): Resetear singletons en memoria
-- async_context_reset(): Resetear contexto async
+System Cleanup - Limpieza del sistema antes de iniciar una nueva sesión.
 """
 
 import os
-import glob
-import logging
-from typing import Dict, Any, Optional
+import shutil
+import asyncio
+import sys
+from pathlib import Path
+from typing import Dict, Optional
 from core.logging import logger
 
-# ============================================================================
-# SIMULATED EXCHANGE CLIENT RESET
-# ============================================================================
 
-def cleanup_simulated_exchange_client():
-    """
-    Resetear SimulatedExchangeClient singleton para nueva ejecución.
-    
-    🔥 PRIORIDAD 3: Quitar SIM_INIT_ONCE tras cleanup
-    """
-    try:
-        from l1_operational.simulated_exchange_client import SimulatedExchangeClient
-        
-        # Resetear flags de singleton - QUITAR SIM_INIT_ONCE
-        SimulatedExchangeClient._instance = None
-        SimulatedExchangeClient._initialized = False
-        
-        logger.info("🔄 SimulatedExchangeClient singleton reseteado (SIM_INIT_ONCE removido)")
-        return True
-    except ImportError as e:
-        logger.warning(f"⚠️ SimulatedExchangeClient no disponible para cleanup: {e}")
-        return False
+class SystemCleanup:
+    """Maneja la limpieza del sistema antes de iniciar."""
 
+    def __init__(self, config: dict = None):
+        self.config = config or {}
+        self.data_dir = Path("data")
+        self.logs_dir = Path("logs")
+        self.cache_dir = Path(".cache")
 
-# ============================================================================
-# STATE COORDINATOR RESET
-# ============================================================================
-
-def cleanup_state_coordinator():
-    """
-    Resetear StateCoordinator singleton para nueva ejecución.
-    """
-    try:
-        from system.state_coordinator import StateCoordinator
-        from core.state_manager import _global_state_coordinator
-        
-        # Resetear referencia global
-        import core.state_manager
-        core.state_manager._global_state_coordinator = None
-        
-        # Resetear cualquier estado estático de StateCoordinator
-        if hasattr(StateCoordinator, '_instance'):
-            StateCoordinator._instance = None
-        
-        logger.info("🔄 StateCoordinator singleton reseteado")
-        return True
-    except ImportError as e:
-        logger.warning(f"⚠️ StateCoordinator no disponible para cleanup: {e}")
-        return False
-
-
-# ============================================================================
-# POSITION MANAGER RESET  
-# ============================================================================
-
-def cleanup_position_manager():
-    """
-    Resetear PositionManager singleton si existe.
-    
-    🔥 PRIORIDAD 3: Resetear PositionManager tras cleanup
-    """
-    try:
-        from l1_operational.position_manager import PositionManager
-        
-        # Si PositionManager es singleton, resetear
-        if hasattr(PositionManager, '_instance'):
-            PositionManager._instance = None
-            logger.info("🔄 PositionManager singleton reseteado")
-        
-        logger.info("🔄 PositionManager cleanup completado")
-        return True
-    except ImportError:
-        logger.info("🔄 PositionManager no disponible para cleanup")
-        return True
-
-
-# ============================================================================
-# CORE CONFIG RESET
-# ============================================================================
-
-def cleanup_core_config():
-    """
-    Resetear configuración core para forzar modo paper.
-    """
-    try:
-        import core.config
-        core.config._config_instance = None
-        
-        logger.info("🔄 core.config singleton reseteado")
-        return True
-    except Exception as e:
-        logger.warning(f"⚠️ core.config cleanup falló: {e}")
-        return False
-
-
-# ============================================================================
-# FILESYSTEM CLEANUP
-# ============================================================================
-
-def filesystem_cleanup() -> Dict[str, Any]:
-    """
-    Limpiar archivos de estado del sistema.
-    
-    Returns:
-        Dict con información de archivos eliminados
-    """
-    deleted_files = []
-    deleted_dirs = []
-    errors = []
-    
-    # Patrones de archivos a eliminar
-    patterns_to_clean = [
-        "persistent_state/*.json",
-        "persistent_state/*.bak",
-        "portfolio_state*.json",
-        "*.log",
-        "paper_trades/*.json",
-    ]
-    
-    for pattern in patterns_to_clean:
+    def run_cleanup(self) -> bool:
+        """Ejecuta la limpieza del sistema."""
         try:
-            files = glob.glob(pattern, recursive=True)
-            for file_path in files:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    deleted_files.append(file_path)
-                    logger.debug(f"🗑️ Eliminado: {file_path}")
+            logger.info("🧹 Running system cleanup...")
+            
+            # 1. Limpiar logs antiguos (excepto el actual)
+            self._clean_old_logs()
+            
+            # 2. Limpiar caché temporal
+            self._clean_cache()
+            
+            # 3. Limpiar archivos temporales de datos
+            self._clean_temp_data()
+            
+            # 4. Verificar estructura de directorios
+            self._ensure_directories()
+            
+            logger.info("✅ System cleanup completed successfully")
+            return True
+            
         except Exception as e:
-            errors.append(f"Error limpiando {pattern}: {e}")
-    
-    # Limpiar directorios vacíos
-    dirs_to_check = ["persistent_state", "paper_trades", "logs"]
-    for dir_path in dirs_to_check:
-        if os.path.exists(dir_path):
+            logger.error(f"❌ Error during system cleanup: {e}")
+            return False
+
+    def _clean_old_logs(self) -> None:
+        """Limpia logs antiguos (mantiene solo los últimos 7 días)."""
+        if not self.logs_dir.exists():
+            return
+            
+        import datetime
+        cutoff_date = datetime.datetime.now() - datetime.timedelta(days=7)
+        
+        for log_file in self.logs_dir.glob("*.log"):
             try:
-                if not os.listdir(dir_path):
-                    os.rmdir(dir_path)
-                    deleted_dirs.append(dir_path)
+                # Verificar fecha de modificación
+                mod_time = datetime.datetime.fromtimestamp(log_file.stat().st_mtime)
+                if mod_time < cutoff_date:
+                    log_file.unlink()
+                    logger.debug(f"Deleted old log: {log_file.name}")
             except Exception as e:
-                pass  # Directorio no vacío o no removable
-    
-    result = {
-        "deleted_files": len(deleted_files),
-        "deleted_dirs": len(deleted_dirs),
-        "files_list": deleted_files,
-        "errors": errors
-    }
-    
-    logger.info(f"🧹 Filesystem cleanup: {len(deleted_files)} archivos eliminados")
-    return result
+                logger.debug(f"Could not delete {log_file}: {e}")
+
+    def _clean_cache(self) -> None:
+        """Limpia el directorio de caché."""
+        if not self.cache_dir.exists():
+            return
+            
+        try:
+            # Eliminar archivos .tmp y .cache
+            for cache_file in self.cache_dir.glob("*"):
+                if cache_file.is_file():
+                    if cache_file.suffix in ['.tmp', '.cache', '.pickle']:
+                        cache_file.unlink()
+                        logger.debug(f"Deleted cache file: {cache_file.name}")
+        except Exception as e:
+            logger.debug(f"Could not clean cache: {e}")
+
+    def _clean_temp_data(self) -> None:
+        """Limpia archivos temporales de datos."""
+        if not self.data_dir.exists():
+            return
+            
+        try:
+            # Buscar archivos temporales en data/
+            for temp_file in self.data_dir.rglob("*.tmp"):
+                temp_file.unlink()
+                logger.debug(f"Deleted temp file: {temp_file.name}")
+                
+            for temp_file in self.data_dir.rglob("*_temp.*"):
+                temp_file.unlink()
+                logger.debug(f"Deleted temp file: {temp_file.name}")
+        except Exception as e:
+            logger.debug(f"Could not clean temp data: {e}")
+
+    def _ensure_directories(self) -> None:
+        """Asegura que los directorios necesarios existan."""
+        directories = [
+            self.data_dir,
+            self.data_dir / "paper_trades",
+            self.data_dir / "models",
+            self.data_dir / "backtest",
+            self.logs_dir,
+            self.cache_dir
+        ]
+        
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Directory ensured: {directory}")
+
+    def get_cleanup_report(self) -> dict:
+        """Genera un reporte de la limpieza."""
+        return {
+            "logs_dir_exists": self.logs_dir.exists(),
+            "data_dir_exists": self.data_dir.exists(),
+            "cache_dir_exists": self.cache_dir.exists(),
+            "log_files_count": len(list(self.logs_dir.glob("*.log"))) if self.logs_dir.exists() else 0,
+            "data_files_count": len(list(self.data_dir.rglob("*"))) if self.data_dir.exists() else 0
+        }
 
 
-# ============================================================================
-# MEMORY RESET
-# ============================================================================
+# =========================
+# FUNCIONES DE FÁCIL USO
+# =========================
 
-def memory_reset() -> Dict[str, Any]:
+def perform_full_cleanup(mode: str = "paper") -> Dict[str, any]:
     """
-    Resetear todos los singletons en memoria.
-    
-    🔥 PRIORIDAD 3: Resetear SimulatedExchangeClient, PositionManager, StateCoordinator
-    
-    Returns:
-        Dict con estado del reset
-    """
-    reset_results = {}
-    
-    # Reset SimulatedExchangeClient
-    reset_results["simulated_exchange"] = cleanup_simulated_exchange_client()
-    
-    # Reset StateCoordinator
-    reset_results["state_coordinator"] = cleanup_state_coordinator()
-    
-    # Reset core config
-    reset_results["core_config"] = cleanup_core_config()
-    
-    # Reset PositionManager
-    reset_results["position_manager"] = cleanup_position_manager()
-    
-    # Limpiar variables globales de config
-    try:
-        import core.config
-        # Forzar PAPER_MODE global
-        if hasattr(core.config, 'TEMPORARY_AGGRESSIVE_MODE'):
-            core.config.TEMPORARY_AGGRESSIVE_MODE = False
-        logger.info("🔄 Variables globales de config reseteadas")
-    except Exception as e:
-        logger.warning(f"⚠️ Error reseteando variables globales: {e}")
-    
-    total_reset = sum(1 for v in reset_results.values() if v)
-    logger.info(f"🧠 Memory reset: {total_reset}/{len(reset_results)} componentes reseteados")
-    
-    return reset_results
-
-
-# ============================================================================
-# ASYNC CONTEXT RESET
-# ============================================================================
-
-def async_context_reset() -> Dict[str, Any]:
-    """
-    Resetear contexto async del sistema.
-    
-    Returns:
-        Dict con estado del reset
-    """
-    reset_results = {}
-    
-    # Resetear event loops si es posible
-    reset_results["event_loop_status"] = "not_applicable"
-    
-    # Limpiar caches async
-    try:
-        # Limpiar cache de sentiment si existe
-        import sentiment.sentiment_manager as sm
-        if hasattr(sm, '_sentiment_cache'):
-            sm._sentiment_cache = {}
-            logger.info("🔄 Sentiment cache limpio")
-    except Exception as e:
-        logger.debug(f"No se pudo limpiar sentiment cache: {e}")
-    
-    # Limpiar caches de L2
-    try:
-        import l2_tactic.signal_generators as sg
-        if hasattr(sg, '_signal_cache'):
-            sg._signal_cache = {}
-            logger.info("🔄 L2 signal cache limpio")
-    except Exception as e:
-        logger.debug(f"No se pudo limpiar L2 signal cache: {e}")
-    
-    logger.info("🔄 Async context reset completado")
-    return reset_results
-
-
-# ============================================================================
-# FULL CLEANUP - MODO EXPLÍCITO PAPER
-# ============================================================================
-
-def perform_full_cleanup(mode: str = "paper") -> Dict[str, Any]:
-    """
-    Realizar limpieza completa del sistema.
+    Realiza una limpieza completa del sistema.
     
     Args:
-        mode: Modo forzado tras cleanup ("paper" por defecto)
-    
+        mode: Modo de operación ("paper" o "live")
+        
     Returns:
-        Dict con resultados de cleanup
+        Dict con resultados de la limpieza
     """
-    logger.info(f"🧹 INICIANDO CLEANUP COMPLETO (modo forzado: {mode})")
-    
-    results = {
-        "mode": mode,
-        "filesystem": None,
-        "memory": None,
-        "async_context": None
-    }
-    
-    # 1. Filesystem cleanup
     try:
-        results["filesystem"] = filesystem_cleanup()
-    except Exception as e:
-        logger.error(f"❌ Filesystem cleanup falló: {e}")
-        results["filesystem"] = {"error": str(e)}
-    
-    # 2. Memory reset
-    try:
-        results["memory"] = memory_reset()
-    except Exception as e:
-        logger.error(f"❌ Memory reset falló: {e}")
-        results["memory"] = {"error": str(e)}
-    
-    # 3. Async context reset
-    try:
-        results["async_context"] = async_context_reset()
-    except Exception as e:
-        logger.error(f"❌ Async context reset falló: {e}")
-        results["async_context"] = {"error": str(e)}
-    
-    # 4. FORZAR MODO PAPER EXPLÍCITAMENTE
-    try:
-        import core.config
-        core.config._config_instance = None
+        # 1. Limpiar filesystem
+        filesystem_result = filesystem_cleanup()
         
-        # Forzar PAPER_MODE en todas las configs
-        import sys
-        module = sys.modules.get('core.config')
-        if module:
-            # Patchear para que siempre devuelva paper
-            original_get = module.EnvironmentConfig.get
-            def patched_get(self, key, default=None):
-                if key in ["PAPER_MODE", "OPERATION_MODE", "mode"]:
-                    if key == "PAPER_MODE":
-                        return True
-                    elif key == "OPERATION_MODE":
-                        return "PAPER"
-                    elif key == "mode":
-                        return mode
-                return original_get(self, key, default)
-            module.EnvironmentConfig.get = patched_get
+        # 2. Resetear singletons
+        memory_result = memory_reset()
         
-        logger.info(f"✅ MODO FORZADO: {mode}")
+        # 3. Forzar modo paper
+        paper_result = force_paper_mode()
+        
+        # 4. Resetear contexto async
+        async_result = async_context_reset()
+        
+        return {
+            "success": True,
+            "filesystem": filesystem_result,
+            "memory": memory_result,
+            "paper_mode": paper_result,
+            "async_context": async_result
+        }
+        
     except Exception as e:
-        logger.warning(f"⚠️ Error forzando modo: {e}")
-    
-    # Resumen
-    total_deleted = results["filesystem"].get("deleted_files", 0) if results["filesystem"] else 0
-    memory_reset_count = sum(1 for k, v in results["memory"].items() if v and k != "errors") if results.get("memory") else 0
-    
-    logger.info(f"✅ CLEANUP COMPLETO:")
-    logger.info(f"   📁 Archivos eliminados: {total_deleted}")
-    logger.info(f"   🧠 Singletons reseteados: {memory_reset_count}")
-    logger.info(f"   🎯 Modo forzado: {mode}")
-    
-    results["success"] = True
-    return results
+        logger.error(f"❌ Full cleanup failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
-# ============================================================================
-# FORZAR MODO PAPER (UTILIDAD)
-# ============================================================================
-
-def force_paper_mode():
-    """
-    Forzar que todo el sistema opere en modo paper.
-    """
-    logger.info("🎯 FORZANDO MODO PAPER EN TODO EL SISTEMA")
-    
-    # 1. Resetear SimulatedExchangeClient
-    cleanup_simulated_exchange_client()
-    
-    # 2. Resetear core config
-    cleanup_core_config()
-    
-    # 3. Forzar variables globales
+def filesystem_cleanup() -> Dict[str, any]:
+    """Limpieza del filesystem (archivos, directorios, logs)."""
     try:
-        import core.config
-        core.config.PAPER_MODE = True
+        cleanup = SystemCleanup()
+        success = cleanup.run_cleanup()
         
-        import sys
-        module = sys.modules.get('core.config')
-        if module:
-            # Hacer que get_config siempre devuelva paper
-            module._config_instance = None
+        # Limpiar paper trades
+        try:
+            from storage.paper_trade_logger import get_paper_logger
+            get_paper_logger(clear_on_init=True)
+            logger.info("✅ Paper trades cleared")
+        except Exception as e:
+            logger.warning(f"⚠️ Paper trades cleanup failed: {e}")
+        
+        return {
+            "success": success,
+            "deleted_files": 0,  # Could be counted if needed
+            "directories_ensured": 6
+        }
+        
     except Exception as e:
-        logger.warning(f"⚠️ Error en force_paper_mode: {e}")
-    
-    logger.info("✅ MODO PAPER FORZADO ACTIVADO")
-    return True
+        logger.error(f"❌ Filesystem cleanup failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def memory_reset() -> Dict[str, any]:
+    """Resetear singletons y estado en memoria."""
+    try:
+        # Resetear PortfolioManager singleton
+        from core.portfolio_manager import PortfolioManager
+        PortfolioManager.reset_instance()
+        logger.info("✅ PortfolioManager singleton reset")
+        
+        # Resetear StateCoordinator singleton
+        from system.state_coordinator import StateCoordinator
+        StateCoordinator.reset_instance()
+        logger.info("✅ StateCoordinator singleton reset")
+        
+        # Limpiar cache de importación
+        if 'core.portfolio_manager' in sys.modules:
+            del sys.modules['core.portfolio_manager']
+        if 'system.state_coordinator' in sys.modules:
+            del sys.modules['system.state_coordinator']
+            
+        return {
+            "success": True,
+            "singletons_reset": ["PortfolioManager", "StateCoordinator"]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Memory reset failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def force_paper_mode() -> Dict[str, any]:
+    """Forzar modo paper en todas las configuraciones."""
+    try:
+        # Setear variable de entorno
+        os.environ['HRM_MODE'] = 'paper'
+        
+        # Forzar modo paper en config
+        try:
+            from core.config import get_config
+            live_config = get_config("live")
+            if hasattr(live_config, 'PAPER_MODE'):
+                live_config.PAPER_MODE = True
+            logger.info("✅ PAPER_MODE forced in config")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not force PAPER_MODE in config: {e}")
+        
+        return {
+            "success": True,
+            "mode": "paper",
+            "env_var": "HRM_MODE=paper"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Paper mode forcing failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def async_context_reset() -> Dict[str, any]:
+    """Resetear contexto async para evitar initialize_async vs init issues."""
+    try:
+        # Limpiar asyncio event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                logger.warning("⚠️ Async loop already running, skipping reset")
+                return {"success": True, "message": "Loop already running"}
+        except:
+            pass
+        
+        # Crear nuevo event loop
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        
+        # Resetear AsyncContextDetector
+        try:
+            from core.async_balance_helper import AsyncContextDetector
+            AsyncContextDetector._is_in_async_context = False
+            logger.info("✅ AsyncContextDetector reset")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not reset AsyncContextDetector: {e}")
+        
+        return {
+            "success": True,
+            "new_loop_created": True
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Async context reset failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def get_cleanup_status() -> Dict[str, any]:
+    """Obtener estado actual del sistema."""
+    try:
+        cleanup = SystemCleanup()
+        report = cleanup.get_cleanup_report()
+        
+        # Verificar modo
+        mode = os.environ.get('HRM_MODE', 'unknown')
+        
+        # Verificar singletons
+        from core.portfolio_manager import PortfolioManager
+        from system.state_coordinator import StateCoordinator
+        
+        return {
+            "mode": mode,
+            "filesystem": report,
+            "singletons": {
+                "portfolio_manager_exists": PortfolioManager._instance is not None,
+                "state_coordinator_exists": StateCoordinator._instance is not None
+            },
+            "async_context": {
+                "has_event_loop": asyncio.get_event_loop() is not None
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Status check failed: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }

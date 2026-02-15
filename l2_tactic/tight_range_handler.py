@@ -149,7 +149,9 @@ class PATH2TightRangeFix:
             avg_loss = np.mean(losses[-self.rsi_period:])
 
             if avg_loss == 0:
-                return 50.0  # Neutral when no losses
+                return 100.0  # 100 when no losses (strong uptrend)
+            if avg_gain == 0:
+                return 0.0  # 0 when no gains (strong downtrend)
 
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
@@ -180,16 +182,17 @@ class PATH2TightRangeFix:
         """
         Generate trading signal based on technical indicators.
 
-        Mean reversion logic for TIGHT_RANGE:
-        - BUY when oversold (BB < 0.25 and RSI < 35)
-        - SELL when overbought (BB > 0.75 and RSI > 65)
-        - HOLD when in balance (neutral zone)
+        TIGHT_RANGE strategy:
+        - BUY when RSI < 40 (oversold)
+        - SELL when RSI > 60 (overbought)
+        - Allow partial rebalancing to target allocation
+        - Activate light market making
         """
         try:
-            # Enhanced mean reversion conditions with confidence adjustments
-            if bb_position < 0.25 and rsi < 35:
-                # Strong BUY signal - oversold in tight range
-                base_confidence = min(self.max_confidence, l3_confidence * 0.8)
+            # RSI-based signals for TIGHT_RANGE (as requested)
+            if rsi < 40:
+                # BUY signal - RSI < 40 (oversold)
+                base_confidence = min(self.max_confidence, l3_confidence * 0.9)
 
                 # Additional confidence boost if L1/L2 agrees
                 if l1_l2_signal.upper() in ['BUY', 'LONG']:
@@ -197,17 +200,17 @@ class PATH2TightRangeFix:
                 else:
                     final_confidence = base_confidence
 
-                stop_distance = max(atr * 1.5, current_price * 0.01)  # ATR-based or 1% minimum
-                target_distance = max(atr * 2.5, current_price * 0.02)  # Higher target for MR
+                stop_distance = max(atr * 1.2, current_price * 0.008)  # Tighter stops for tight range
+                target_distance = max(atr * 2.0, current_price * 0.015)  # Moderate targets
 
                 return {
                     'action': 'BUY',
                     'confidence': final_confidence,
-                    'reason': f'TIGHT_RANGE BUY: Oversold (BB:{bb_position:.2f}, RSI:{rsi:.1f})',
+                    'reason': f'TIGHT_RANGE BUY: RSI < 40 (RSI:{rsi:.1f})',
                     'stop_loss_pct': (stop_distance / current_price) * 100,
                     'take_profit_pct': (target_distance / current_price) * 100,
                     'entry_price': current_price,
-                    'position_size_multiplier': 0.8,  # Conservative sizing in ranges
+                    'position_size_multiplier': 0.5,  # Partial allocation for rebalancing
                     'indicators': {
                         'bb_position': bb_position,
                         'bb_width': bb_width,
@@ -215,12 +218,14 @@ class PATH2TightRangeFix:
                         'atr': atr,
                         'l3_confidence': l3_confidence
                     },
-                    'signal_type': 'MEAN_REVERSION_BUY'
+                    'signal_type': 'TIGHT_RANGE_BUY',
+                    'allow_partial_rebalance': True,
+                    'market_making_enabled': True
                 }
 
-            elif bb_position > 0.75 and rsi > 65:
-                # Strong SELL signal - overbought in tight range
-                base_confidence = min(self.max_confidence, l3_confidence * 0.8)
+            elif rsi > 60:
+                # SELL signal - RSI > 60 (overbought)
+                base_confidence = min(self.max_confidence, l3_confidence * 0.9)
 
                 # Additional confidence boost if L1/L2 agrees
                 if l1_l2_signal.upper() in ['SELL', 'SHORT']:
@@ -228,17 +233,17 @@ class PATH2TightRangeFix:
                 else:
                     final_confidence = base_confidence
 
-                stop_distance = max(atr * 1.5, current_price * 0.01)
-                target_distance = max(atr * 2.5, current_price * 0.02)
+                stop_distance = max(atr * 1.2, current_price * 0.008)
+                target_distance = max(atr * 2.0, current_price * 0.015)
 
                 return {
                     'action': 'SELL',
                     'confidence': final_confidence,
-                    'reason': f'TIGHT_RANGE SELL: Overbought (BB:{bb_position:.2f}, RSI:{rsi:.1f})',
+                    'reason': f'TIGHT_RANGE SELL: RSI > 60 (RSI:{rsi:.1f})',
                     'stop_loss_pct': (stop_distance / current_price) * 100,
                     'take_profit_pct': (target_distance / current_price) * 100,
                     'entry_price': current_price,
-                    'position_size_multiplier': 0.8,
+                    'position_size_multiplier': 0.5,  # Partial allocation for rebalancing
                     'indicators': {
                         'bb_position': bb_position,
                         'bb_width': bb_width,
@@ -246,63 +251,17 @@ class PATH2TightRangeFix:
                         'atr': atr,
                         'l3_confidence': l3_confidence
                     },
-                    'signal_type': 'MEAN_REVERSION_SELL'
-                }
-
-            elif bb_position < 0.4 and rsi < 45:
-                # Moderate BUY signal
-                confidence = min(0.55, l3_confidence * 0.6)
-                stop_distance = max(atr * 2.0, current_price * 0.015)
-                target_distance = max(atr * 3.0, current_price * 0.025)
-
-                return {
-                    'action': 'BUY',
-                    'confidence': confidence,
-                    'reason': f'TIGHT_RANGE MODERATE BUY: Lower zone (BB:{bb_position:.2f}, RSI:{rsi:.1f})',
-                    'stop_loss_pct': (stop_distance / current_price) * 100,
-                    'take_profit_pct': (target_distance / current_price) * 100,
-                    'entry_price': current_price,
-                    'position_size_multiplier': 0.6,
-                    'indicators': {
-                        'bb_position': bb_position,
-                        'bb_width': bb_width,
-                        'rsi': rsi,
-                        'atr': atr,
-                        'l3_confidence': l3_confidence
-                    },
-                    'signal_type': 'MODERATE_MR_BUY'
-                }
-
-            elif bb_position > 0.6 and rsi > 55:
-                # Moderate SELL signal
-                confidence = min(0.55, l3_confidence * 0.6)
-                stop_distance = max(atr * 2.0, current_price * 0.015)
-                target_distance = max(atr * 3.0, current_price * 0.025)
-
-                return {
-                    'action': 'SELL',
-                    'confidence': confidence,
-                    'reason': f'TIGHT_RANGE MODERATE SELL: Upper zone (BB:{bb_position:.2f}, RSI:{rsi:.1f})',
-                    'stop_loss_pct': (stop_distance / current_price) * 100,
-                    'take_profit_pct': (target_distance / current_price) * 100,
-                    'entry_price': current_price,
-                    'position_size_multiplier': 0.6,
-                    'indicators': {
-                        'bb_position': bb_position,
-                        'bb_width': bb_width,
-                        'rsi': rsi,
-                        'atr': atr,
-                        'l3_confidence': l3_confidence
-                    },
-                    'signal_type': 'MODERATE_MR_SELL'
+                    'signal_type': 'TIGHT_RANGE_SELL',
+                    'allow_partial_rebalance': True,
+                    'market_making_enabled': True
                 }
 
             else:
-                # HOLD - price in balanced zone of tight range
+                # HOLD - balanced RSI (40-60) - activate light market making
                 return {
                     'action': 'HOLD',
                     'confidence': 0.45,
-                    'reason': f'TIGHT_RANGE HOLD: Balanced zone (BB:{bb_position:.2f}, RSI:{rsi:.1f})',
+                    'reason': f'TIGHT_RANGE HOLD: Balanced RSI (RSI:{rsi:.1f})',
                     'stop_loss_pct': None,
                     'take_profit_pct': None,
                     'entry_price': current_price,
@@ -314,7 +273,9 @@ class PATH2TightRangeFix:
                         'atr': atr,
                         'l3_confidence': l3_confidence
                     },
-                    'signal_type': 'MR_HOLD'
+                    'signal_type': 'TIGHT_RANGE_HOLD',
+                    'allow_partial_rebalance': True,
+                    'market_making_enabled': True
                 }
 
         except Exception as e:

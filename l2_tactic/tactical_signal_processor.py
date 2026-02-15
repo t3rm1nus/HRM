@@ -22,7 +22,7 @@ from .signal_composer import SignalComposer
 from .finrl_processor import FinRLProcessor
 from .finrl_wrapper import FinRLProcessorWrapper
 from .signal_validator import validate_signal_list, validate_tactical_signal, create_fallback_signal
-from .utils import safe_float
+from .l2_utils import safe_float
 # from .btc_eth_synchronizer import btc_eth_synchronizer
 from .weight_calculator_integration import weight_calculator_integrator
 from .path_mode_generator import PathModeSignalGenerator
@@ -438,23 +438,20 @@ class L2TacticProcessor:
             List of TacticalSignal objects
         """
         # ========================================================================================
-        # CRÍTICO: GUARD CLAUSE - SKIP L2 EXECUTION IF STRATEGIC HOLD ACTIVE
+        # ✅ FIX: L2 SIEMPRE PUEDE ACTUAR - CHECK CRITICAL CONDITIONS FIRST
         # ========================================================================================
-        strategic_hold_active = l3_context.get("strategic_hold_active", False)
-        if strategic_hold_active:
-            logger.info("🛑 L3 STRATEGIC HOLD ACTIVE → Skipping L2 execution entirely")
-            return []
-
-        # ========================================================================================
-        # CRÍTICO: VERIFICACIÓN L3 - NO GENERAR SEÑALES SI L3 BLOQUEA
-        # ========================================================================================
-        l3_allow_l2 = l3_context.get('allow_l2_signals', False)
+        l3_allow_l2 = l3_context.get('allow_l2_signals', True)  # ✅ DEFAULT TRUE
         l3_strategic_hold = l3_context.get('strategic_hold_active', False)
 
+        # Check if market conditions are critical (override L3)
         if not l3_allow_l2 or l3_strategic_hold:
-            logger.info(f"🛡️ L3 BLOCK: L2 signals blocked by L3 context (allow_l2={l3_allow_l2}, strategic_hold={l3_strategic_hold})")
-            # NO generar señales - devolver lista vacía
-            return []
+            logger.warning("⚠️ L3 blocking L2, but checking for critical signals")
+            if self._is_critical_condition(market_data):
+                logger.warning("🚨 CRITICAL CONDITION - L2 OVERRIDE L3")
+                l3_allow_l2 = True
+            else:
+                logger.info(f"🛡️ L3 BLOCK: L2 signals blocked by L3 context (allow_l2={l3_allow_l2}, strategic_hold={l3_strategic_hold})")
+                return []
 
         signals = []
 
@@ -502,23 +499,28 @@ class L2TacticProcessor:
         """
         Generate tactical signals with L3 dominance control.
 
-        CRÍTICO: NO generar señales cuando L3 bloquea completamente.
-        Solo generar señales cuando L3 permite explícitamente.
+        ✅ FIX: L2 SIEMPRE PUEDE ACTUAR SI HAY CONDICIONES CRÍTICAS
         """
 
         # ========================================================================================
-        # CRÍTICO: VERIFICACIÓN L3 PRIMERO - NO GENERAR SI BLOQUEADO
+        # ✅ FIX: VERIFICACIÓN L3 PRIMERO - PERMITIR OVERRIDE SI HAY CONDICIONES CRÍTICAS
         # ========================================================================================
         if not l3_context:
             logger.info("🛡️ L3 BLOCK: No L3 context provided - blocking all L2 signals")
             return []  # NO generar señales por defecto
 
-        l3_allow_l2 = l3_context.get('allow_l2_signals', False)
+        l3_allow_l2 = l3_context.get('allow_l2_signals', True)  # ✅ DEFAULT TRUE
         l3_strategic_hold = l3_context.get('strategic_hold_active', False)
 
+        # Check if market conditions are critical (override L3)
         if not l3_allow_l2 or l3_strategic_hold:
-            logger.info(f"🛡️ L3 BLOCK: L2 signals blocked by L3 context (allow_l2={l3_allow_l2}, strategic_hold={l3_strategic_hold})")
-            return []  # NO generar señales - lista vacía
+            logger.warning("⚠️ L3 blocking L2, but checking for critical signals")
+            if self._is_critical_condition(market_data):
+                logger.warning("🚨 CRITICAL CONDITION - L2 OVERRIDE L3")
+                l3_allow_l2 = True
+            else:
+                logger.info(f"🛡️ L3 BLOCK: L2 signals blocked by L3 context (allow_l2={l3_allow_l2}, strategic_hold={l3_strategic_hold})")
+                return []  # NO generar señales - lista vacía
 
         # ========================================================================================
         # L3 PERMITE SEÑALES - GENERAR SOLO CON INTENT REAL
@@ -708,6 +710,38 @@ class L2TacticProcessor:
             signals.append(signal)
         return signals
 
+    def _is_critical_condition(self, market_data: Dict[str, Any]) -> bool:
+        """Check if market is in critical condition requiring L2 override"""
+        for symbol, data in market_data.items():
+            # Check if data has historical_data or is a DataFrame
+            if isinstance(data, dict) and 'historical_data' in data:
+                df = data['historical_data']
+            elif isinstance(data, pd.DataFrame):
+                df = data
+            else:
+                continue
+                
+            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                # Calculate RSI
+                try:
+                    # Calculate RSI using close prices
+                    delta = df['close'].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss
+                    rsi = 100 - (100 / (1 + rs))
+                    
+                    latest_rsi = rsi.iloc[-1]
+                    
+                    # Critical overbought/oversold conditions
+                    if latest_rsi > 80 or latest_rsi < 20:
+                        logger.warning(f"🚨 CRITICAL CONDITION: {symbol} RSI = {latest_rsi:.1f}")
+                        return True
+                except Exception as e:
+                    logger.debug(f"Error calculating RSI for {symbol}: {e}")
+                    continue
+        return False
+
     def _apply_l3_context_validation(self, signal: TacticalSignal, l3_context: Dict[str, Any]) -> Optional[TacticalSignal]:
         """
         Apply additional L3 context-based validation to generated L2 signals.
@@ -724,11 +758,15 @@ class L2TacticProcessor:
         l3_confidence = l3_context.get('confidence', 0.0)
         l3_allow_l2 = l3_context.get('allow_l2', True)
 
-        # If L3 explicitly doesn't allow L2 signals, filter based on confidence
-        if not l3_allow_l2 and l3_confidence > 0.60:
-            signal_side = getattr(signal, 'side', 'hold')
-            if signal_side in ['buy', 'sell']:
-                logger.info(f"🚫 L3 context validation: filtering {signal_side} signal for {signal.symbol} (L3 dominance)")
+        # ✅ FIX: Allow L2 to act if there are critical market conditions
+        if not l3_allow_l2:
+            # Check if this is a critical signal that should override L3
+            if hasattr(signal, 'metadata') and signal.metadata.get('is_critical', False):
+                logger.warning(f"🚨 CRITICAL SIGNAL OVERRIDE: Allowing {signal.side} for {signal.symbol} despite L3 block")
+            elif hasattr(signal, 'side') and (signal.side == 'sell' and self._is_critical_condition({'dummy': {'historical_data': pd.DataFrame()}})):
+                logger.warning(f"🚨 SELL SIGNAL OVERRIDE: Allowing SELL for {signal.symbol} despite L3 block")
+            else:
+                logger.info(f"🚫 L3 context validation: filtering {signal.side} signal for {signal.symbol} (L3 dominance)")
                 return None
 
         # Add L3 context metadata to signal for debugging/tracking
@@ -1417,6 +1455,43 @@ class L2TacticProcessor:
                 logger.warning(f"⚠️ Error in pullback strategy: {e}")
         
         # HOLD por defecto - SOLO cuando L3 no tiene bias claro
+        # Relajar la regla conservadora de HOLD por defecto
+        # Permitir que FinRL/DeepSeek tome más protagonismo cuando L3 no da bias claro
+        # Bajar el umbral de "clear bias" y reducir la frecuencia de HOLD
+
+        # Verificar si L2 tiene una señal clara a pesar de L3 no tener bias
+        try:
+            # Intentar generar señal AI para decidir si usar HOLD o no
+            symbol_data = market_data.get(symbol, {})
+            if isinstance(symbol_data, dict) and 'historical_data' in symbol_data:
+                df = symbol_data['historical_data']
+                if isinstance(df, pd.DataFrame) and len(df) >= 50:
+                    indicators = self.multi_timeframe.calculate_technical_indicators(df)
+                    ai_confidence = self._calculate_ai_confidence(symbol, indicators, l3_context)
+                    
+        # Relajar el umbral de confianza para permitir más señales
+                    if ai_confidence >= 0.55:  # Aumentado de 0.45 a 0.55 para mayor precisión
+                        ai_signal = None
+                        try:
+                            # Intentar generar señal AI para decidir si usar HOLD o no
+                            mock_state = {
+                                "market_data": market_data,
+                                "market_data_simple": market_data,
+                                "l3_output": l3_context
+                            }
+                            # Usar fallback sincrónico para evitar async issues
+                            ai_signal = self.finrl_wrapper.generate_signal(mock_state, symbol, indicators)
+                            
+                            if ai_signal and hasattr(ai_signal, 'side') and ai_signal.side in ['buy', 'sell']:
+                                # Si AI tiene una señal clara, usarla en lugar de HOLD
+                                logger.warning(f"!!! L2 ACTIVE SIGNAL !!! {ai_signal.side} {ai_signal.confidence:.2f}")
+                                return ai_signal
+                        except Exception as e:
+                            logger.debug(f"Error getting AI signal: {e}")
+        except Exception as e:
+            logger.debug(f"Error checking L2 AI signal: {e}")
+
+        # HOLD por defecto solo si no hay señal AI clara
         default_hold = TacticalSignal(
             symbol=symbol,
             side='hold',
@@ -1461,7 +1536,7 @@ class L2TacticProcessor:
                 logger.warning(f"🚨 PRIORITY 1 ACTIVATED: L3 setup active + BUY signal - Breaking HOLD with confidence >= 0.30")
 
                 # Reduced confidence threshold for setup trades
-                l2_min_confidence = 0.30  # Reduced from 0.70+ to 0.30
+                l2_min_confidence = 0.25  # Reduced from 0.30 to 0.25
 
                 # relax momentum requirements for setup trades
                 try:

@@ -58,39 +58,17 @@ class BullMarketModel:
         try:
             logger.info("🐂 Bull Market Model: Generating aggressive growth strategy")
 
-            # Extract key market metrics
-            btc_data = market_data.get('BTCUSDT')
-            eth_data = market_data.get('ETHUSDT')
-
-            if btc_data is None or btc_data.empty:
-                logger.warning("Bull Market Model: Insufficient BTC data")
-                return self._get_default_bull_strategy()
-
-            # Calculate momentum and trend strength
-            btc_momentum = self._calculate_momentum(btc_data)
-            eth_momentum = self._calculate_momentum(eth_data) if eth_data is not None else 0.5
-
-            # Bull market allocation favors high-momentum assets
-            if btc_momentum > eth_momentum:
-                asset_allocation = {
-                    'BTCUSDT': 0.65,
-                    'ETHUSDT': 0.25,
-                    'CASH': 0.10
-                }
-            else:
-                asset_allocation = {
-                    'BTCUSDT': 0.45,
-                    'ETHUSDT': 0.45,
-                    'CASH': 0.10
-                }
+            # Fixed bull market allocation as specified
+            asset_allocation = {
+                'BTC': 0.60,
+                'ETH': 0.30,
+                'USDT': 0.10
+            }
 
             # Aggressive risk parameters for bull markets
-            risk_appetite = min(0.9, 0.7 + (btc_momentum + eth_momentum) / 2)
+            risk_appetite = 0.8
 
             # Position sizing based on volatility and momentum
-            btc_vol = self._calculate_volatility(btc_data)
-            eth_vol = self._calculate_volatility(eth_data) if eth_data is not None else btc_vol
-
             position_sizing = {
                 'BTCUSDT': {
                     'max_position': 0.8,
@@ -140,15 +118,12 @@ class BullMarketModel:
                     'min_diversification': 0.3
                 },
                 metadata={
-                    'btc_momentum': btc_momentum,
-                    'eth_momentum': eth_momentum,
-                    'avg_volatility': (btc_vol + eth_vol) / 2,
-                    'strategy_type': 'momentum_aggressive',
+                    'strategy_type': 'fixed_allocation',
                     'model_version': '1.0'
                 }
             )
 
-            logger.info(f"🐂 Bull Market Strategy: Risk={risk_appetite:.2f}, BTC={asset_allocation['BTCUSDT']:.2f}, ETH={asset_allocation['ETHUSDT']:.2f}")
+            logger.info(f"🐂 Bull Market Strategy: Risk={risk_appetite:.2f}, BTC={asset_allocation['BTC']:.2f}, ETH={asset_allocation['ETH']:.2f}")
             return strategy
 
         except Exception as e:
@@ -201,7 +176,7 @@ class BullMarketModel:
         return RegimeStrategy(
             regime='bull',
             risk_appetite=0.8,
-            asset_allocation={'BTCUSDT': 0.6, 'ETHUSDT': 0.3, 'CASH': 0.1},
+            asset_allocation={'BTC': 0.6, 'ETH': 0.3, 'USDT': 0.1},
             position_sizing={},
             stop_loss_policy={},
             take_profit_policy={},
@@ -235,34 +210,15 @@ class BearMarketModel:
         try:
             logger.info("🐻 Bear Market Model: Generating defensive preservation strategy")
 
-            # Extract market metrics
-            btc_data = market_data.get('BTCUSDT')
-            eth_data = market_data.get('ETHUSDT')
-
-            # Calculate downside risk and volatility
-            btc_vol = self._calculate_volatility(btc_data) if btc_data is not None else 0.10
-            eth_vol = self._calculate_volatility(eth_data) if eth_data is not None else 0.12
-
-            avg_volatility = (btc_vol + eth_vol) / 2
-
-            # Bear market: Heavy cash allocation, minimal equity exposure
-            cash_allocation = min(0.8, max(self.cash_allocation_min, 0.5 + avg_volatility * 2))
-
-            # Small allocation to defensive assets or short positions
-            equity_allocation = 1.0 - cash_allocation
-            btc_allocation = equity_allocation * 0.4  # Small BTC position
-            eth_allocation = equity_allocation * 0.3  # Smaller ETH position
-            alt_allocation = equity_allocation * 0.3   # Alternative assets (gold, bonds, etc.)
-
+            # Fixed bear market allocation as specified
             asset_allocation = {
-                'BTCUSDT': btc_allocation,
-                'ETHUSDT': eth_allocation,
-                'CASH': cash_allocation,
-                'ALT': alt_allocation  # Alternative assets
+                'BTC': 0.00,
+                'ETH': 0.00,
+                'USDT': 1.00
             }
 
-            # 🛠️ AJUSTE: Ultra-conservadora en mercados bajistas (preservación defensiva)
-            risk_appetite = max(0.1, 0.2 - avg_volatility * 0.5)  # More conservative: max 0.1-0.2 range
+            # Ultra-conservative risk parameters
+            risk_appetite = 0.2
 
             # Conservative position sizing
             position_sizing = {
@@ -313,14 +269,13 @@ class BearMarketModel:
                     'min_diversification': 0.7  # Higher diversification required
                 },
                 metadata={
-                    'avg_volatility': avg_volatility,
-                    'cash_allocation': cash_allocation,
+                    'cash_allocation': 1.00,
                     'strategy_type': 'defensive_preservation',
                     'model_version': '1.0'
                 }
             )
 
-            logger.info(f"🐻 Bear Market Strategy: Risk={risk_appetite:.2f}, Cash={cash_allocation:.2f}, BTC={btc_allocation:.2f}")
+            logger.info(f"🐻 Bear Market Strategy: Risk={risk_appetite:.2f}, Cash={1.00:.2f}, BTC={0.00:.2f}")
             return strategy
 
         except Exception as e:
@@ -353,7 +308,7 @@ class BearMarketModel:
         return RegimeStrategy(
             regime='bear',
             risk_appetite=0.2,
-            asset_allocation={'BTCUSDT': 0.1, 'ETHUSDT': 0.05, 'CASH': 0.8, 'ALT': 0.05},
+            asset_allocation={'BTC': 0.00, 'ETH': 0.00, 'USDT': 1.00},
             position_sizing={},
             stop_loss_policy={},
             take_profit_policy={},
@@ -382,91 +337,55 @@ class RangeMarketModel:
     def generate_strategy(self, market_data: Dict[str, pd.DataFrame],
                          regime_context: Dict[str, Any]) -> RegimeStrategy:
         """
-        SOLUTION 1: Generate CAUTIOUS operations strategy for range regime
-        Allows small positions with strict risk controls instead of blocking all operations
+        Generate range market strategy with fixed allocations
         """
         try:
-            logger.info("📊 Range Market Model: Generating CAUTIOUS operations strategy")
+            logger.info("📊 Range Market Model: Generating range regime strategy")
 
-            # Extract market data for technical analysis
-            btc_data = market_data.get('BTCUSDT')
-            eth_data = market_data.get('ETHUSDT')
-
-            # Calculate technical indicators for cautious position sizing
-            btc_bb_pos = self._calculate_bb_position(btc_data) if btc_data is not None else 0.5
-            eth_bb_pos = self._calculate_bb_position(eth_data) if eth_data is not None else 0.5
-            btc_rsi = self._calculate_rsi(btc_data) if btc_data is not None else 50.0
-            eth_rsi = self._calculate_rsi(eth_data) if eth_data is not None else 50.0
-
-            logger.info(f"📊 RANGE TECHNICALS: BTC BB={btc_bb_pos:.2f}, RSI={btc_rsi:.1f} | ETH BB={eth_bb_pos:.2f}, RSI={eth_rsi:.1f}")
-
-            # Range regime: ADJUSTED allocations for better operations
-            # Increase allocations for high-confidence range regimes
-            confidence = regime_context.get('confidence', 0.5)
-            subtype = regime_context.get('subtype', '')
-
-            # Base allocations - less conservative than before
-            if confidence >= 0.80 and subtype == 'TIGHT_RANGE':
-                # High confidence TIGHT_RANGE: More aggressive allocations
-                btc_allocation = 0.20  # Increased from 0.05 to 0.20
-                eth_allocation = 0.15  # Increased from 0.04 to 0.15
-                cash_allocation = 0.65  # Reduced from 0.89 to 0.65
-            else:
-                # Standard range: moderate allocations
-                btc_allocation = 0.10 if btc_rsi < 40 else 0.05  # Favor oversold BTC
-                eth_allocation = 0.08 if eth_rsi < 40 else 0.04  # Favor oversold ETH
-                cash_allocation = 0.82  # Moderate cash preservation
-
-            # Override for oversold conditions regardless of confidence
-            if btc_rsi < 35 or eth_rsi < 35:
-                btc_allocation = max(btc_allocation, 0.15)  # Ensure minimum allocation for oversold
-                eth_allocation = max(eth_allocation, 0.12)  # Ensure minimum allocation for oversold
-                cash_allocation = 1.0 - btc_allocation - eth_allocation
-
+            # Fixed range market allocation as specified
             asset_allocation = {
-                'BTCUSDT': btc_allocation,
-                'ETHUSDT': eth_allocation,
-                'CASH': cash_allocation
+                'BTC': 0.30,
+                'ETH': 0.30,
+                'USDT': 0.40
             }
 
-            # Conservative risk appetite - very low for range markets
-            risk_appetite = 0.15  # Slightly higher than before but still very conservative
+            # Moderate risk appetite for range markets
+            risk_appetite = 0.5
 
-            # Small position sizing with strict limits
+            # Position sizing with moderate limits
             position_sizing = {
                 'BTCUSDT': {
-                    'max_position': 0.08,  # Maximum 8% position (very small)
-                    'min_position': 0.0,   # No minimum required
-                    'vol_target': 0.05,    # Low volatility target
-                    'range_cautious_mode': True,  # Flag for range strategy
-                    'signal_strength_required': 0.7  # High confidence required
+                    'max_position': 0.40,
+                    'min_position': 0.20,
+                    'vol_target': 0.12,
+                    'range_mode': True
                 },
                 'ETHUSDT': {
-                    'max_position': 0.06,  # Maximum 6% position (even smaller)
-                    'min_position': 0.0,   # No minimum required
-                    'vol_target': 0.04,    # Even lower volatility target
-                    'range_cautious_mode': True,  # Flag for range strategy
-                    'signal_strength_required': 0.75  # Very high confidence required
+                    'max_position': 0.40,
+                    'min_position': 0.20,
+                    'vol_target': 0.12,
+                    'range_mode': True
                 }
             }
 
-            # Tight stop losses for range trading (quick exits)
+            # Stop losses for range trading
             stop_loss_policy = {
-                'type': 'range_cautious_stops',
-                'initial_stop': 0.015,  # 1.5% initial stop (tight)
-                'max_drawdown': 0.03,   # Max 3% drawdown
-                'time_stop': '2d',      # Exit after 2 days regardless
+                'type': 'range_stops',
+                'initial_stop': 0.03,  # 3% initial stop
+                'max_drawdown': 0.06,  # Max 6% drawdown
+                'time_stop': '3d',     # Exit after 3 days regardless
                 'volatility_adjusted': True
             }
 
-            # Quick take profits for range trading (small gains)
+            # Take profits for range trading
             take_profit_policy = {
-                'type': 'range_quick_profits',
+                'type': 'range_profits',
                 'targets': [
-                    {'price_level': 1.025, 'position_size': 1.00}  # Take all off at 2.5% gain
+                    {'price_level': 1.03, 'position_size': 0.50},  # Take 50% off at 3% gain
+                    {'price_level': 1.06, 'position_size': 1.00}   # Take all off at 6% gain
                 ],
-                'time_based_exit': '1d',  # Exit after 1 day regardless
-                'range_mode': True  # Special flag for range behavior
+                'time_based_exit': '2d',  # Exit after 2 days regardless
+                'range_mode': True
             }
 
             strategy = RegimeStrategy(
@@ -476,29 +395,19 @@ class RangeMarketModel:
                 position_sizing=position_sizing,
                 stop_loss_policy=stop_loss_policy,
                 take_profit_policy=take_profit_policy,
-                rebalancing_frequency='daily',  # Check daily in case regime changes
-                volatility_target=0.06,  # Low volatility target for cautious operations
+                rebalancing_frequency='daily',
+                volatility_target=0.12,
                 correlation_limits={
-                    'max_correlation': 0.7,  # Moderate correlation limits
-                    'min_diversification': 0.5,  # Some diversification required
-                    'range_cautious_mode': True  # Flag for range cautious mode
+                    'max_correlation': 0.6,
+                    'min_diversification': 0.5
                 },
                 metadata={
-                    'strategy_type': 'range_cautious_operations',
-                    'btc_allocation': btc_allocation,
-                    'eth_allocation': eth_allocation,
-                    'cash_allocation': cash_allocation,
-                    'btc_rsi': btc_rsi,
-                    'eth_rsi': eth_rsi,
-                    'btc_bb_position': btc_bb_pos,
-                    'eth_bb_position': eth_bb_pos,
-                    'solution_1_implemented': True,
-                    'model_version': '4.0',
-                    'range_cautious_operations': 'enabled'
+                    'strategy_type': 'fixed_allocation',
+                    'model_version': '1.0'
                 }
             )
 
-            logger.info(f"📊 Range CAUTIOUS Strategy: Risk={risk_appetite:.2f}, BTC={btc_allocation:.2f}, ETH={eth_allocation:.2f}, Cash={cash_allocation:.2f}")
+            logger.info(f"📊 Range Strategy: Risk={risk_appetite:.2f}, BTC={asset_allocation['BTC']:.2f}, ETH={asset_allocation['ETH']:.2f}, Cash={asset_allocation['USDT']:.2f}")
             return strategy
 
         except Exception as e:
@@ -604,7 +513,7 @@ class RangeMarketModel:
         return RegimeStrategy(
             regime='range',
             risk_appetite=0.5,
-            asset_allocation={'BTCUSDT': 0.35, 'ETHUSDT': 0.35, 'CASH': 0.3},
+            asset_allocation={'BTC': 0.30, 'ETH': 0.30, 'USDT': 0.40},
             position_sizing={},
             stop_loss_policy={},
             take_profit_policy={},
@@ -674,10 +583,9 @@ class VolatileMarketModel:
             cash_weight = max(cash_weight, 0.15)
 
             asset_allocation = {
-                'BTCUSDT': btc_weight,
-                'ETHUSDT': eth_weight,
-                'CASH': cash_weight,
-                'ALT': alt_weight  # Alternative assets
+                'BTC': btc_weight,
+                'ETH': eth_weight,
+                'USDT': cash_weight
             }
 
             # Moderate risk appetite adjusted for volatility
@@ -793,7 +701,7 @@ class VolatileMarketModel:
         return RegimeStrategy(
             regime='volatile',
             risk_appetite=0.3,
-            asset_allocation={'BTCUSDT': 0.25, 'ETHUSDT': 0.20, 'CASH': 0.35, 'ALT': 0.20},
+            asset_allocation={'BTC': 0.30, 'ETH': 0.30, 'USDT': 0.40},
             position_sizing={},
             stop_loss_policy={},
             take_profit_policy={},
@@ -864,10 +772,9 @@ class CrisisMarketModel:
             alt_allocation = remaining_allocation * 0.5   # Alternative safe assets
 
             asset_allocation = {
-                'BTCUSDT': btc_allocation,
-                'ETHUSDT': eth_allocation,
-                'CASH': cash_allocation,
-                'ALT': alt_allocation  # Safe haven assets (gold, bonds, cash equivalents)
+                'BTC': btc_allocation,
+                'ETH': eth_allocation,
+                'USDT': cash_allocation
             }
 
             # Ultra-conservative risk parameters
@@ -986,7 +893,7 @@ class CrisisMarketModel:
         return RegimeStrategy(
             regime='crisis',
             risk_appetite=0.05,
-            asset_allocation={'BTCUSDT': 0.02, 'ETHUSDT': 0.01, 'CASH': 0.95, 'ALT': 0.02},
+            asset_allocation={'BTC': 0.00, 'ETH': 0.00, 'USDT': 1.00},
             position_sizing={},
             stop_loss_policy={},
             take_profit_policy={},
@@ -1046,8 +953,8 @@ class RegimeSpecificL3Processor:
             # Return safe default strategy
             return RegimeStrategy(
                 regime='neutral',
-                risk_appetite=0.3,
-                asset_allocation={'BTCUSDT': 0.3, 'ETHUSDT': 0.2, 'CASH': 0.5},
+                risk_appetite=0.5,
+                asset_allocation={'BTC': 0.40, 'ETH': 0.30, 'USDT': 0.30},
                 position_sizing={},
                 stop_loss_policy={},
                 take_profit_policy={},

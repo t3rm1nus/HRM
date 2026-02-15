@@ -24,7 +24,7 @@ class TradingConfig:
     timeframes: list = field(default_factory=lambda: ["1m", "5m", "1h"])
 
     # Balance & Position Management
-    initial_balance: float = 3000.0
+    initial_balance: float = 500.0
     max_portfolio_exposure_btc: float = 0.40
     max_portfolio_exposure_eth: float = 0.40
     max_position_size_usdt: float = 1200.0
@@ -37,8 +37,8 @@ class TradingConfig:
     take_profit_default_percent: float = 0.05
 
     # Trading Costs & Fees
-    commission_rate: float = 0.001  # 0.1%
-    slippage_bps: float = 2  # 2 basis points
+    commission_rate: float = 0.0005  # 0.05% (reduced for testing)
+    slippage_bps: float = 0.2  # 0.2 basis points (reduced for testing)
     min_order_value_usdt: float = 5.0
 
     # Trading Logic

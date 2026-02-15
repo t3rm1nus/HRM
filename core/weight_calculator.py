@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from enum import Enum
 from dataclasses import dataclass
 from core.logging import logger
-from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
 
 
 class WeightStrategy(Enum):

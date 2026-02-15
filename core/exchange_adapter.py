@@ -17,6 +17,8 @@ class ExchangeAdapter(ABC):
         
         Returns:
             Dict[str, float]: Dictionary of asset balances
+            
+        Note: This method is async and MUST be awaited
         """
         pass
 
@@ -30,6 +32,8 @@ class ExchangeAdapter(ABC):
             
         Returns:
             float: Current market price
+            
+        Note: This method is async and MUST be awaited
         """
         pass
 
@@ -43,6 +47,8 @@ class ExchangeAdapter(ABC):
             
         Returns:
             Dict[str, Any]: Order execution result
+            
+        Note: This method is async and MUST be awaited
         """
         pass
 
@@ -56,6 +62,8 @@ class ExchangeAdapter(ABC):
             
         Returns:
             bool: True if successfully cancelled, False otherwise
+            
+        Note: This method is async and MUST be awaited
         """
         pass
 
@@ -66,6 +74,8 @@ class ExchangeAdapter(ABC):
         
         Returns:
             List[Dict[str, Any]]: List of open orders
+            
+        Note: This method is async and MUST be awaited
         """
         pass
 
@@ -76,5 +86,39 @@ class ExchangeAdapter(ABC):
         
         Returns:
             Dict[str, float]: Current position quantities
+            
+        Note: This method is async and MUST be awaited
+        """
+        pass
+
+    @abstractmethod
+    def get_balance_sync(self, asset: str) -> float:
+        """
+        Synchronous version of get_balances for a single asset.
+        Should ONLY be called from sync contexts.
+        
+        Args:
+            asset: Asset symbol (e.g., 'BTC', 'ETH', 'USDT')
+            
+        Returns:
+            float: Balance for the specified asset
+            
+        Note: This method is sync and should NOT be called from async contexts
+        """
+        pass
+
+    @abstractmethod
+    def get_price_sync(self, symbol: str) -> float:
+        """
+        Synchronous version of get_price.
+        Should ONLY be called from sync contexts.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            
+        Returns:
+            float: Current market price
+            
+        Note: This method is sync and should NOT be called from async contexts
         """
         pass

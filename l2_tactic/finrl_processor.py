@@ -13,7 +13,7 @@ from loguru import logger
 from .model_loaders import ModelLoaders
 from .signal_generators import SignalGenerators
 from .observation_builders import ObservationBuilders
-from .utils import safe_float
+from .l2_utils import safe_float
 
 # Handle relative imports for when running as script
 try:

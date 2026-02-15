@@ -23,9 +23,35 @@ class SystemState:
 class StateCoordinator:
     """Coordinador de estado del sistema HRM"""
 
-    def __init__(self):
+    _instance = None
+    _lock = False
+
+    def __new__(cls, *args, **kwargs):
+        """Singleton pattern - ensure only one instance exists."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    def get_instance(cls):
+        """Get the singleton instance of StateCoordinator."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance (useful for testing)."""
+        cls._instance = None
+
+    def __init__(self, mode: str = "simulated"):
         """Inicializa el coordinador de estado"""
+        # Evitar inicialización múltiple en singleton
+        if hasattr(self, 'logger'):
+            return
+            
         self.logger = logger
+        self.mode = mode
         self.system_state = SystemState(
             is_ready=False,
             health_status="initializing",
@@ -33,7 +59,7 @@ class StateCoordinator:
             errors=[],
             timestamp=None
         )
-        self.logger.info("StateCoordinator inicializado")
+        self.logger.info(f"StateCoordinator inicializado (mode: {self.mode})")
 
     def update_state(self, component_name: str, status: str, data: Optional[Dict[str, Any]] = None):
         """Actualiza el estado de un componente específico
@@ -166,3 +192,10 @@ class StateCoordinator:
             "message": error_msg,
             "timestamp": time.time()
         })
+
+    def update_current_prices(self, current_prices: Dict[str, float]) -> None:
+        """Actualiza precios actuales en el estado."""
+        if not hasattr(self, 'state'):
+            self.state = {}
+        self.state["current_prices"] = current_prices.copy()
+        logger.debug(f"📊 StateCoordinator: Precios actualizados: {current_prices}")

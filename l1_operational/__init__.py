@@ -12,6 +12,14 @@ from .models import Signal, ExecutionReport, RiskAlert, OrderIntent
 from .order_manager import OrderManager
 from .bus_adapter import BusAdapterAsync  # Importamos la clase, no la instancia
 
+# Importar SmartCooldownManager si existe
+try:
+    from .smart_cooldown_manager import SmartCooldownManager
+    SMART_COOLDOWN_AVAILABLE = True
+except ImportError:
+    SMART_COOLDOWN_AVAILABLE = False
+    logger.warning("⚠️ SmartCooldownManager no disponible en __init__.py")
+
 async def procesar_l1(state: dict) -> dict:
     """
     Procesa las órdenes recibidas desde L2, las valida y ejecuta.
@@ -186,4 +194,4 @@ def get_l1_metrics():
 
 __all__ = ['procesar_l1', 'get_l1_status', 'get_l1_metrics',
            'Signal', 'ExecutionReport', 'RiskAlert', 'OrderIntent',
-           'BusAdapterAsync']  # Incluimos la clase, no la instancia
+           'BusAdapterAsync', 'SmartCooldownManager']  # Incluimos el nuevo manager

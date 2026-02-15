@@ -12,7 +12,7 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from core.logging import logger
-from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
 
 
 class RebalanceTrigger(Enum):
@@ -52,24 +52,29 @@ class PortfolioRebalancer:
     Handles portfolio rebalancing to maintain target allocations
     """
 
-    def __init__(self, weight_calculator, drift_threshold: float = 0.15,
+    def __init__(self, weight_calculator, drift_threshold: float = 0.10,
                  transaction_costs: float = 0.001, min_trade_value: float = 10.0,
-                 min_position_percentage: float = 0.10):
+                 min_position_percentage: float = 0.10, rebalance_enabled: bool = True,
+                 partial_rebalance_factor: float = 0.5):  # Nuevo parámetro para rebalance parcial
         """
         Initialize portfolio rebalancer
 
         Args:
             weight_calculator: WeightCalculator instance for target weights
-            drift_threshold: Maximum allowed drift from target weights (15%)
+            drift_threshold: Maximum allowed drift from target weights (10%)
             transaction_costs: Transaction cost as fraction (0.1%)
             min_trade_value: Minimum trade value in USD
             min_position_percentage: Minimum position size to maintain (10%)
+            rebalance_enabled: Whether rebalancing is enabled (default: True)
+            partial_rebalance_factor: Factor to scale down rebalance trades (0.0 to 1.0, 0.5 = 50% of full rebalance)
         """
         self.weight_calculator = weight_calculator
         self.drift_threshold = drift_threshold
         self.transaction_costs = transaction_costs
         self.min_trade_value = min_trade_value
         self.min_position_percentage = min_position_percentage  # Don't sell positions below this % of portfolio
+        self.rebalance_enabled = rebalance_enabled
+        self.partial_rebalance_factor = partial_rebalance_factor  # Factor para rebalance parcial
 
         # Rebalancing state
         self.last_rebalance = None
@@ -77,6 +82,10 @@ class PortfolioRebalancer:
         self.rebalance_history = []
 
         logger.info("🔄 Portfolio Rebalancer initialized")
+        if not self.rebalance_enabled:
+            logger.warning("⚠️ Portfolio rebalancing is DISABLED - only pure trades will be executed")
+        if self.partial_rebalance_factor < 1.0:
+            logger.info(f"📊 Partial rebalance enabled with factor: {self.partial_rebalance_factor:.1%}")
 
     def should_rebalance(self, current_weights: Dict[str, float],
                         trigger: RebalanceTrigger) -> Tuple[bool, str]:
@@ -91,6 +100,10 @@ class PortfolioRebalancer:
             Tuple of (should_rebalance, reason)
         """
         try:
+            # Check if rebalancing is enabled
+            if not self.rebalance_enabled:
+                return False, "Rebalancing is disabled"
+                
             if trigger == RebalanceTrigger.THRESHOLD_BASED:
                 return self._check_threshold_rebalance(current_weights)
             elif trigger == RebalanceTrigger.CALENDAR_BASED:
@@ -329,7 +342,7 @@ class PortfolioRebalancer:
 
     def _calculate_rebalance_trades(self, current_weights: Dict[str, float],
                                   portfolio_value: float, market_data: Dict[str, Any],
-                                  available_usdt: float = None) -> List[RebalanceTrade]:
+                                  available_usdt: float = None, partial: bool = False) -> List[RebalanceTrade]:
         """
         Calculate the trades needed to rebalance to target weights
         with minimum position size protection and USDT balance constraints
@@ -339,6 +352,7 @@ class PortfolioRebalancer:
             portfolio_value: Current portfolio value
             market_data: Current market data
             available_usdt: Available USDT balance for paper mode
+            partial: Whether to use partial rebalance factor
 
         Returns:
             List of RebalanceTrade objects
@@ -366,6 +380,11 @@ class PortfolioRebalancer:
 
                 # Calculate value to trade
                 trade_value = weight_diff * portfolio_value
+
+                # Apply partial rebalance factor if requested
+                if partial and self.partial_rebalance_factor < 1.0:
+                    trade_value *= self.partial_rebalance_factor
+                    logger.debug(f"📊 Partial rebalance: Scaling trade value for {symbol} by {self.partial_rebalance_factor:.1%}")
 
                 # Determine trade side
                 if weight_diff > 0:
@@ -412,7 +431,7 @@ class PortfolioRebalancer:
                     quantity=quantity,
                     estimated_price=price,
                     estimated_value=abs(trade_value),
-                    reason=f"Rebalance to target weight {target_weight:.1%} (current: {current_weight:.1%})",
+                    reason=f"Rebalance to target weight {target_weight:.1%} (current: {current_weight:.1%})" + (" - Partial" if partial else ""),
                     priority=priority
                 )
 
@@ -448,12 +467,12 @@ class PortfolioRebalancer:
             logger.error(f"❌ Error calculating rebalance trades: {e}")
             return []
 
-    async def execute_rebalance(self, current_weights: Dict[str, float],
-                              portfolio_value: float, market_data: Dict[str, Any],
-                              trigger: RebalanceTrigger,
-                              available_usdt: float = None) -> RebalanceResult:
+    async def execute_partial_rebalance(self, current_weights: Dict[str, float],
+                                     portfolio_value: float, market_data: Dict[str, Any],
+                                     trigger: RebalanceTrigger,
+                                     available_usdt: float = None) -> RebalanceResult:
         """
-        Execute portfolio rebalancing
+        Execute partial portfolio rebalancing using the configured partial rebalance factor
 
         Args:
             current_weights: Current portfolio weights
@@ -466,11 +485,112 @@ class PortfolioRebalancer:
             RebalanceResult with execution details
         """
         try:
-            logger.info(f"🔄 Executing portfolio rebalance (trigger: {trigger.value})")
+            logger.info(f"🔄 Executing partial portfolio rebalance (trigger: {trigger.value}, factor: {self.partial_rebalance_factor:.1%})")
+
+            # Calculate required trades with partial rebalance factor
+            trades_required = self._calculate_rebalance_trades(
+                current_weights, portfolio_value, market_data, available_usdt, partial=True
+            )
+
+            # Filter out small trades
+            significant_trades = [
+                trade for trade in trades_required
+                if trade.estimated_value >= self.min_trade_value
+            ]
+
+            if not significant_trades:
+                result = RebalanceResult(
+                    success=True,
+                    trades_required=[],
+                    total_value_change=0.0,
+                    execution_status="No significant partial rebalance trades required",
+                    timestamp=pd.Timestamp.now().isoformat(),
+                    metadata={'reason': 'all_trades_below_minimum', 'partial': True}
+                )
+                logger.info("ℹ️ Partial rebalance completed - no significant trades required")
+                return result
+
+            # Calculate total value change
+            total_value_change = sum(trade.estimated_value for trade in significant_trades)
+
+            # Estimate transaction costs
+            total_costs = total_value_change * self.transaction_costs
+
+            # Check if rebalance is cost-effective
+            if total_costs > portfolio_value * 0.001:  # Costs > 0.1% of portfolio
+                logger.warning(f"⚠️ Partial rebalance costs (${total_costs:.2f}) may not be justified")
+
+            # Update rebalance state
+            self.last_rebalance = pd.Timestamp.now().isoformat()
+            self.rebalance_history.append({
+                'timestamp': self.last_rebalance,
+                'trigger': trigger.value,
+                'trades': len(significant_trades),
+                'total_value_change': total_value_change,
+                'portfolio_value': portfolio_value,
+                'partial': True
+            })
+
+            result = RebalanceResult(
+                success=True,
+                trades_required=significant_trades,
+                total_value_change=total_value_change,
+                execution_status="Partial rebalance trades calculated successfully",
+                timestamp=self.last_rebalance,
+                metadata={
+                    'transaction_costs': total_costs,
+                    'portfolio_value': portfolio_value,
+                    'trigger': trigger.value,
+                    'partial': True,
+                    'partial_factor': self.partial_rebalance_factor
+                }
+            )
+
+            logger.info(f"✅ Partial rebalance executed: {len(significant_trades)} trades, ${total_value_change:.2f} value change")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error executing partial rebalance: {e}")
+            result = RebalanceResult(
+                success=False,
+                trades_required=[],
+                total_value_change=0.0,
+                execution_status=f"Error: {str(e)}",
+                timestamp=pd.Timestamp.now().isoformat(),
+                metadata={'error': str(e), 'partial': True}
+            )
+            return result
+
+    async def execute_rebalance(self, current_weights: Dict[str, float],
+                              portfolio_value: float, market_data: Dict[str, Any],
+                              trigger: RebalanceTrigger,
+                              available_usdt: float = None,
+                              partial: bool = False) -> RebalanceResult:
+        """
+        Execute portfolio rebalancing (full or partial)
+
+        Args:
+            current_weights: Current portfolio weights
+            portfolio_value: Current portfolio value in USD
+            market_data: Current market data
+            trigger: Rebalance trigger type
+            available_usdt: Available USDT balance for paper mode
+            partial: Whether to use partial rebalance factor
+
+        Returns:
+            RebalanceResult with execution details
+        """
+        if partial:
+            return await self.execute_partial_rebalance(
+                current_weights, portfolio_value, market_data, trigger, available_usdt
+            )
+
+        try:
+            logger.info(f"🔄 Executing full portfolio rebalance (trigger: {trigger.value})")
 
             # Calculate required trades
             trades_required = self._calculate_rebalance_trades(
-                current_weights, portfolio_value, market_data, available_usdt
+                current_weights, portfolio_value, market_data, available_usdt, partial=False
             )
 
             # Filter out small trades
@@ -486,7 +606,7 @@ class PortfolioRebalancer:
                     total_value_change=0.0,
                     execution_status="No significant trades required",
                     timestamp=pd.Timestamp.now().isoformat(),
-                    metadata={'reason': 'all_trades_below_minimum'}
+                    metadata={'reason': 'all_trades_below_minimum', 'partial': False}
                 )
                 logger.info("ℹ️ Rebalance completed - no significant trades required")
                 return result
@@ -508,7 +628,8 @@ class PortfolioRebalancer:
                 'trigger': trigger.value,
                 'trades': len(significant_trades),
                 'total_value_change': total_value_change,
-                'portfolio_value': portfolio_value
+                'portfolio_value': portfolio_value,
+                'partial': False
             })
 
             result = RebalanceResult(
@@ -520,7 +641,8 @@ class PortfolioRebalancer:
                 metadata={
                     'transaction_costs': total_costs,
                     'portfolio_value': portfolio_value,
-                    'trigger': trigger.value
+                    'trigger': trigger.value,
+                    'partial': False
                 }
             )
 
@@ -535,7 +657,7 @@ class PortfolioRebalancer:
                 total_value_change=0.0,
                 execution_status=f"Error: {str(e)}",
                 timestamp=pd.Timestamp.now().isoformat(),
-                metadata={'error': str(e)}
+                metadata={'error': str(e), 'partial': False}
             )
             return result
 
@@ -610,7 +732,8 @@ class PortfolioRebalancer:
                 'target_weights_set': bool(self.target_weights),
                 'num_target_assets': len(self.target_weights),
                 'drift_threshold': self.drift_threshold,
-                'total_rebalances': len(self.rebalance_history)
+                'total_rebalances': len(self.rebalance_history),
+                'rebalance_enabled': self.rebalance_enabled
             }
 
             # Calculate days since last rebalance

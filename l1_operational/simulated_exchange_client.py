@@ -25,6 +25,36 @@ class SimulatedExchangeClient:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+    @classmethod
+    def get_instance(cls, initial_balances: Dict[str, float] = None,
+                     fee: float = 0.001,
+                     slippage: float = 0.0005):
+        """Get or create the singleton instance of SimulatedExchangeClient.
+        
+        Args:
+            initial_balances: Balances iniciales (solo usados en primera inicialización)
+            fee: Comisión por trade
+            slippage: Slippage por trade
+            
+        Returns:
+            SimulatedExchangeClient: Instancia singleton
+        """
+        if cls._instance is not None:
+            logger.info("SimulatedExchangeClient: returning existing singleton instance")
+            return cls._instance
+            
+        if initial_balances is None:
+            # Default balances for paper trading
+            initial_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 500.0}
+        cls._instance = cls(initial_balances, fee, slippage)
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Reset the singleton instance (useful for testing)."""
+        cls._instance = None
+        cls._initialized = False
+
     def __init__(
         self,
         initial_balances: Dict[str, float] = None,
@@ -35,29 +65,39 @@ class SimulatedExchangeClient:
         Inicializa el cliente simulado.
         
         Args:
-            initial_balances: Balances iniciales para cada activo (REQUERIDO)
+            initial_balances: Balances iniciales para cada activo (REQUERIDO solo para primera inicialización)
             fee: Comisión por trade (0.001 = 0.1%)
             slippage: Slippage por trade (0.0005 = 0.05%)
         
         Raises:
-            RuntimeError: Si se intenta inicializar sin balances iniciales válidos
+            RuntimeError: Si se intenta inicializar sin balances iniciales válidos en primera instanciación
         """
+        # 🚨 CRITICAL FIX: Strict singleton enforcement - NEVER reinitialize if already initialized
         if SimulatedExchangeClient._initialized:
-            logger.debug("🎮 SimulatedExchangeClient already initialized - maintaining state")
-            # Si ya está inicializado, no hacer nada más
+            logger.warning("🚨 BLOCKED: Attempt to reinitialize SimulatedExchangeClient - singleton already exists")
+            logger.warning(f"   Current balances: {self.balances}")
+            logger.warning(f"   Instance ID: {id(self)}")
+            # Do NOT reinitialize - maintain existing state at all costs
             return
         
-        # Validar balances iniciales (REQUERIDOS)
+        # Validar balances iniciales (REQUERIDOS solo para primera inicialización)
         if initial_balances is None or not isinstance(initial_balances, dict) or len(initial_balances) == 0:
             logger.critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)", exc_info=True)
             raise RuntimeError("SimulatedExchangeClient cannot be initialized without valid initial_balances")
         
-        # Validar que los balances sean positivos
-        invalid_balances = [asset for asset, balance in initial_balances.items() if balance <= 0]
-        if invalid_balances:
-            logger.critical(f"🚨 FATAL: SimulatedExchangeClient balances must be positive. Invalid: {invalid_balances}", exc_info=True)
-            raise RuntimeError("SimulatedExchangeClient cannot be initialized with non-positive balances")
+        # Validar que el capital principal (USDT) sea positivo
+        if initial_balances.get("USDT", 0) <= 0:
+            logger.critical(f"🚨 FATAL: USDT balance must be positive. Got: {initial_balances.get('USDT', 0)}", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized without positive USDT balance")
         
+        # BTC y ETH pueden ser 0 (sin posiciones iniciales)
+        invalid_balances = [asset for asset, balance in initial_balances.items() 
+                           if asset in ["BTC", "ETH"] and balance < 0]
+        if invalid_balances:
+            logger.critical(f"🚨 FATAL: BTC and ETH balances cannot be negative. Invalid: {invalid_balances}", exc_info=True)
+            raise RuntimeError("SimulatedExchangeClient cannot be initialized with negative BTC/ETH balances")
+        
+        # Mark as initialized BEFORE setting attributes to prevent race conditions
         SimulatedExchangeClient._initialized = True
         
         self.initial_balances = initial_balances.copy()
@@ -74,11 +114,12 @@ class SimulatedExchangeClient:
         self._ensure_asset("BTC")
         self._ensure_asset("ETH")
 
-        logger.info("✅ SimulatedExchangeClient inicializado")
-        logger.info(f"   Balances iniciales: {self.balances}")
-        logger.info(f"   Comisión: {fee*100:.2f}%")
+        logger.info("✅ SimulatedExchangeClient INITIALIZED (FIRST TIME ONLY)")
+        logger.info(f"   Instance ID: {id(self)}")
+        logger.info(f"   Initial balances: {self.balances}")
+        logger.info(f"   Fee: {fee*100:.2f}%")
         logger.info(f"   Slippage: {slippage*100:.2f}%")
-        logger.info(f"   SIM_INIT_ONCE=True")
+        logger.info(f"   SINGLETON_ENFORCED=True")
 
     @classmethod
     def initialize_once(cls, initial_balances: Dict[str, float],
@@ -350,3 +391,21 @@ class SimulatedExchangeClient:
         cls._initialized = False
         logger.info("🔄 SimulatedExchangeClient.cleanup() completado - singleton listo para re-init")
         return True
+
+    # ------------------------------------------------------------------
+    # Market Price - DEPRECATED
+    # ------------------------------------------------------------------
+
+    def get_market_price(self, symbol: str) -> float:
+        """
+        DEPRECATED: No usar - use MarketDataManager instead.
+        
+        Obtiene el precio actual del mercado para un símbolo simulado.
+        
+        Args:
+            symbol: Símbolo del par de trading (e.g., 'BTCUSDT', 'ETHUSDT')
+        
+        Returns:
+            Precio actual del símbolo
+        """
+        raise NotImplementedError("get_market_price is deprecated - use MarketDataManager instead")

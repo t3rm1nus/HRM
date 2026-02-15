@@ -182,7 +182,9 @@ class PATH2Processor:
                         'stop_loss_pct': range_signal.get('stop_loss_pct'),
                         'take_profit_pct': range_signal.get('take_profit_pct'),
                         'position_size_multiplier': range_signal.get('position_size_multiplier', 0.8),
-                        'indicators': range_signal.get('indicators', {})
+                        'indicators': range_signal.get('indicators', {}),
+                        'allow_partial_rebalance': range_signal.get('allow_partial_rebalance', True),
+                        'market_making_enabled': range_signal.get('market_making_enabled', True)
                     }
                     logger.info(f"   → {range_signal['action']} (Production-grade tight range MR)")
                     return final_signal
@@ -513,7 +515,7 @@ def apply_hybrid_mode(l1_signals: List[Dict], l2_output: Dict, l3_output: Dict, 
                 market_data = portfolio_state.get('market_data', {}).get(symbol)
                 if market_data is not None and isinstance(market_data, pd.DataFrame) and len(market_data) > 20:
                     tight_range_fix = PATH2TightRangeFix()
-                    range_signal = tight_range_fix.process_tight_range(symbol, market_data, l3_confidence)
+                    range_signal = tight_range_fix.process_tight_range_signal(symbol, market_data, l3_confidence)
 
                     final_signal = {
                         'symbol': symbol,
@@ -527,7 +529,9 @@ def apply_hybrid_mode(l1_signals: List[Dict], l2_output: Dict, l3_output: Dict, 
                         'max_contra_allocation': max_contra_allocation,
                         'range_strategy_activated': True,
                         'stop_loss_pct': range_signal.get('stop_loss_pct'),
-                        'take_profit_pct': range_signal.get('take_profit_pct')
+                        'take_profit_pct': range_signal.get('take_profit_pct'),
+                        'allow_partial_rebalance': range_signal.get('allow_partial_rebalance', True),
+                        'market_making_enabled': range_signal.get('market_making_enabled', True)
                     }
                     logger.info(f"   → {range_signal['action']} (Tight range mean reversion)")
                 else:

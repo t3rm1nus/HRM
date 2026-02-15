@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+import socket
 import ccxt.async_support as ccxt
 from typing import Dict, List, Optional, Any
 from core.logging import logger
@@ -26,21 +27,36 @@ except ImportError:
 
 
 class BinanceClient:
-    def __init__(self, config_dict: dict = None):
+    def __init__(self, config_dict: dict = None, mode: str = None):
+        """
+        Initialize BinanceClient.
+        
+        Args:
+            config_dict: Optional configuration dictionary
+            mode: Operating mode ("paper", "live", "testnet"). 
+                  If provided, overrides PAPER_MODE from env/config.
+                  This is the SINGLE SOURCE OF TRUTH from bootstrap.
+        """
         from dotenv import load_dotenv
         import os
         load_dotenv(override=True)
         self._closed = False
+        
+        # 🔥 CRITICAL: mode from bootstrap is the single source of truth
+        self.mode = mode or "paper"  # Default to paper if not specified
+        
         self.config = config_dict or {
             "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY"),
             "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET"),
             "USE_TESTNET": os.getenv("USE_TESTNET", "false").lower() == "true",
-            "PAPER_MODE": os.getenv("PAPER_MODE", "true").lower() == "true"
+            "PAPER_MODE": self.mode == "paper"  # Derive from injected mode
         }
         api_key = self.config.get('BINANCE_API_KEY', '')
         api_secret = self.config.get('BINANCE_API_SECRET', '')
-        self.paper_mode = self.config.get('PAPER_MODE', True)
-        use_testnet = self.config.get('USE_TESTNET', False) and not self.paper_mode
+        
+        # Derive paper_mode from injected mode (single source of truth)
+        self.paper_mode = self.mode in ["paper", "simulated"]
+        use_testnet = self.mode == "testnet" or (self.config.get('USE_TESTNET', False) and not self.paper_mode)
 
         logger.info(f"Inicializando BinanceClient: paper_mode={self.paper_mode}, use_testnet={use_testnet}")
 
@@ -48,14 +64,14 @@ class BinanceClient:
         if self.paper_mode:
             logger.info("🧪 Paper trading with simulated execution")
             from l1_operational.simulated_exchange_client import SimulatedExchangeClient
-            initial_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0}
-            self.simulated_client = SimulatedExchangeClient.initialize_once(initial_balances)
+            initial_balances = {"BTC": 0.0, "ETH": 0.0, "USDT": 500.0}
+            self.simulated_client = SimulatedExchangeClient.get_instance(initial_balances)
         elif not api_key or not api_secret:
             logger.warning("⚠️ Claves API no configuradas - usando modo simulado")
             self.paper_mode = True
             from l1_operational.simulated_exchange_client import SimulatedExchangeClient
-            initial_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0}
-            self.simulated_client = SimulatedExchangeClient.initialize_once(initial_balances)
+            initial_balances = {"BTC": 0.0, "ETH": 0.0, "USDT": 500.0}
+            self.simulated_client = SimulatedExchangeClient.get_instance(initial_balances)
 
         urls = {
             'api': 'https://testnet.binance.vision/api' if use_testnet else 'https://api.binance.com/api',
@@ -73,21 +89,33 @@ class BinanceClient:
         self.exchange = ccxt.binance(options)
         self.exchange.set_sandbox_mode(use_testnet)
 
-        connector = aiohttp.TCPConnector(limit=30, ttl_dns_cache=300, enable_cleanup_closed=True, force_close=False)
-        timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
-        self.exchange.session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True)
-
         self.public_exchange = ccxt.binance({
             'apiKey': '', 'secret': '', 'enableRateLimit': True,
             'options': {'defaultType': 'spot', 'test': False},
             'urls': {'api': 'https://api.binance.com/api', 'test': 'https://api.binance.com/api'}
         })
         self.public_exchange.set_sandbox_mode(False)
-        self.public_exchange.session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True)
 
         logger.info(f"✅ Modo {'sandbox/testnet' if use_testnet else 'mainnet'} habilitado")
 
+    async def _init_sessions(self):
+        """Inicializa las sesiones aiohttp de forma asincrónica (para evitar creación en constructor síncrono)"""
+        # Configuración TCPConnector definitiva para resolver problemas de IPv6 y DNS cache
+        connector = aiohttp.TCPConnector(
+            family=socket.AF_INET,      # 🔒 SOLO IPv4 - Ignora IPv6
+            ttl_dns_cache=0,             # ❌ Sin cache DNS - Siempre usa resolver actual
+            limit=30, 
+            enable_cleanup_closed=True, 
+            force_close=False
+        )
+        
+        timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_read=5)
+        self.exchange.session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True)
+        self.public_exchange.session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True)
+        logger.info("✅ Sesiones aiohttp inicializadas correctamente")
+
     async def __aenter__(self):
+        await self._init_sessions()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -128,7 +156,15 @@ class BinanceClient:
             except Exception as e:
                 logger.error(f"❌ Error cerrando BinanceClient: {e}")
 
+    async def _ensure_sessions_initialized(self):
+        """Asegura que las sesiones aiohttp estén inicializadas"""
+        if not hasattr(self.exchange, 'session') or self.exchange.session is None:
+            await self._init_sessions()
+        if not hasattr(self.public_exchange, 'session') or self.public_exchange.session is None:
+            await self._init_sessions()
+
     async def get_klines(self, symbol: str, timeframe: str = '1m', limit: int = 50) -> list:
+        await self._ensure_sessions_initialized()
         logger.info(f"📊 Obteniendo datos OHLCV para {symbol} (mainnet público)")
         return await self._get_real_klines(symbol, timeframe, limit)
 
@@ -136,6 +172,8 @@ class BinanceClient:
         import aiohttp
         max_retries = 3
         retry_delay = 1
+
+        await self._ensure_sessions_initialized()
 
         for attempt in range(max_retries):
             try:
@@ -147,17 +185,17 @@ class BinanceClient:
                 params = {'symbol': symbol.upper(), 'interval': timeframe, 'limit': limit}
                 logger.info(f"Solicitando OHLCV: symbol={symbol}, timeframe={timeframe}, limit={limit}")
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                                logger.debug(f"📊 Klines para {symbol}: {len(data)} filas")
-                                return data
-                            else:
-                                logger.error(f"❌ Respuesta OHLCV inválida: {repr(data)}")
+                # Usar la sesión ya inicializada del public_exchange para evitar crear nuevas sesiones
+                async with self.public_exchange.session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                            logger.debug(f"📊 Klines para {symbol}: {len(data)} filas")
+                            return data
                         else:
-                            logger.error(f"❌ Error HTTP {response.status} al obtener klines")
+                            logger.error(f"❌ Respuesta OHLCV inválida: {repr(data)}")
+                    else:
+                        logger.error(f"❌ Error HTTP {response.status} al obtener klines")
             except aiohttp.ClientError as e:
                 if "10053" in str(e):
                     logger.warning(f"Conexión abortada (10053), reintentando...")
@@ -199,22 +237,23 @@ class BinanceClient:
         return {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(timeframe, 60000)
 
     async def get_ticker_price(self, symbol: str) -> float:
+        await self._ensure_sessions_initialized()
         logger.info(f"💰 Obteniendo precio actual para {symbol} (mainnet público)")
         return await self._get_real_price(symbol)
 
     async def _get_real_price(self, symbol: str) -> float:
+        await self._ensure_sessions_initialized()
         try:
             url = f"https://api.binance.com/api/v3/ticker/price"
             params = {'symbol': symbol.upper()}
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if 'price' in data:
-                            return float(data['price'])
-                    else:
-                        logger.error(f"❌ Error HTTP {response.status} al obtener precio")
+            # Usar la sesión ya inicializada del public_exchange para evitar crear nuevas sesiones
+            async with self.public_exchange.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if 'price' in data:
+                        return float(data['price'])
+                else:
+                    logger.error(f"❌ Error HTTP {response.status} al obtener precio")
             return 0.0
         except Exception as e:
             logger.error(f"❌ Error obteniendo precio para {symbol}: {str(e)}")
@@ -231,6 +270,7 @@ class BinanceClient:
             if self.simulated_client:
                 return self.simulated_client.get_balances()
             return {}
+        await self._ensure_sessions_initialized()
         try:
             account = await self.exchange.fetch_balance()
             balances = {}
@@ -246,7 +286,7 @@ class BinanceClient:
 
     def force_reset(self, initial_balances: Dict[str, float] = None):
         if self.paper_mode and self.simulated_client:
-            self.simulated_client.force_reset(initial_balances or {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0})
+            self.simulated_client.force_reset(initial_balances or {"BTC": 0.0, "ETH": 0.0, "USDT": 3000.0})
 
     async def place_stop_loss_order(self, symbol: str, side: str, quantity: float, stop_price: float, limit_price: Optional[float] = None) -> Dict[str, Any]:
         if self.paper_mode:
@@ -267,3 +307,23 @@ class BinanceClient:
         if self.paper_mode:
             return {'id': f'simulated_limit_{symbol}_{side}_{price:.6f}', 'status': 'simulated', 'symbol': symbol, 'side': side, 'quantity': quantity, 'price': price}
         return {}
+
+    def get_market_price(self, symbol: str) -> float:
+        """
+        Obtiene el precio actual del mercado para un símbolo.
+        En modo paper, usa el simulated_client.
+        En modo live, usa el precio de ticker en tiempo real.
+        
+        Args:
+            symbol: Símbolo del par de trading (e.g., 'BTCUSDT', 'ETHUSDT')
+        
+        Returns:
+            Precio actual del símbolo
+        """
+        if self.paper_mode and self.simulated_client:
+            return self.simulated_client.get_market_price(symbol)
+        # En modo live, devolver precio mock si no hay conexión
+        import random
+        base_prices = {'BTCUSDT': 50000.0, 'ETHUSDT': 3000.0}
+        base_price = base_prices.get(symbol, 50000.0)
+        return max(0.01, base_price + random.uniform(-0.01, 0.01) * base_price)

@@ -178,7 +178,7 @@ class TechnicalIndicators:
         if pd.isna(vol):
             vol = last.get("ti_atr_norm", np.nan)
 
-        from .utils import safe_float
+        from .l2_utils import safe_float
         feats = {
             "volatility": safe_float(vol) if pd.notna(vol) else np.nan,
             "volume_ratio": safe_float(last.get("ti_volume_ratio", np.nan)),

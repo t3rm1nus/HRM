@@ -28,7 +28,7 @@ def process_tactical_signal(signal: Union[dict, list, TacticalSignal]) -> Option
                 signal_data = signal.copy()
                 for k in ['strength', 'confidence']:
                     if k in signal_data:
-                        from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
                         signal_data[k] = safe_float(signal_data[k])
 
                 # Process features and metadata

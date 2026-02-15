@@ -10,6 +10,14 @@ from l1_operational.order_validators import OrderValidators
 from l1_operational.order_executors import OrderExecutors
 from .order_intent_builder import OrderIntentBuilder, OrderIntentProcessor, OrderIntent
 
+# Importar SmartCooldownManager si existe, sino None
+try:
+    from .smart_cooldown_manager import SmartCooldownManager
+    SMART_COOLDOWN_AVAILABLE = True
+except ImportError:
+    SMART_COOLDOWN_AVAILABLE = False
+    logger.warning("⚠️ SmartCooldownManager no disponible - usando cooldown básico")
+
 # ========================================================================================
 # CONSTANTES
 # ========================================================================================
@@ -28,9 +36,14 @@ class OrderManager:
     - Integra Order Intent Builder para resolver bottleneck Signal → Order Intent
     """
 
-    def __init__(self, state_manager, portfolio_manager, config: Dict, simulated_client=None):
+    def __init__(self, state_manager, portfolio_manager, mode: str = "simulated", simulated_client=None):
         self.state = state_manager
         self.portfolio = portfolio_manager
+        self.mode = mode
+        self.paper_mode = mode in ["simulated", "paper"]
+
+        # We still need config for some legacy components that haven't been updated yet
+        from comms.config import config
         self.config = config
 
         self.position_manager = PositionManager(
@@ -40,31 +53,41 @@ class OrderManager:
         )
 
         self.validators = OrderValidators(config)
-        self.executors = OrderExecutors(state_manager, portfolio_manager, config, simulated_client)
+        self.executors = OrderExecutors(state_manager, portfolio_manager, mode, simulated_client)
 
         # Initialize Order Intent Builder
         self.intent_builder = OrderIntentBuilder(
             self.position_manager,
             config,
-            paper_mode=config.paper_mode
+            paper_mode=self.paper_mode
         )
         self.intent_processor = OrderIntentProcessor(self.intent_builder)
 
-        self.last_trade_time: Dict[str, float] = {}
-        self.cooldown_seconds = config.get("COOLDOWN_SECONDS", 60)
+        # Inicializar SmartCooldownManager si está disponible
+        if SMART_COOLDOWN_AVAILABLE:
+            self.cooldown_manager = SmartCooldownManager(config)
+            logger.info("✅ SmartCooldownManager inicializado")
+        else:
+            self.cooldown_manager = None
+            # Cooldown básico como fallback
+            self.last_trade_time: Dict[str, float] = {}
+            self.cooldown_seconds = config.get("COOLDOWN_SECONDS", 60)
+            logger.warning("⚠️ Usando cooldown básico (SmartCooldownManager no disponible)")
 
-        logger.info("✅ OrderManager inicializado (FIXED) con Order Intent Builder")
+        logger.info(f"✅ OrderManager inicializado (FIXED) con Order Intent Builder (mode: {mode})")
 
-    # ======================================================================
+    # ====================================================================================
     # CORE ENTRY - USING ORDER INTENT BUILDER
-    # ======================================================================
+    # ====================================================================================
 
-    async def generate_orders(self, state: Dict, signals: List[TacticalSignal]) -> List[Dict]:
+    async def generate_orders(self, state: Dict, signals: List[TacticalSignal], l3_regime: str = None) -> List[Dict]:
         # Process signals to order intents (Signal → Order Intent step)
-        order_intents = self.intent_processor.process_signals(
+        # ✅ CRITICAL FIX AQUÍ: process_signals es async - SE AÑADE AWAIT
+        order_intents = await self.intent_processor.process_signals(
             signals,
             state.get("market_data", {}),
-            self._get_effective_position
+            self._get_effective_position_async,  # ✅ Usar versión async
+            l3_regime  # Pass L3 regime for adaptive cooldown
         )
 
         # Convert order intents to executable orders
@@ -77,9 +100,9 @@ class OrderManager:
         logger.info(f"📊 Order generation complete: {len(signals)} signals → {len(order_intents)} intents → {len(orders)} orders")
         return orders
 
-    # ======================================================================
+    # ====================================================================================
     # SIGNAL HANDLER (legacy, kept for compatibility)
-    # ======================================================================
+    # ====================================================================================
 
     def handle_signal(self, signal: TacticalSignal, market_data: Dict) -> Dict[str, Any]:
         symbol = signal.symbol
@@ -92,7 +115,8 @@ class OrderManager:
         if action == "hold":
             return self._hold(symbol)
 
-        if not self._cooldown_ok(symbol):
+        # Verificar cooldown (usando SmartCooldownManager si disponible)
+        if not self._cooldown_ok(symbol, action, signal.confidence):
             return self._reject(symbol, action, "cooldown_active")
 
         position_qty = self._get_effective_position(symbol)
@@ -122,13 +146,19 @@ class OrderManager:
 
         return self._hold(symbol)
 
-    # ======================================================================
+    # ====================================================================================
     # ORDER FROM INTENT
-    # ======================================================================
+    # ====================================================================================
 
     def _intent_to_order(self, intent: OrderIntent) -> Optional[Dict[str, Any]]:
         """Convert OrderIntent to executable order with validation"""
         try:
+            # Obtener reason de forma segura (soporta objeto o dict)
+            if isinstance(intent, dict):
+                reason = intent.get("reason", "strategy_signal")
+            else:
+                reason = getattr(intent, "reason", None) or "strategy_signal"
+
             # Build order from intent
             order = {
                 "status": "accepted",
@@ -141,6 +171,7 @@ class OrderManager:
                 "mode": "paper",
                 "confidence": intent.confidence,
                 "source": intent.source,
+                "reason": reason,
                 "metadata": intent.metadata
             }
 
@@ -157,9 +188,9 @@ class OrderManager:
             logger.error(f"❌ Error converting intent to order: {e}")
             return None
 
-    # ======================================================================
+    # ====================================================================================
     # ORDER BUILDER (CRITICAL FIX)
-    # ======================================================================
+    # ====================================================================================
 
     def _build_order(self, symbol: str, action: str, qty: float, price: float) -> Dict[str, Any]:
         value = qty * price
@@ -181,18 +212,23 @@ class OrderManager:
         if validation["validation"]["status"] != "valid":
             return self._reject(symbol, action, "validation_failed")
 
-        self.last_trade_time[symbol] = time.time()
+        # Actualizar tiempo de trade
+        if self.cooldown_manager:
+            self.cooldown_manager.record_trade(symbol)
+        else:
+            self.last_trade_time[symbol] = time.time()
+            
         return validation["order"]
 
-    # ======================================================================
+    # ====================================================================================
     # EXECUTION
-    # ======================================================================
+    # ====================================================================================
 
     async def execute_orders(self, orders: List[Dict]) -> List[Dict]:
         results = []
         for o in orders:
             try:
-                result = self.executors.execute_order(
+                result = await self.executors.execute_order(
                     symbol=o["symbol"],
                     action=o["action"],
                     quantity=o["quantity"],
@@ -206,22 +242,48 @@ class OrderManager:
                 results.append(o)
         return results
 
-    # ======================================================================
-    # HELPERS
-    # ======================================================================
+    # ====================================================================================
+    # HELPERS - COOLDOWN MEJORADO
+    # ====================================================================================
 
-    def _cooldown_ok(self, symbol: str) -> bool:
-        last = self.last_trade_time.get(symbol)
-        return last is None or (time.time() - last) >= self.cooldown_seconds
+    def _cooldown_ok(self, symbol: str, action: str = None, confidence: float = None, l3_regime: str = None) -> bool:
+        """Check if cooldown period has elapsed for a symbol"""
+        if self.cooldown_manager:
+            # Usar SmartCooldownManager si está disponible
+            return self.cooldown_manager.should_execute_signal(
+                symbol=symbol,
+                signal_action=action,
+                signal_confidence=confidence,
+                l3_regime=l3_regime
+            )
+        else:
+            # Cooldown básico como fallback
+            last = self.last_trade_time.get(symbol)
+            if action == "buy" and confidence and confidence > 0.65:
+                # ✅ FIX: Señales L3 de alta confianza (> 0.65) NO se bloquean
+                logger.info(f"🎯 High confidence signal ({confidence:.2f}) - bypassing cooldown for {symbol}")
+                return True
+            return last is None or (time.time() - last) >= self.cooldown_seconds
 
     def _dust(self, symbol: str) -> float:
         return DUST_THRESHOLD_BTC if "BTC" in symbol else DUST_THRESHOLD_ETH
 
     def _get_effective_position(self, symbol: str) -> float:
+        """DEPRECATED: Use _get_effective_position_async in async contexts"""
         asset = symbol.replace("USDT", "")
         try:
             return float(self.portfolio.get_balance(asset))
         except Exception:
+            return 0.0
+
+    async def _get_effective_position_async(self, symbol: str) -> float:
+        """Async version - ALWAYS use this in async contexts to avoid ASYNC_VIOLATION"""
+        asset = symbol.replace("USDT", "")
+        try:
+            # Use async balance method to avoid ASYNC_VIOLATION error
+            return await self.portfolio.get_asset_balance_async(asset)
+        except Exception as e:
+            logger.debug(f"Could not get effective position for {symbol}: {e}")
             return 0.0
 
     def _extract_current_price(self, market_data: Dict, symbol: str) -> float:
@@ -237,9 +299,9 @@ class OrderManager:
             pass
         return 0.0
 
-    # ======================================================================
+    # ====================================================================================
     # RESPONSES
-    # ======================================================================
+    # ====================================================================================
 
     def _hold(self, symbol: str) -> Dict[str, Any]:
         return {

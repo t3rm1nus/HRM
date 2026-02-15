@@ -120,9 +120,9 @@ class SimulatedExchangeClient:
         self.price_history = {}
         
         # Configuración de trading
-        self.maker_fee = 0.001  # 0.1%
-        self.taker_fee = 0.001  # 0.1%
-        self.slippage_bps = 2   # 2 basis points (0.02%)
+        self.maker_fee = 0.0005  # 0.05% (reduced for testing)
+        self.taker_fee = 0.0005  # 0.05% (reduced for testing)
+        self.slippage_bps = 0.2  # 0.2 basis points (0.002%) (reduced for testing)
         
         # Inicializar precios basados en balances
         self._initialize_market_prices()
@@ -195,47 +195,31 @@ class SimulatedExchangeClient:
             
             logger.debug(f"   Precio inicial {symbol}: {initial_price:.6f}")
 
+    # ------------------------------------------------------------------
+    # Market Price - DEPRECATED
+    # ------------------------------------------------------------------
+
     def get_market_price(self, symbol: str) -> float:
-        """Obtiene el precio actual del mercado para un símbolo"""
-        if symbol not in self.market_prices:
-            # Si no existe, crear con precio base
-            self._initialize_symbol_price(symbol)
+        """
+        DEPRECATED: No usar - use MarketDataManager instead.
         
-        return self.market_prices[symbol]
+        Obtiene el precio actual del mercado para un símbolo.
+        
+        Args:
+            symbol: Símbolo del par de trading (e.g., 'BTCUSDT', 'ETHUSDT')
+        
+        Returns:
+            Precio actual del símbolo
+        """
+        raise NotImplementedError("get_market_price is deprecated - use MarketDataManager instead")
 
     def _initialize_symbol_price(self, symbol: str):
-        """Inicializa el precio para un símbolo no existente"""
-        base_price = random.uniform(10.0, 5000.0)
-        self.market_prices[symbol] = base_price
-        self.price_history[symbol] = [base_price]
-        logger.debug(f"   Nuevo símbolo {symbol}: precio inicial {base_price:.6f}")
+        """Inicializa el precio para un símbolo no existente - DEPRECATED"""
+        raise NotImplementedError("_initialize_symbol_price is deprecated - use MarketDataManager instead")
 
     def simulate_price_movement(self, symbol: str):
-        """Simula el movimiento del precio basado en volatilidad"""
-        if symbol not in self.market_prices:
-            self._initialize_symbol_price(symbol)
-            
-        current_price = self.market_prices[symbol]
-        
-        # Movimiento aleatorio basado en volatilidad
-        volatility = self.volatility_factor
-        random_factor = random.uniform(-volatility, volatility)
-        
-        # Simular noticias o eventos del mercado
-        news_factor = random.choice([1.0, 1.0, 1.0, 1.0, 1.0,  # Normal
-                                   0.98, 1.02,  # Pequeños movimientos
-                                   0.95, 1.05,  # Movimientos moderados
-                                   0.90, 1.10])  # Movimientos grandes
-        
-        new_price = current_price * (1 + random_factor) * news_factor
-        new_price = max(new_price, 0.0001)  # Evitar precios negativos o cero
-        
-        self.market_prices[symbol] = new_price
-        self.price_history[symbol].append(new_price)
-        
-        # Mantener solo los últimos 1000 precios para evitar consumo de memoria
-        if len(self.price_history[symbol]) > 1000:
-            self.price_history[symbol] = self.price_history[symbol][-1000:]
+        """Simula el movimiento del precio basado en volatilidad - DEPRECATED"""
+        raise NotImplementedError("simulate_price_movement is deprecated - use MarketDataManager instead")
 
     async def get_account_balances(self) -> Dict[str, float]:
         """Obtiene los balances de la cuenta (simulados) - versión asincrónica para compatibilidad con BinanceClient"""

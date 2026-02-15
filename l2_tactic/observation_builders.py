@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 from loguru import logger
 
 # Import safe_float for robust array handling
-from .utils import safe_float
+from .l2_utils import safe_float
 
 
 class ObservationBuilders:

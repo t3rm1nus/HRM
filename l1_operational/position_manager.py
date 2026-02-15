@@ -30,9 +30,12 @@ class PositionManager:
         logger.info("PositionManager initialized")
 
     def calculate_order_size(self, symbol: str, action: str, signal_confidence: float,
-                           current_price: float, position_qty: float) -> float:
+                           current_price: float, position_qty: float,
+                           available_usdt: Optional[float] = None) -> float:
         """
         Calculate order size based on signal parameters and risk management
+        
+        DEPRECATED in async contexts: Use calculate_order_size_async() instead.
 
         Args:
             symbol: Trading symbol (e.g., 'BTCUSDT')
@@ -40,6 +43,7 @@ class PositionManager:
             signal_confidence: Signal confidence (0.0-1.0)
             current_price: Current market price
             position_qty: Current position quantity
+            available_usdt: Optional pre-fetched USDT balance (RECOMMENDED in async contexts)
 
         Returns:
             Order size in base currency units
@@ -54,30 +58,38 @@ class PositionManager:
                 elif self.config.get("PAPER_MODE", False) or self.config.get("OPERATION_MODE", "").upper() == "PAPER":
                     paper_mode = True
                 
-                try:
-                    if paper_mode:
-                        # Get available USDT balance from simulated client
-                        if hasattr(self.portfolio, 'client') and hasattr(self.portfolio.client, 'get_balances'):
-                            available_usdt = self.portfolio.client.get_balances().get('USDT', 0.0)
-                        elif hasattr(self.portfolio, 'get_balance'):
-                            available_usdt = self.portfolio.get_balance('USDT')
-                        else:
-                            logger.warning("Paper mode: No direct balance access, using fallback")
-                            available_usdt = 1000.0
-                        logger.debug(f"📊 PAPER MODE: Using portfolio USDT balance: ${available_usdt:.2f}")
-                    else:
-                        # Real mode - use exchange client
-                        available_usdt = self.portfolio.get_available_balance("USDT")
-                        logger.debug(f"📊 REAL MODE: Using exchange USDT balance: ${available_usdt:.2f}")
-                        
-                    # Fallback if available_usdt is 0 or None (missing exposure data)
+                # Use pre-fetched balance if provided (avoids ASYNC_VIOLATION in async contexts)
+                if available_usdt is not None:
+                    logger.debug(f"📊 Using provided USDT balance: ${available_usdt:.2f}")
                     if available_usdt <= 0:
                         logger.warning(f"Available USDT is {available_usdt:.2f}, using fallback value for {symbol}")
-                        available_usdt = 1000.0  # Fallback to $1000 available balance
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to get available USDT balance: {e}, using fallback value")
-                    available_usdt = 1000.0  # Fallback value if exposure data is missing
+                        available_usdt = 1000.0
+                else:
+                    # DEPRECATED: Only use sync balance methods when NOT in async context
+                    try:
+                        if paper_mode:
+                            # Get available USDT balance from simulated client
+                            if hasattr(self.portfolio, 'client') and hasattr(self.portfolio.client, 'get_balances'):
+                                available_usdt = self.portfolio.client.get_balances().get('USDT', 0.0)
+                            elif hasattr(self.portfolio, 'get_balance'):
+                                available_usdt = self.portfolio.get_balance('USDT')
+                            else:
+                                logger.warning("Paper mode: No direct balance access, using fallback")
+                                available_usdt = 1000.0
+                            logger.debug(f"📊 PAPER MODE: Using portfolio USDT balance: ${available_usdt:.2f}")
+                        else:
+                            # Real mode - use exchange client
+                            available_usdt = self.portfolio.get_available_balance("USDT")
+                            logger.debug(f"📊 REAL MODE: Using exchange USDT balance: ${available_usdt:.2f}")
+                            
+                        # Fallback if available_usdt is 0 or None (missing exposure data)
+                        if available_usdt <= 0:
+                            logger.warning(f"Available USDT is {available_usdt:.2f}, using fallback value for {symbol}")
+                            available_usdt = 1000.0  # Fallback to $1000 available balance
+                            
+                    except Exception as e:
+                        logger.warning(f"Failed to get available USDT balance: {e}, using fallback value")
+                        available_usdt = 1000.0  # Fallback value if exposure data is missing
 
                 # Base allocation (5-10% of available USDT for paper mode, 5-15% for real mode)
                 if paper_mode:
@@ -137,3 +149,63 @@ class PositionManager:
                 logger.warning(f"Using fallback order size for {symbol}: {fallback_qty:.6f} units")
                 return fallback_qty
             return 0.0
+
+    async def calculate_order_size_async(self, symbol: str, action: str, signal_confidence: float,
+                                        current_price: float, position_qty: float) -> float:
+        """
+        Async version of calculate_order_size.
+        ALWAYS use this in async contexts to avoid ASYNC_VIOLATION errors.
+        
+        This method fetches balances asynchronously before calculating order size.
+
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            action: 'buy' or 'sell'
+            signal_confidence: Signal confidence (0.0-1.0)
+            current_price: Current market price
+            position_qty: Current position quantity
+
+        Returns:
+            Order size in base currency units
+        """
+        try:
+            # Get USDT balance asynchronously for buy orders
+            available_usdt = None
+            if action.lower() == 'buy':
+                # Use async balance method to avoid ASYNC_VIOLATION
+                if hasattr(self.portfolio, 'get_asset_balance_async'):
+                    available_usdt = await self.portfolio.get_asset_balance_async('USDT')
+                    logger.debug(f"📊 ASYNC: Got USDT balance: ${available_usdt:.2f}")
+                elif hasattr(self.portfolio, 'client') and hasattr(self.portfolio.client, 'get_balances'):
+                    # Fallback to client balances
+                    import inspect
+                    if inspect.iscoroutinefunction(self.portfolio.client.get_balances):
+                        balances = await self.portfolio.client.get_balances()
+                    else:
+                        balances = self.portfolio.client.get_balances()
+                    available_usdt = balances.get('USDT', 0.0)
+                else:
+                    logger.warning("No async balance method available, using fallback")
+                    available_usdt = 1000.0
+            
+            # Call the sync version with the pre-fetched balance
+            return self.calculate_order_size(
+                symbol=symbol,
+                action=action,
+                signal_confidence=signal_confidence,
+                current_price=current_price,
+                position_qty=position_qty,
+                available_usdt=available_usdt
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in async order size calculation for {symbol}: {e}")
+            # Fallback to sync version with no balance (will use fallback logic)
+            return self.calculate_order_size(
+                symbol=symbol,
+                action=action,
+                signal_confidence=signal_confidence,
+                current_price=current_price,
+                position_qty=position_qty,
+                available_usdt=1000.0  # Fallback value
+            )

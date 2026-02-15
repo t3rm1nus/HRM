@@ -53,14 +53,14 @@ class MarketDataManager:
     - Configuración flexible
     """
     
-    def __init__(self, symbols: Optional[List[str]] = None, fallback_enabled: bool = True, config_dict: Optional[Dict[str, Any]] = None):
+    def __init__(self, config_dict: Optional[Dict[str, Any]] = None, symbols: Optional[List[str]] = None, fallback_enabled: bool = None):
         """
         Inicializa el MarketDataManager.
         
         Args:
+            config_dict: Configuración opcional (usa config global si no se proporciona)
             symbols: Lista de símbolos a manejar (usa config global si no se proporciona)
             fallback_enabled: Habilita estrategia de fallback (usa config global si no se proporciona)
-            config_dict: Configuración opcional (usa config global si no se proporciona)
         """
         # Usar config_dict si se proporciona, sino usar config global (sin copiar)
         # HRMAppConfig es inmutable, única, y se inyecta, no se copia
@@ -75,6 +75,8 @@ class MarketDataManager:
         if fallback_enabled is not None:
             fallback_value = "external->realtime->datafeed" if fallback_enabled else "datafeed_only"
             self.fallback_strategy = FallbackStrategy(fallback_value)
+        elif config_dict and "FALLBACK_STRATEGY" in config_dict:
+            self.fallback_strategy = FallbackStrategy(config_dict["FALLBACK_STRATEGY"])
         else:
             self.fallback_strategy = FallbackStrategy(self.config.get("FALLBACK_STRATEGY", "external->realtime->datafeed"))
         
@@ -296,16 +298,39 @@ class MarketDataManager:
             logger.error(f"❌ No se pudo reparar {symbol}: {e}")
             return None
     
-    async def _update_cache(self, data: Dict[str, pd.DataFrame], source: str):
-        """Actualiza el caché con datos válidos."""
+    async def _update_cache(self, data: Dict[str, pd.DataFrame], source: str, merge: bool = True):
+        """
+        Actualiza el caché con datos válidos.
+        
+        Args:
+            data: Datos a actualizar
+            source: Fuente de los datos
+            merge: Si True, fusiona con datos existentes. Si False, sobrescribe completamente.
+        """
         async with self._cache_lock:
-            self._cache = CacheEntry(
-                data=data,
-                timestamp=time.time(),
-                source=source,
-                validation_passed=True
-            )
-            logger.info(f"💾 Caché actualizado desde {source}")
+            if merge and self._cache and self._cache.data:
+                # Fusionar con datos existentes
+                merged_data = self._cache.data.copy()
+                for symbol, df in data.items():
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        merged_data[symbol] = df
+                        logger.debug(f"💾 {symbol}: actualizado desde {source}")
+                self._cache = CacheEntry(
+                    data=merged_data,
+                    timestamp=time.time(),
+                    source=source,
+                    validation_passed=True
+                )
+                logger.info(f"💾 Caché actualizado (merge) desde {source}: {len(merged_data)} símbolos")
+            else:
+                # Sobrescribir completamente
+                self._cache = CacheEntry(
+                    data=data,
+                    timestamp=time.time(),
+                    source=source,
+                    validation_passed=True
+                )
+                logger.info(f"💾 Caché actualizado desde {source}: {len(data)} símbolos")
     
     async def _get_cached_data(self) -> Optional[Dict[str, pd.DataFrame]]:
         """Obtiene datos del caché si están vigentes."""
@@ -470,7 +495,7 @@ class MarketDataManager:
                 df = await self.data_feed.fetch_ohlcv(symbol, timeframe, limit)
                 
                 if df is not None and not df.empty:
-                    # Actualizar caché
+                    # Actualizar caché SOLO con este símbolo (no merge)
                     async with self._cache_lock:
                         self._cache = CacheEntry(
                             data={symbol: df},
@@ -495,6 +520,114 @@ class MarketDataManager:
                 
         except Exception as e:
             logger.error(f"❌ Error en force_warmup: {e}")
+            return False
+
+    async def warmup_all_symbols(self, timeframe: str = "1m", limit: int = 100) -> bool:
+        """
+        💥 PRIORIDAD 2: Warm-up de datos para TODOS los símbolos.
+        
+        Descarga datos para todos los símbolos configurados y los fusiona en el caché.
+        Esto evita el problema de que ETHUSDT no tenga precio disponible.
+        
+        Args:
+            timeframe: Timeframe (default: 1m)
+            limit: Número de velas (default: 100)
+            
+        Returns:
+            True si al menos un símbolo fue descargado exitosamente, False si falló todo
+        """
+        logger.info(f"🔥 warmup_all_symbols: {self.symbols}, {timeframe}, {limit} velas")
+        
+        try:
+            # Inicializar componentes si es necesario
+            await self._init_components()
+            
+            if not self.data_feed:
+                logger.warning(f"⚠️ warmup_all_symbols: data_feed no disponible")
+                return False
+            
+            # Descargar datos para todos los símbolos en paralelo
+            tasks = []
+            for symbol in self.symbols:
+                if symbol not in self.config.get("EXCLUDED_SYMBOLS", []):
+                    tasks.append(self.data_feed.fetch_ohlcv(symbol, timeframe, limit))
+            
+            if not tasks:
+                logger.warning(f"⚠️ warmup_all_symbols: no hay símbolos para descargar")
+                return False
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Fusionar resultados en un solo dict
+            merged_data = {}
+            success_count = 0
+            
+            for symbol, result in zip(self.symbols, results):
+                if isinstance(result, pd.DataFrame) and not result.empty:
+                    merged_data[symbol] = result
+                    success_count += 1
+                    logger.info(f"✅ {symbol}: {len(result)} velas descargadas")
+                else:
+                    logger.warning(f"⚠️ {symbol}: datos no disponibles o inválidos")
+            
+            if merged_data:
+                # Actualizar caché con TODOS los símbolos
+                async with self._cache_lock:
+                    self._cache = CacheEntry(
+                        data=merged_data,
+                        timestamp=time.time(),
+                        source="warmup_all",
+                        validation_passed=True
+                    )
+                
+                logger.info(f"✅ warmup_all_symbols exitoso: {success_count}/{len(self.symbols)} símbolos")
+                logger.info(f"   Símbolos en caché: {list(merged_data.keys())}")
+                return success_count > 0
+            else:
+                logger.error(f"❌ warmup_all_symbols: ningún símbolo descargado")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error en warmup_all_symbols: {e}")
+            return False
+
+    async def update_symbol_in_cache(self, symbol: str, df: pd.DataFrame) -> bool:
+        """
+        Actualiza un símbolo específico en el caché sin afectar los demás.
+        
+        Args:
+            symbol: Símbolo a actualizar
+            df: DataFrame con los nuevos datos
+            
+        Returns:
+            True si se actualizó correctamente
+        """
+        try:
+            async with self._cache_lock:
+                if self._cache is None:
+                    self._cache = CacheEntry(
+                        data={},
+                        timestamp=time.time(),
+                        source="update_symbol",
+                        validation_passed=True
+                    )
+                
+                # Fusionar con datos existentes
+                current_data = self._cache.data.copy() if self._cache.data else {}
+                current_data[symbol] = df
+                
+                self._cache = CacheEntry(
+                    data=current_data,
+                    timestamp=time.time(),
+                    source="update_symbol",
+                    validation_passed=True
+                )
+            
+            logger.debug(f"✅ {symbol} actualizado en caché")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error actualizando {symbol} en caché: {e}")
             return False
     
     async def is_warmed_up(self) -> bool:
@@ -525,6 +658,30 @@ class MarketDataManager:
             }
         }
     
+    async def get_market_prices(self) -> Dict[str, float]:
+        """
+        Obtiene los precios actuales de mercado para todos los símbolos.
+        
+        Returns:
+            Dict[str, float]: Diccionario con el precio actual de cada símbolo
+        """
+        try:
+            market_data = await self.get_market_data()
+            prices = {}
+            
+            for symbol, df in market_data.items():
+                if isinstance(df, pd.DataFrame) and "close" in df.columns and not df.empty:
+                    prices[symbol] = float(df["close"].iloc[-1])
+                elif isinstance(df, dict) and "close" in df:
+                    prices[symbol] = float(df["close"])
+            
+            logger.debug(f"📈 Precios de mercado obtenidos: {prices}")
+            return prices
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo precios de mercado: {e}")
+            return {}
+
     async def close(self):
         """Cierra conexiones y recursos."""
         try:

@@ -99,7 +99,7 @@ class L2Metrics:
         timeframe: Optional[str] = None,
         side: Optional[str] = None,
     ):
-        from .utils import safe_float
+        from .l2_utils import safe_float
         pnl = safe_float(result.get("pnl", 0.0))
         rec = ExecRecord(
             order=order,
@@ -131,7 +131,7 @@ class L2Metrics:
     ):
         key = (strategy_id, timeframe)
         self._preds[key].append(int(y_pred))
-        from .utils import safe_float
+        from .l2_utils import safe_float
         self._scores[key].append(safe_float(y_score))
 
     def record_outcome(
@@ -154,7 +154,7 @@ class L2Metrics:
         if not self.execution_history:
             return 0.0
         rets = [e.pnl for e in self.execution_history]
-        from .utils import safe_float
+        from .l2_utils import safe_float
         mean = safe_float(np.mean(rets))
         std = safe_float(np.std(rets))
         if std == 0:
@@ -170,13 +170,13 @@ class L2Metrics:
         peak = np.maximum.accumulate(cum)
         dd = (cum - peak).min() if len(cum) else 0.0
         # devolver positivo como magnitud de DD
-        from .utils import safe_float
+        from .l2_utils import safe_float
         return safe_float(abs(dd))
 
     def avg_latency(self) -> float:
         if not self.latency_records:
             return 0.0
-        from .utils import safe_float
+        from .l2_utils import safe_float
         return safe_float(np.mean(self.latency_records))
 
     # ==== Métricas IA ====
@@ -201,7 +201,7 @@ class L2Metrics:
         y_pred = self._preds.get(key, [])
         y_true = self._truth.get(key, [])
         precision, recall, f1 = self._precision_recall(y_true, y_pred)
-        from .utils import safe_float
+        from .l2_utils import safe_float
         return {
             "precision": precision,
             "recall": recall,
@@ -228,7 +228,7 @@ class L2Metrics:
             out.setdefault(key_s, {})
             wins = self._wins_buckets[(strategy_id, timeframe)]
             n = self._trades_buckets[(strategy_id, timeframe)]
-            from .utils import safe_float
+            from .l2_utils import safe_float
             mean = safe_float(np.mean(pnls)) if pnls else 0.0
             std = safe_float(np.std(pnls)) if pnls else 0.0
             sharpe = (mean / std) if std > 1e-12 else 0.0

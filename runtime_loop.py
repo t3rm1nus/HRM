@@ -261,8 +261,8 @@ class HRMRuntimeLoop:
         try:
             await self.portfolio_manager.update_from_orders_async(processed_orders, market_data)
             
-            # Update trading metrics
-            total_value = self.portfolio_manager.get_total_value(market_data)
+            # Update trading metrics - CRITICAL FIX: Use async method (no market_data needed - PortfolioManager uses injected MarketDataManager)
+            total_value = await self.portfolio_manager.get_total_value_async()
             self.trading_metrics.update_from_orders(processed_orders, total_value)
             
             # Save portfolio state periodically

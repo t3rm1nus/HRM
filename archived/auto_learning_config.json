@@ -1,0 +1,10 @@
+{
+  "mode": "production",
+  "enabled": true,
+  "fix_mode": false,
+  "adaptive_mode": true,
+  "retrain_interval_hours": 168,
+  "min_trades_for_retrain": 100,
+  "win_rate_threshold": 0.52,
+  "max_drawdown_threshold": 0.12
+}

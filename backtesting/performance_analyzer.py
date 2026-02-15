@@ -166,7 +166,7 @@ class PerformanceAnalyzer:
                     pnl = t.get('pnl')
                     commission = t.get('commission', 0)
                     if pnl is not None:
-                        from l2_tactic.utils import safe_float
+from l2_tactic.l2_utils import safe_float
                         pnl_list.append(safe_float(pnl))
                         r = pnl / initial_capital if initial_capital > 0 else 0.0
                         trade_returns.append(r)

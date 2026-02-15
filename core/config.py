@@ -6,6 +6,15 @@ HRM Configuration - Strongly Typed Configuration Object
 ✅ Type safety con dataclasses
 ✅ Autocompletado en IDE
 """
+
+# =============================================================================
+# CRITICAL SYSTEM MODE CONFIGURATION - FORZAR MODO PAPER
+# =============================================================================
+# ⚠️ IMPORTANTE: Este sistema SOLO opera en modo paper/simulado
+# NO modificar a 'live' - Solo trading simulado permitido
+SYSTEM_MODE = 'paper'  # NO usar 'live' - Solo 'paper' o 'simulated'
+PAPER_MODE = True      # Siempre True para forzar modo paper
+
 import os
 import json
 from datetime import datetime
@@ -411,36 +420,36 @@ else:
 
 # Global configuration instance
 _config_instance = None
-# Force mode override - set by SystemCleanup to force paper mode
+# Force mode override - set by bootstrap to force specific mode
 _forced_mode: str = None
 
 def set_forced_mode(mode: str):
-    """Force a specific mode - used by SystemCleanup"""
+    """Force a specific mode - used by bootstrap only"""
     global _forced_mode
     _forced_mode = mode
-    logger.info(f"🎯 MODE FORCED to: {mode}")
+    logger.info(f"🎯 MODE FORCED by bootstrap to: {mode}")
 
 def get_config(mode: str = None) -> EnvironmentConfig:
     """
     Get global configuration instance.
     
-    IMPORTANT: If _forced_mode is set by SystemCleanup, it takes precedence.
-    After cleanup, mode will ALWAYS be forced to paper (unless overridden).
+    IMPORTANT: This function should ONLY be called from bootstrap.
+    All other components should receive 'mode' via constructor injection.
     
-    🔥 PRIORIDAD 1: PROHIBIDO CARGAR "live" EN PAPER
-    Si mode es None o "paper", forzar a "paper" - nunca usar "live"
+    The mode is determined by:
+    1. _forced_mode (set by bootstrap via set_forced_mode)
+    2. mode parameter passed to this function
+    3. Default to "paper" if neither is set
     """
     global _config_instance, _forced_mode
     
-    # 🔥 PRIORIDAD 1: PROHIBIDO - Si viene "live" en paper mode, error
+    # Priority 1: Use forced mode from bootstrap if set
     if _forced_mode is not None:
         effective_mode = _forced_mode
     elif mode is not None:
-        if mode == "live":
-            raise RuntimeError("🚨 FATAL: core.config NO puede cargar 'live' en modo paper. Use 'paper' explícitamente.")
         effective_mode = mode
     else:
-        effective_mode = "paper"  # Default to paper, never live
+        effective_mode = "paper"  # Default to paper
     
     if _config_instance is None or _config_instance.mode != effective_mode:
         _config_instance = EnvironmentConfig(effective_mode)

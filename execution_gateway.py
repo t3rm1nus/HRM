@@ -177,12 +177,11 @@ class ExecutionGateway:
     async def _update_portfolio_and_metrics(self, executed_orders: List[Dict[str, Any]]):
         """Update portfolio state and trading metrics."""
         try:
-            # Update portfolio from executed orders
-            market_data = self.portfolio_manager.get_market_data()
-            await self.portfolio_manager.update_from_orders_async(executed_orders, market_data)
+            # Update portfolio from executed orders - VERSIÓN PURA: no requiere market_data
+            await self.portfolio_manager.update_from_orders_async(executed_orders)
             
-            # Update trading metrics
-            total_value = self.portfolio_manager.get_total_value(market_data)
+            # Update trading metrics - CRITICAL FIX: Use async method (no market_data needed)
+            total_value = await self.portfolio_manager.get_total_value_async()
             self.trading_metrics.update_from_orders(executed_orders, total_value)
             
             # Save portfolio state periodically
@@ -304,9 +303,9 @@ class ExecutionGateway:
             symbol = getattr(signal, 'symbol', '')
             confidence = getattr(signal, 'confidence', 0.5)
             
-            # Get portfolio state
+            # Get portfolio state - CRITICAL FIX: Use async method (no market_data needed)
             portfolio_state = self.portfolio_manager.get_portfolio_state()
-            total_value = self.portfolio_manager.get_total_value(market_data)
+            total_value = await self.portfolio_manager.get_total_value_async()
             
             # Calculate position size based on confidence and risk limits
             base_allocation = total_value * 0.10  # 10% base allocation
