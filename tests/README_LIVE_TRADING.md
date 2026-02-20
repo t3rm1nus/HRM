@@ -1,5 +1,22 @@
 # HRM Live Trading Setup & Fee Monitoring Guide
 
+---
+
+## ⚠️ ADVERTENCIA CRÍTICA - DOCUMENTO HISTÓRICO
+
+> **ESTE DOCUMENTO ES HISTÓRICO - CONFIGURACIÓN DE REFERENCIA ÚNICAMENTE**
+> 
+> El sistema **actualmente opera con PAPER_MODE=True forzado** en `core/config.py` y `main.py`.
+> 
+> **Para activar live trading:**
+> 1. Establecer explícitamente `PAPER_MODE=false` en variables de entorno
+> 2. Revisar la sección "Modos de Operación" en `readme.md`
+> 3. Confirmar manualmente con espera de seguridad de 10 segundos
+> 
+> **⚠️ RIESGO:** Este documento describe configuración LIVE pero el código fuerza PAPER_MODE por seguridad.
+
+---
+
 ## 🚀 Live Trading Configuration Completed
 
 The system has been configured for live trading with the following settings:

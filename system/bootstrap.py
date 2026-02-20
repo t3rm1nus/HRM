@@ -22,7 +22,7 @@ def bootstrap_simulated_exchange(config, force_paper: bool = True):
         log.info("Paper mode disabled - not initializing SimulatedExchangeClient")
         return None
 
-    # ✅ FIXED: Establecer balances iniciales correctos (USDT=3000, BTC=0, ETH=0)
+    # FIX: Establecer balances iniciales correctos (USDT=500, BTC=0, ETH=0) - Capital real del sistema
     # Primero intentar leer de config, si no existe usar valores por defecto
     initial_balances = config.get("simulated_initial_balances", {})
     
@@ -31,15 +31,29 @@ def bootstrap_simulated_exchange(config, force_paper: bool = True):
         initial_balances = {
             "BTC": 0.0,
             "ETH": 0.0,
-            "USDT": 3000.0
+            "USDT": 500.0
         }
-        log.info("🎯 Using default initial balances: USDT=3000, BTC=0, ETH=0")
+        log.info("🎯 Using default initial balances: USDT=500, BTC=0, ETH=0")
     else:
         # Asegurar que todos los activos estén presentes
         initial_balances.setdefault("BTC", 0.0)
         initial_balances.setdefault("ETH", 0.0)
-        initial_balances.setdefault("USDT", 3000.0)
+        initial_balances.setdefault("USDT", 500.0)
         log.info(f"🎯 Using configured initial balances: {initial_balances}")
+
+    # FIX: Validar que el balance configurado coincide con el singleton existente
+    if SimulatedExchangeClient._instance is not None:
+        # FIX: Usar get_balances() (plural) o acceder directamente a balances
+        existing_balances = SimulatedExchangeClient._instance.get_balances()
+        existing_usdt = existing_balances.get('USDT', 0.0)
+        configured_usdt = initial_balances.get('USDT', 0)
+        if abs(existing_usdt - configured_usdt) > 1.0:
+            log.warning(
+                f"⚠️ CAPITAL MISMATCH: singleton tiene {existing_usdt} USDT "
+                f"pero config dice {configured_usdt} USDT. "
+                f"Usando singleton existente para evitar reset de capital."
+            )
+            # No sobreescribir — el singleton ya tiene el valor correcto
 
 # 🔄 CRITICAL FIX: NEVER reset singleton - maintain state across cycles
     # The singleton pattern ensures state persistence in paper trading mode

@@ -1,11 +1,11 @@
 {
-  "capital_usdt": 3000.0,
+  "capital_usdt": 500.0,
   "btc": 0.0,
   "eth": 0.0,
   "mode": "paper",
   "auto_learning": "fix",
   "initial_balances": {
-    "USDT": 3000.0,
+    "USDT": 500.0,
     "BTC": 0.0,
     "ETH": 0.0
   },

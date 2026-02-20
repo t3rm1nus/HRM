@@ -261,7 +261,15 @@ def async_context_reset() -> Dict[str, any]:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                logger.warning("⚠️ Async loop already running, skipping reset")
+                # FIX: El skip del reset del loop debe ser visible y no silencioso
+                logger.warning(
+                    "⚠️ CRÍTICO: Async loop reset omitido. "
+                    "Si BINANCE_MODE=live, el sistema puede arrancar en modo incorrecto. "
+                    "Verificando PAPER_MODE manualmente..."
+                )
+                # Forzar paper mode aquí también, no solo en el flujo normal
+                from core.config import HRMConfig
+                HRMConfig.PAPER_MODE = True
                 return {"success": True, "message": "Loop already running"}
         except:
             pass
@@ -322,3 +330,67 @@ def get_cleanup_status() -> Dict[str, any]:
             "success": False,
             "error": str(e)
         }
+
+
+# FIX: Añadir validación de contenido del cache de sentimiento
+def _validate_sentiment_cache(cache_file_path):
+    """Valida que el cache de sentimiento no contiene datos de prueba."""
+    try:
+        import json
+        with open(cache_file_path, 'r') as f:
+            data = json.load(f)
+        
+        texts = data.get('texts', [])
+        if not texts:
+            return False
+        
+        # Detectar datos de prueba (Sample text pattern)
+        sample_count = sum(
+            1 for t in texts 
+            if 'Sample text' in str(t) or 'sample text' in str(t).lower()
+        )
+        sample_ratio = sample_count / len(texts)
+        
+        if sample_ratio > 0.1:  # Más del 10% son datos de prueba
+            logger.warning(
+                f"⚠️ Cache de sentimiento contiene {sample_ratio:.0%} datos de prueba. "
+                f"Eliminando cache corrupto: {cache_file_path}"
+            )
+            os.remove(cache_file_path)
+            return False
+        
+        return True
+    except Exception:
+        return False
+
+
+# FIX: Limpieza de archivos de sentiment corruptos
+def cleanup_corrupt_sentiment_cache():
+    """Limpia archivos de sentiment cache que contienen datos de prueba."""
+    import glob
+    
+    patterns = [
+        "archived/sentiment_cache_*.json",
+        "sentiment_cache_*.json",
+        "sentiment_inference_*.csv"
+    ]
+    
+    deleted_count = 0
+    for pattern in patterns:
+        for file_path in glob.glob(pattern):
+            if 'sentiment_cache' in file_path and file_path.endswith('.json'):
+                if not _validate_sentiment_cache(file_path):
+                    deleted_count += 1
+            else:
+                # Eliminar archivos de inference CSV sin validación
+                try:
+                    os.remove(file_path)
+                    logger.info(f"🗑️ Eliminado archivo de sentiment: {file_path}")
+                    deleted_count += 1
+                except:
+                    pass
+    
+    if deleted_count > 0:
+        logger.info(f"✅ Eliminados {deleted_count} archivos de sentiment corruptos/obsoletos")
+    
+    return deleted_count

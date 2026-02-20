@@ -640,16 +640,11 @@ class PortfolioManager:
                     "total_fees": 0.0,
                 }
                 
-                # Calculate initial total value using simulated client's prices
-                if hasattr(self.exchange_client, 'get_market_price'):
-                    btc_price = self.exchange_client.get_market_price("BTCUSDT")
-                    eth_price = self.exchange_client.get_market_price("ETHUSDT")
-                    self.portfolio["total"] = (
-                        self.portfolio["USDT"]["free"] +
-                        self.portfolio["BTCUSDT"]["position"] * btc_price +
-                        self.portfolio["ETHUSDT"]["position"] * eth_price
-                    )
-                    self.portfolio["peak_value"] = self.portfolio["total"]
+                # FIX: Calcular valor inicial usando el balance USDT directamente
+                # (MarketDataManager no está disponible en este punto del init async)
+                # El NAV correcto se calculará después en initialize_async()
+                self.portfolio["total"] = self.initial_balance
+                self.portfolio["peak_value"] = self.initial_balance
                 
                 self.peak_value = self.portfolio["peak_value"]
                 self.total_fees = 0.0

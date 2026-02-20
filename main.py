@@ -96,6 +96,30 @@ async def main():
     """Main HRM system function."""
     
     # ================================================================
+    # FIX: Verificación de seguridad modo LIVE — debe ejecutarse ANTES del cleanup
+    # ================================================================
+    import os
+    binance_mode = os.getenv('BINANCE_MODE', 'paper').lower()
+    paper_mode_env = os.getenv('PAPER_MODE', 'true').lower()
+    
+    if binance_mode == 'live' and paper_mode_env != 'false':
+        logger.warning(
+            "⚠️ BINANCE_MODE=live detectado pero PAPER_MODE no es 'false' explícito. "
+            "Forzando paper mode por seguridad. Para operar en live, debes establecer "
+            "PAPER_MODE=false de forma explícita y consciente."
+        )
+        os.environ['PAPER_MODE'] = 'true'
+        os.environ['BINANCE_MODE'] = 'paper'
+    
+    if binance_mode == 'live' and paper_mode_env == 'false':
+        # Requiere confirmación explícita — nunca arrancar live sin esto
+        logger.critical("🚨 MODO LIVE CON DINERO REAL DETECTADO 🚨")
+        logger.critical(f"   Capital en riesgo: {os.getenv('INITIAL_CAPITAL', 'DESCONOCIDO')} USDT")
+        logger.critical("   Tienes 10 segundos para cancelar (Ctrl+C)...")
+        await asyncio.sleep(10)
+        logger.critical("🚨 ARRANCANDO EN MODO LIVE — SIN VUELTA ATRÁS")
+    
+    # ================================================================
     # CRITICAL VARIABLE DECLARATIONS
     # ================================================================
     state_coordinator: Optional[StateCoordinator] = None

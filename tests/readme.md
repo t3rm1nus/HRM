@@ -1068,6 +1068,34 @@ Tomar decisiones de trading razonadas y trazables para múltiples activos (BTC, 
 - **Nivel 3:** Análisis Estratégico — horas
 - **Nivel 2:** Táctica de Ejecución — minutos
 - **Nivel 1:** Ejecución + Gestión de Riesgo — segundos
+
+### 📋 **Flujo de Inicialización Real (main.py)**
+
+El sistema real ejecuta **17 pasos de inicialización** (STEP 1-17) más pasos adicionales de prioridad:
+
+#### Pasos de Inicialización en main.py:
+
+| Paso | Descripción | Componente |
+|------|-------------|------------|
+| **STEP 1** | System Cleanup - Limpieza completa del sistema (singletons, archivos temporales) | `system/system_cleanup.py` |
+| **STEP 2** | Initialize StateCoordinator (Singleton) | `system/state_coordinator.py` |
+| **STEP 3** | Initialize System Bootstrap | `system/bootstrap.py` |
+| **STEP 4** | Initialize MarketDataManager | `system/market_data_manager.py` |
+| **STEP 5** | Ensure Critical Components (PortfolioManager, OrderManager, L2Processor) | Varios |
+| **STEP 5** | Critical Injections - PortfolioManager into OrderManager | Inyección de dependencias |
+| **STEP 6** | Get Initial State | `system/state_coordinator.py` |
+| **STEP 8** | Initialize Position Management (PositionRotator, AutoRebalancer) | `core/position_rotator.py` |
+| **STEP 9** | Initialize TradingPipelineManager | `system/trading_pipeline_manager.py` |
+| **STEP 10** | Initialize ErrorRecoveryManager | `system/error_recovery_manager.py` |
+| **STEP 11** | Get Initial Market Data | `system/market_data_manager.py` |
+| **STEP 14** | Bootstrap Deployment (Initial Entry) | `core/position_rotator.py` |
+| **STEP 15** | Integrate Auto-Learning System | `integration_auto_learning.py` |
+| **STEP 16** | Apply Fundamental Rule | `core/state_manager.py` |
+| **PRIORIDAD 2** | Warmup All Symbols | `market_data_manager.warmup_all_symbols()` |
+| **PRIORIDAD 3** | Fail-Fast Check | Validación de datos de mercado |
+| **STEP 17** | Main Trading Loop | Loop principal de trading |
+
+**Nota:** Algunos números de paso (7, 12, 13) no están documentados explícitamente en los comentarios del código, pero la funcionalidad está cubierta por otros pasos.
 ## 🏗️ ARQUITECTURA REAL DEL SISTEMA
 
 ### 🎯 **NIVEL 2 - TÁCTICO (L2)** ✅ IMPLEMENTADO Y MODULARIZADO
@@ -1615,6 +1643,77 @@ HRM/
 ```
 
 > **Nota:** Esta estructura resume el proyecto real y es suficiente para navegar y extender el código.
+
+---
+
+## 📁 Anomalías de Estructura (Contexto Histórico)
+
+### ⚠️ Procesadores L1/L2 en `l3_strategy/`
+
+Dentro de la carpeta `l3_strategy/` existen ficheros que **no pertenecen** a la arquitectura jerárquica actual:
+
+| Fichero | Ubicación | Estado | Contexto |
+|---------|-----------|--------|----------|
+| `l1_processor.py` | `l3_strategy/l1_processor.py` | 🕰️ Legacy | Creado durante refactorización temprana |
+| `l2_processor.py` | `l3_strategy/l2_processor.py` | 🕰️ Legacy | Punto de procesamiento centralizado antiguo |
+
+**¿Por qué están ahí?**
+
+1. **Historia:** Durante una refactorización temprana, L3 Strategy fue diseñado como punto central de procesamiento
+2. **Transición:** La arquitectura evolucionó hacia `core/l3_processor.py` y `l2_tactic/` como implementaciones principales
+3. **Preservación:** Se mantienen por compatibilidad con scripts de backtesting antiguos y notebooks de investigación
+
+**Estado actual:**
+- ❌ **NO** son usados por `main.py` en la ejecución actual
+- ✅ Implementaciones activas: `core/l3_processor.py` (L3) y `l2_tactic/` (L2)
+- 📚 Propósito: Documentación histórica y compatibilidad con herramientas de investigación
+
+---
+
+## 📊 MÓDULOS AUXILIARES
+
+Los siguientes módulos existen en el repositorio pero **NO forman parte del ciclo de trading activo**:
+
+### 🏛️ `hacienda/` - Gestión Fiscal Española
+
+**Propósito:** Seguimiento fiscal completo para criptomonedas según normativa española
+
+**Funcionalidades:**
+- ✅ Seguimiento automático de operaciones (compras/ventas)
+- ✅ Cálculo FIFO para ganancias/pérdidas
+- ✅ Informes fiscales anuales con base imponible
+- ✅ Exportación de datos en CSV/JSON/Excel
+- ✅ Cumplimiento normativo español (Modelo 100, 720)
+
+**Integración:**
+- Se integra automáticamente con el portfolio manager
+- Guarda operaciones en `hacienda/operaciones.csv`
+- Genera posiciones FIFO en `hacienda/posiciones_fifo.json`
+
+**Estado:**
+- 📊 **Operativo** pero fuera del ciclo de trading
+- ⏰ Uso: Post-trading, generación de informes fiscales anuales
+- 🔗 Documentación: Ver `hacienda/README.md`
+
+### 🧠 `ml_training/` - Entrenamiento de Modelos
+
+**Propósito:** Scripts de entrenamiento offline para modelos de machine learning
+
+**Contenido:**
+- `modelo1_train_lgbm_modelo1.py` - Entrenamiento modelo L1 LightGBM
+- `modelo1_train_logreg_modelo1.py` - Entrenamiento modelo L1 Logistic Regression
+- `modelo1_train_rf_modelo1.py` - Entrenamiento modelo L1 Random Forest
+- `train_grok_ultra_optimized.py` - Entrenamiento modelo Grok optimizado
+- `train_lgbm_modelo3.py` - Entrenamiento modelo L3 LightGBM
+- `train_modelo_3_claude.py` - Entrenamiento modelo Claude
+- `train_rf_modelo2.py` - Entrenamiento modelo L2 Random Forest
+
+**Estado:**
+- 🧪 **Scripts de utilidad** para reentrenamiento manual
+- ⏰ Uso: Fuera del ciclo de trading, ejecutados bajo demanda
+- 🔄 Los modelos entrenados se guardan en `models/L1/`, `models/L2/`, `models/L3/`
+
+**Nota importante:** Estos scripts **NO** son parte del sistema de auto-aprendizaje (`auto_learning_system.py`), que opera de forma autónoma dentro del ciclo de trading.
 
 ---
 

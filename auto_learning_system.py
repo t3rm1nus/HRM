@@ -476,6 +476,10 @@ class AutoRetrainingSystem:
         self.model_versions = {}
         self.performance_history = []
 
+        # FIX: Añadir lock para prevenir race condition en reentrenamiento
+        self._retraining_lock = asyncio.Lock()
+        self._retraining_in_progress = False
+
         # Componentes anti-overfitting (5 capas)
         self.validator = AntiOverfitValidator()
         self.regularizer = AdaptiveRegularizer()
@@ -550,9 +554,31 @@ class AutoRetrainingSystem:
         """Añadir datos de trade y verificar triggers automáticos"""
         self.data_buffer.append(trade_data)
 
-        # Verificar todos los triggers
-        if self._should_retrain():
-            asyncio.create_task(self._auto_retrain_models())
+        # FIX: Modificar add_trade_data para evitar la race condition
+        if self._should_retrain() and not self._retraining_in_progress:
+            # FIX: Usar get_event_loop solo si hay loop corriendo, con guard
+            try:
+                loop = asyncio.get_running_loop()
+                self._retraining_in_progress = True
+                task = loop.create_task(self._safe_retrain_wrapper())
+                task.add_done_callback(lambda t: self._on_retrain_complete(t))
+            except RuntimeError:
+                logger.warning("No hay event loop corriendo — reentrenamiento pospuesto")
+
+    async def _safe_retrain_wrapper(self):
+        # FIX: Lock para garantizar solo un reentrenamiento a la vez
+        async with self._retraining_lock:
+            try:
+                await self._auto_retrain_models()
+            except Exception as e:
+                logger.error(f"❌ Error en auto-reentrenamiento: {e}")
+            finally:
+                self._retraining_in_progress = False
+
+    def _on_retrain_complete(self, task):
+        if task.exception():
+            logger.error(f"❌ Auto-reentrenamiento falló: {task.exception()}")
+            self._retraining_in_progress = False
 
     def _should_retrain(self) -> bool:
         """Decidir automáticamente si reentrenar"""

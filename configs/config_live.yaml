@@ -4,7 +4,7 @@
 
 trading:
   # Balance & Risk - Conservative for live trading
-  initial_balance: 1000.0  # Conservative starting balance
+  initial_balance: 500.0  # FIX: Unificado a 500 USDT - capital real del sistema
   max_portfolio_exposure_btc: 0.40
   max_portfolio_exposure_eth: 0.40
   max_position_size_usdt: 600.0  # Half of testnet for safety
