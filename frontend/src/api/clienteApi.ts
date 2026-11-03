@@ -95,7 +95,7 @@ const obterFetchClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
   const token = apiConfig.authToken ?? localStorage.getItem('token');
   return {
     async get<T>(endpoint: string, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }> {
-      const url = \`\${apiConfig.baseURL}\${endpoint}\`;
+      const url = `${apiConfig.baseURL}${endpoint}`;
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), apiConfig.timeout);
@@ -105,7 +105,7 @@ const obterFetchClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
           method: 'GET',
           headers: {
             'content-type': 'application/json',
-            ...(token ? { authorization: \`Bearer \${token}\` } : {}),
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
             ...apiConfig.headers,
           },
           signal: controller.signal,
@@ -156,7 +156,7 @@ const obterFetchClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
     },
 
     async post<T>(endpoint: string, body: unknown, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }> {
-      const url = \`\${apiConfig.baseURL}\${endpoint}\`;
+      const url = `${apiConfig.baseURL}${endpoint}`;
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), apiConfig.timeout);
@@ -166,7 +166,7 @@ const obterFetchClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            ...(token ? { authorization: \`Bearer \${token}\` } : {}),
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
             ...apiConfig.headers,
           },
           signal: controller.signal,
@@ -224,7 +224,8 @@ const obtenerErrorFetch = (error: any): ErrorApi | ErrorRedes => {
     if (error.name === 'Error') {
       return new ErrorApi(error.message, CODIGOS_ESTADO_API.SERVER_ERROR, undefined, undefined, undefined);
     }
-const mensaje = error.message ?? 'Error de red';
+}
+  const mensaje = error.message ?? 'Error de red';
   const código = error.code;
 
   if (código === 'ECONNABORTED') {

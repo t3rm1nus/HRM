@@ -1,4 +1,4 @@
-export * from './badgeModo';
+export * from './ui/badgeModo';
 export * from './modaConfirmacionFuerte';
 export * from './navbar';
 export * from './sidebar';

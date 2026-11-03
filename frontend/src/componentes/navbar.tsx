@@ -1,6 +1,6 @@
 import React from 'react';
 import { useModoStore } from '../estado/storeModo';
-import { BadgeModo } from './badgeModo';
+import { BadgeModo } from './ui/badgeModo';
 import { ModalConfirmacionFuerte } from './modaConfirmacionFuerte';
 import { PALABRAS_VERIFICACION } from '../dominio/modo';
 

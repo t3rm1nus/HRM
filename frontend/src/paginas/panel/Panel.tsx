@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useModoStore } from '../estado/storeModo';
-import { BadgeModo } from '../componentes/badgeModo';
+import { BadgeModo } from '../../componentes/ui/badgeModo';
 import { Semaforo } from '../componentes/ui/semaforo';
 import { InsigniaOrigen } from '../componentes/ui/insigniaOrigen';
 import { TarjetaKpi } from '../componentes/ui/tarjetaKpi';
