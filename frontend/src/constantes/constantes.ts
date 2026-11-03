@@ -2,22 +2,20 @@
 
 export const RUTAS = {
   INICIO: '/',
-  LOGIN: '/login',
-  DASHBOARD: '/dashboard',
+  MERCADO: '/mercado',
+  RENDIMIENTO: '/rendimiento',
   OPERACIONES: '/operaciones',
-  PORTAFOLIO: '/portafolio',
-  REPORTES: '/reportes',
-  USUARIOS: '/usuarios',
+  CARTERA: '/cartera',
+  SEÑALES: '/senales',
+  ESTRATEGIA: '/estrategia',
+  RIESGO: '/riesgo',
+  AUTOAPRENDIZAJE: '/autoaprendizaje',
+  MODELOS: '/modelos',
+  BACKTESTING: '/backtesting',
   CONFIGURACION: '/configuracion',
-  VENTAS: '/ventas',
-  MARKETING: '/marketing',
-  SOPORTE: '/soporte',
-  COMUNICACION: '/comunicacion',
-  CATALOGO: '/catalogo',
-  PERSONAL: '/personal',
-  REGISTRO: '/registro',
-  MONEDAS: '/monedas',
-  VERSION: '/version',
+  FISCAL: '/fiscal',
+  SALUD: '/salud',
+  SISTEMA: '/sistema',
   ERROR_404: '/404',
 } as const;
 
@@ -37,7 +35,6 @@ export const COLORES = {
 } as const;
 
 export const NUMEROS = {
-  MIEMBROS_POR_PAGINA: 10,
   TIEMPO_VIDA_RANGO: 30,
 } as const;
 

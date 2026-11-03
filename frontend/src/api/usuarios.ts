@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { obtenerApiClient, validarRespuesta } from './clienteApi';
 import {
   esquemaHealthCheck,

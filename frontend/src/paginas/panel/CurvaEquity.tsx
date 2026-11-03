@@ -74,6 +74,7 @@ export const CurvaEquity: React.FC<CurvaEquityProps> = ({
         Drawdown Máx: {((calcularDrawdownSubmarino(
         datosOperaciones.map((op) => Math.abs(op.pnl) + 1000)
       ).maxDrawdown).toFixed(2))}%
+      </p>
     </div>
   );
 };

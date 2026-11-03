@@ -12,11 +12,11 @@ export const KPIsPrincipales: React.FC = () => {
 
   // Datos simulados para KPIs
   const navTotal = 12547.89;
-  pnlTotalDiario = 285.50;
-  drawdownActual = -12.50;
-  drawdownMaximo = -45.80;
-  winRate = 67.5;
-  cicloActual = 12;
+  const pnlTotalDiario = 285.50;
+  const drawdownActual = -12.50;
+  const drawdownMaximo = -45.80;
+  const winRate = 67.5;
+  const cicloActual = 12;
 
   return (
     <div className="bg-white rounded-xl p-6 shadow-sm">
@@ -44,7 +44,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Drawdown Actual */}
         <TarjetaKpi
           titulo="Drawdown Actual"
-          valor={drawdownActual.toFixed(2)}%
+          valor={`${drawdownActual.toFixed(2)}%`}
           variacion={drawdownActual - drawdownMaximo < 0 ? 31.3 : -31.3}
           tendencia="baja"
           unidad="%"
@@ -53,7 +53,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Drawdown Máximo */}
         <TarjetaKpi
           titulo="Drawdown Máx."
-          valor={drawdownMaximo.toFixed(2)}%
+          valor={`${drawdownMaximo.toFixed(2)}%`}
           variacion={0}
           tendencia="baja"
           unidad="%"
@@ -65,7 +65,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Win Rate */}
         <TarjetaKpi
           titulo="Win Rate"
-          valor={winRate.toFixed(1)}%
+          valor={`${winRate.toFixed(1)}%`}
           variacion={winRate - 65}
           tendencia="alza"
           unidad="%"

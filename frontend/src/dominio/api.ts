@@ -1,3 +1,182 @@
+export type RespuestaAPI<T> = {
+  datos: T;
+  origen: 'API' | 'WS' | 'ARCHIVO';
+  generado_en: string;
+  es_sintetico: boolean;
+  es_respaldo: boolean;
+};
+
+export const crearRespuesta = <T>(datos: T, opciones: { origen?: 'API' | 'WS' | 'ARCHIVO'; es_sintetico?: boolean; es_respaldo?: boolean } = {}): RespuestaAPI<T> => ({
+  datos,
+  origen: opciones.origen ?? 'API',
+  generado_en: new Date().toISOString(),
+  es_sintetico: opciones.es_sintetico ?? false,
+  es_respaldo: opciones.es_respaldo ?? false,
+});
+
+// === ESTADO ===
+export const esquemaEstado = z.object({
+  key: z.string(),
+  value: z.string(),
+  timestamp: z.string(),
+});
+
+export type Estado = z.infer<typeof esquemaEstado>;
+
+// === CARTERA ===
+export const esquemaPosicion = z.object({
+  activo: z.string(),
+  cantidad: z.number(),
+  precio_promedio: z.number(),
+  valor_actual: z.number(),
+  ganancia_pct: z.number(),
+});
+
+export type Posicion = z.infer<typeof esquemaPosicion>;
+
+export const esquemaCartera = z.object({
+  total_valor: z.number(),
+  ganancia_pct: z.number(),
+  posiciones: z.array(esquemaPosicion),
+});
+
+export type Cartera = z.infer<typeof esquemaCartera>;
+
+// === OPERACIONES ===
+export const esquemaOrden = z.object({
+  id: z.string(),
+  activo: z.string(),
+  tipo: z.enum(['COMPRA', 'VENTA']),
+  cantidad: z.number(),
+  precio: z.number(),
+  estado: z.enum(['PENDIENTE', 'EXECUTADA', 'CANCELADA']),
+  timestamp: z.string(),
+});
+
+export type Orden = z.infer<typeof esquemaOrden>;
+
+// === MERCADO ===
+export const esquemaTicker = z.object({
+  simbolo: z.string(),
+  precio: z.number(),
+  variacion_pct: z.number(),
+  volumen: z.number(),
+});
+
+export type Ticker = z.infer<typeof esquemaTicker>;
+
+// === SENIALES ===
+export const esquemaSenal = z.object({
+  id: z.string(),
+  tipo: z.enum(['COMPRA', 'VENTA', 'SEÑAL_COMPRA', 'SEÑAL_VENTA']),
+  activo: z.string(),
+  precio: z.number(),
+  timestamp: z.string(),
+  metadata: z.object({
+    fuerza: z.number(),
+    confianza: z.number(),
+  }),
+});
+
+export type Senal = z.infer<typeof esquemaSenal>;
+
+// === ESTRATEGIA ===
+export const esquemaEstrategia = z.object({
+  id: z.string(),
+  nombre: z.string(),
+  descripcion: z.string(),
+  parametros: z.record(z.unknown()),
+  metricas: z.object({
+    sharpe: z.number(),
+    sortino: z.number(),
+    maximo_drawdown: z.number(),
+  }),
+});
+
+export type Estrategia = z.infer<typeof esquemaEstrategia>;
+
+// === RIESGO ===
+export const esquemaRiesgo = z.object({
+  valor_at_risk: z.number(),
+  volatilidad: z.number(),
+  drawdown_maxim: z.number(),
+  margem_uso: z.number(),
+});
+
+export type Riesgo = z.infer<typeof esquemaRiesgo>;
+
+// === AUTOAPRENDIZAJE ===
+export const esquemaAutoAprendizaje = z.object({
+  id: z.string(),
+  tipo: z.enum['MEJORA', 'ESTRATEGIA_NUEVA'],
+  progreso: z.number(),
+  ultima_actualizacion: z.string(),
+});
+
+export type AutoAprendizaje = z.infer<typeof esquemaAutoAprendizaje>;
+
+// === MODELOS ===
+export const esquemaModelo = z.object({
+  id: z.string(),
+  nombre: z.string(),
+  tipo: z.enum['ARIMA', 'PROPHET', 'LSTM'],
+  precision: z.number(),
+  ultimo_treinamiento: z.string(),
+});
+
+export type Modelo = z.infer<typeof esquemaModelo>;
+
+// === BACKTESTS ===
+export const esquemaBacktest = z.object({
+  id: z.string(),
+  nombre: z.string(),
+  fecha: z.string(),
+  retorno: z.number(),
+  maximo_drawdown: z.number(),
+  sharpe: z.number(),
+});
+
+export type Backtest = z.infer<typeof esquemaBacktest>;
+
+// === FISCAL ===
+export const esquemaFiscal = z.object({
+  periodo: z.string(),
+  ingresos: z.number(),
+  egresos: z.number(),
+  utilidad_neta: z.number(),
+});
+
+export type Fiscal = z.infer<typeof esquemaFiscal>;
+
+// === SALUD ===
+export const esquemaSalud = z.object({
+  status: z.enum['OK', 'ADVERTENCIA', 'ERROR'],
+  uptime: z.string(),
+  memoria_uso: z.number(),
+  conexiones_activas: z.number(),
+});
+
+export type Salud = z.infer<typeof esquemaSalud>;
+
+// === CONFIGURACIÓN ===
+export const esquemaConfiguracion = z.object({
+  api_base: z.string(),
+  websocket_base: z.string(),
+  modo: z.enum['CLARO', 'OSCURO'],
+  timezone: z.string(),
+});
+
+export type Configuracion = z.infer<typeof esquemaConfiguracion>;
+
+// === EVENTOS ===
+export const esquemaEvento = z.object({
+  id: z.string(),
+  tipo: z.string(),
+  datos: z.unknown(),
+  timestamp: z.string(),
+});
+
+export type Evento = z.infer<typeof esquemaEvento>;
 import { z } from 'zod';
 import { TipoOperacion, EstadoOperacion, Rol } from './tipos';
 

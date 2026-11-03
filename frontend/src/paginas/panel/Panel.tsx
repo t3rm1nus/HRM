@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useModoStore } from '../estado/storeModo';
 import { BadgeModo } from '../componentes/badgeModo';
 import { Semaforo } from '../componentes/ui/semaforo';
@@ -8,7 +8,7 @@ import { KPIsPrincipales } from './KPIsPrincipales';
 import { CurvaEquity } from './CurvaEquity';
 import { PosicionesAbiertas } from './PosicionesAbiertas';
 import { SenalesOrdenes } from './SenalesOrdenes';
-import { SemáforoSalud } from './SemáforoSalud';
+import { SemaforoSalud } from './SemaforoSalud';
 import { usePaginas } from '../constantes/paginas';
 
 export const Panel: React.FC = () => {
@@ -37,6 +37,7 @@ export const Panel: React.FC = () => {
           Última actualización: {ultimaActualizacion.toLocaleTimeString()}
         </p>
       )
+}
 
       {/* KPIs Principales */}
       <KPIsPrincipales />
@@ -61,7 +62,7 @@ export const Panel: React.FC = () => {
 
       {/* Semáforo de Salud y Régimen L3 */}
       <div className="grid grid-cols-2 gap-4 my-8">
-        <SemáforoSalud />
+        <SemaforoSalud />
         {/* RegimenL3 - placeholder, se integraría con store real */}
         <div className="bg-white rounded-lg p-4 shadow-sm">
           <h3 className="text-lg font-medium text-gray-600">Régimen L3</h3>

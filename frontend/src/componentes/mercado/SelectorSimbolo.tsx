@@ -20,7 +20,7 @@ export const SelectorSimbolo: React.FC<SelectorSimboloProps> = ({
   return (
     <div className="border rounded-lg p-3 mb-4 flex flex-col sm:flex-row gap-2">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Símbolo</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Simbodo</label>
         <select
           value={simboloSeleccionado}
           onChange={(e) => onSimboloCambiar(e.target.value)}
@@ -31,9 +31,8 @@ export const SelectorSimbolo: React.FC<SelectorSimboloProps> = ({
               {simbolo}
             </option>
           ))}
-        </option>
-      </select>
-    </div>
+        </select>
+      </div>
 
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Timeframe</label>
@@ -47,10 +46,10 @@ export const SelectorSimbolo: React.FC<SelectorSimboloProps> = ({
               {timeframe}
             </option>
           ))}
-        </option>
-      </select>
+        </select>
+      </div>
     </div>
-  </div>
+  );
 };
 
 export default SelectorSimbolo;

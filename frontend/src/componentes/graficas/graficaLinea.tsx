@@ -55,7 +55,7 @@ export const GraficaLinea = ({
         horzLineVisibleInRange: false,
       },
       layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
-    });
+    };
 
     chart.applyOptions(themeConfig);
 

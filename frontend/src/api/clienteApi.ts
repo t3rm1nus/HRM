@@ -1,4 +1,3 @@
-import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import {
   esquemaHealthCheck,
   esquemaStatus,
@@ -21,13 +20,6 @@ export class ErrorApi extends Error {
   ) {
     super(message);
     this.name = 'ErrorApi';
-  }
-}
-
-export class ErrorRedes extends Error {
-  constructor(public readonly mensaje: string, public readonly causa: unknown) {
-    super(mensaje);
-    this.name = 'ErrorRedes';
   }
 }
 
@@ -88,52 +80,151 @@ export const emitirEvento = (evento: string, data: unknown): void => {
   }
 };
 
-export const obtenerApiClient = (config: Partial<ConfigApi> = {}): AxiosInstance => {
+export const obtenerApiClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
   const apiConfig = crearConfigApi(config);
-  const cliente = axios.create({
-    baseURL: apiConfig.baseURL,
-    headers: apiConfig.headers,
-    timeout: apiConfig.timeout,
-  });
-
-  cliente.interceptors.request.use(
-    (config: InternalAxiosRequestConfig) => {
-      const token = apiConfig.authToken ?? localStorage.getItem('token');
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-      return config;
-    },
-    (error: AxiosError) => {
-      return Promise.reject(obtenerErrorApi(error));
-    }
-  );
-
-  cliente.interceptors.response.use(
-    (response) => {
-      const headers = {
-        'content-type': response.headers['content-type'] ?? '',
-        'x-request-id': response.headers['x-request-id'] ?? '',
-        'x-response-time': response.headers['x-response-time'] ?? '',
-      } as HeadersRespuesta;
-      return { ...response, headers };
-    },
-    (error: AxiosError) => {
-      return Promise.reject(obtenerErrorApi(error));
-    }
-  );
-
-  return cliente;
+  const token = apiConfig.authToken ?? localStorage.getItem('token');
+  return obtenerFetchClient(config);
 };
 
-const obtenerErrorApi = (error: AxiosError): ErrorApi | ErrorRedes => {
+interface FetchApiClient {
+  get<T>(endpoint: string, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }>;
+  post<T>(endpoint: string, body: unknown, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }>;
+}
+const obterFetchClient = (config: Partial<ConfigApi> = {}): FetchApiClient => {
+  const apiConfig = criarConfigApi(config);
+  const token = apiConfig.authToken ?? localStorage.getItem('token');
+  return {
+    async get<T>(endpoint: string, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }> {
+      const url = \`\${apiConfig.baseURL}\${endpoint}\`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), apiConfig.timeout);
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'content-type': 'application/json',
+            ...(token ? { authorization: \`Bearer \${token}\` } : {}),
+            ...apiConfig.headers,
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        const headers: HeadersRespuesta = {
+          'content-type': response.headers['content-type'] ?? '',
+          'x-request-id': response.headers['x-request-id'] ?? '',
+          'x-response-time': response.headers['x-response-time'] ?? '',
+        } as HeadersRespuesta;
+
+        const datos = await response.json();
+
+        if (!response.ok) {
+          throw new ErrorApi(
+            datos.detail || 'Error en la respuesta',
+            response.status,
+            undefined,
+            undefined,
+            undefined
+          );
+        }
+
+        if (esquema) {
+          const parsed = esquema.safeParse(datos);
+          if (!parsed.success) {
+            throw new ErrorApi(
+              'Datos de respuesta inválidos',
+              CODIGOS_ESTADO_API.BAD_REQUEST,
+              undefined,
+              undefined,
+              parsed.error.issues.reduce((acc, item) => {
+                acc[item.path.join('.')] = [item.message];
+                return acc;
+              }, {} as Record<string, string[]>)
+            );
+          }
+          return { data: parsed.data, headers };
+        }
+
+        return { data: datos as T, headers };
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        throw obterErrorFetch(error);
+      }
+    },
+
+    async post<T>(endpoint: string, body: unknown, esquema?: z.ZodType<T>): Promise<{ data: T; headers: HeadersRespuesta }> {
+      const url = \`\${apiConfig.baseURL}\${endpoint}\`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), apiConfig.timeout);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(token ? { authorization: \`Bearer \${token}\` } : {}),
+            ...apiConfig.headers,
+          },
+          signal: controller.signal,
+          body: JSON.stringify(body),
+        });
+
+        clearTimeout(timeoutId);
+
+        const headers: HeadersRespuesta = {
+          'content-type': response.headers['content-type'] ?? '',
+          'x-request-id': response.headers['x-request-id'] ?? '',
+          'x-response-time': response.headers['x-response-time'] ?? '',
+        } as HeadersRespuesta;
+
+        const datos = await response.json();
+
+        if (!response.ok) {
+          throw new ErrorApi(
+            datos.detail || 'Error en la respuesta',
+            response.status,
+            undefined,
+            undefined,
+            undefined
+          );
+        }
+
+        if (esquema) {
+          const parsed = esquema.safeParse(datos);
+          if (!parsed.success) {
+            throw new ErrorApi(
+              'Datos de respuesta inválidos',
+              CODIGOS_ESTADO_API.BAD_REQUEST,
+              undefined,
+              undefined,
+              parsed.error.issues.reduce((acc, item) => {
+                acc[item.path.join('.')] = [item.message];
+                return acc;
+              }, {} as Record<string, string[]>)
+            );
+          }
+          return { data: parsed.data, headers };
+        }
+
+        return { data: datos as T, headers };
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        throw obterErrorFetch(error);
+      }
+    }
+  };
+};
+
+const obtenerErrorFetch = (error: any): ErrorApi | ErrorRedes => {
   if (error instanceof Error) {
     if (error.name === 'Error') {
       return new ErrorApi(error.message, CODIGOS_ESTADO_API.SERVER_ERROR, undefined, undefined, undefined);
     }
-  }
-
-  const mensaje = error.message ?? 'Error de red';
+const mensaje = error.message ?? 'Error de red';
   const código = error.code;
 
   if (código === 'ECONNABORTED') {
@@ -162,7 +253,7 @@ const obtenerErrorApi = (error: AxiosError): ErrorApi | ErrorRedes => {
 };
 
 export const validarRespuesta = <T>(
-  respuesta: axios.AxiosResponse,
+  respuesta: { data: unknown; headers: HeadersRespuesta },
   esquema: (z.ZodType<T> & { safeParse: (data: unknown) => z.ZodSafeParse<T> })
 ): { data: T; headers: HeadersRespuesta } => {
   const parsed = esquema.safeParse(respuesta.data);

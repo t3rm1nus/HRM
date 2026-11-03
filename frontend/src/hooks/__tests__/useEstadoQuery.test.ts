@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarEstado } from '../useEstadoQuery';
 import { fetchStatus } from '../api/usuarios';
 
-vi.mock('../api/usuarios', () => ({
+vi.mock('../../../api/clienteApi', () => ({
   fetchStatus: vi.fn(),
 }));
 

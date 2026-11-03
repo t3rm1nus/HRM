@@ -30,7 +30,7 @@ export default [
       'max-lines-per-function': ['error', { max: 25, skipBlankLines: true, skipComments: true }],
 
       // Sin números mágicos
-      'no-magic-numbers': 'off',
+      'no-magic-numbers': 'error',
       '@typescript-eslint/no-magic-numbers': ['error', { ignoreNumericLiteralTypes: true, ignoreEnums: true, ignoreReadonlyClassProperties: true }],
 
       // React hooks
