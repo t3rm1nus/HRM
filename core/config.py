@@ -46,7 +46,7 @@ class TradingConfig:
     """Configuración de trading"""
     SYMBOLS: List[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     TIMEFRAME: str = "1m"
-    INITIAL_BALANCE: float = 3000.0
+    INITIAL_BALANCE: float = 500.0
     MAX_POSITION_SIZE: float = 0.05  # 5% max position per symbol
     MIN_ORDER_VALUE: float = 1.0
     RISK_PER_TRADE: float = 0.02
@@ -131,7 +131,7 @@ class EnvironmentConfig:
         base_config = {
             "SYMBOLS": ["BTCUSDT", "ETHUSDT"],
             "TIMEFRAME": "1m",
-            "INITIAL_BALANCE": 3000.0,
+            "INITIAL_BALANCE": 500.0,
             "ENABLE_COMMISSIONS": True,
             "ENABLE_SLIPPAGE": True,
             "ENABLE_PERSISTENCE": True,
@@ -147,14 +147,14 @@ class EnvironmentConfig:
             "SIMULATED_INITIAL_BALANCES": {
                 "BTC": 0.01549,
                 "ETH": 0.385,
-                "USDT": 3000.0
+                "USDT": 500.0
             }
         }
 
         # Environment-specific overrides
         if self.mode == "live":
             env_config = {
-                "INITIAL_BALANCE": 1000.0,  # Conservative starting balance
+                "INITIAL_BALANCE": 500.0,  # Consistent starting balance
                 "ENABLE_COMMISSIONS": True,
                 "ENABLE_SLIPPAGE": True,
                 "ENABLE_PERSISTENCE": True,
@@ -166,7 +166,7 @@ class EnvironmentConfig:
             }
         elif self.mode == "testnet":
             env_config = {
-                "INITIAL_BALANCE": 1000.0,
+                "INITIAL_BALANCE": 500.0,
                 "ENABLE_COMMISSIONS": True,
                 "ENABLE_SLIPPAGE": True,
                 "ENABLE_PERSISTENCE": True,
@@ -178,7 +178,7 @@ class EnvironmentConfig:
             }
         elif self.mode == "backtest":
             env_config = {
-                "INITIAL_BALANCE": 10000.0,  # Higher for backtesting
+                "INITIAL_BALANCE": 500.0,  # Consistent with other modes
                 "ENABLE_COMMISSIONS": True,
                 "ENABLE_SLIPPAGE": True,
                 "ENABLE_PERSISTENCE": False,  # No persistence in backtest
@@ -190,7 +190,7 @@ class EnvironmentConfig:
             }
         elif self.mode == "simulated":
             env_config = {
-                "INITIAL_BALANCE": 10000.0,
+                "INITIAL_BALANCE": 500.0,
                 "ENABLE_COMMISSIONS": True,   # Enable for realistic simulation
                 "ENABLE_SLIPPAGE": True,     # Enable for realistic simulation
                 "ENABLE_PERSISTENCE": False, # No persistence
@@ -463,3 +463,32 @@ def get_config_value(key: str, default=None, mode: str = "live"):
 def set_config_value(key: str, value: Any, mode: str = "live"):
     """Set configuration value"""
     get_config(mode).set(key, value)
+
+# ============================================================================
+# HELPER FUNCTION: Unified paper mode detection
+# ============================================================================
+
+def is_paper_mode(mode: str) -> bool:
+    """
+    Check if the given mode is a paper/simulated/backtest mode.
+    
+    This function centralizes the detection of paper trading modes to ensure
+    consistent behavior across the system. Modes that return True:
+    - "paper": Paper trading mode
+    - "simulated": Simulation mode with commissions and slippage
+    - "backtest": Historical backtesting mode
+    - "testnet": Binance testnet mode
+    
+    Args:
+        mode: The operation mode string to check
+        
+    Returns:
+        True if the mode is a paper/simulated/backtest mode, False otherwise
+        
+    Example:
+        >>> is_paper_mode("simulated")
+        True
+        >>> is_paper_mode("live")
+        False
+    """
+    return mode in ["paper", "simulated", "backtest", "testnet"]

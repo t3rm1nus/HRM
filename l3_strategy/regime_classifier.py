@@ -103,6 +103,14 @@ class MarketRegimeClassifier:
                 self._regime_cache[cache_key] = result
                 return result
 
+            # CRITICAL FIX: Calculate data completeness for confidence penalization
+            # Required candles for 6h analysis based on timeframe
+            required_candles = self.calculation_window
+            available_candles = len(df)
+            data_completeness = min(1.0, available_candles / required_candles)
+            
+            logger.info(f"Data completeness check: {available_candles}/{required_candles} candles ({data_completeness:.1%})")
+
             features_df = self._calculate_analysis_features(df)
             window_data = features_df.tail(self.calculation_window)
             
@@ -114,12 +122,33 @@ class MarketRegimeClassifier:
             results['range'] = self._classify_range_regime(window_data, price_change)
             results['volatile'] = self._classify_volatile_regime(window_data)
 
-            primary_regime, confidence, subtype = self._determine_primary_regime(results, price_change)
+            primary_regime, raw_confidence, subtype = self._determine_primary_regime(results, price_change)
+
+            # CRITICAL FIX: Apply confidence penalization based on data completeness
+            adjusted_confidence = raw_confidence * data_completeness
+            
+            # CRITICAL FIX: If data_completeness < 0.5, force RANGE regime with max 0.5 confidence
+            if data_completeness < 0.5:
+                logger.warning(f"⚠️ REGIME CONFIDENCE PENALIZED: {raw_confidence:.0%} → {adjusted_confidence:.0%} (data: {available_candles}/{required_candles} candles)")
+                primary_regime = 'RANGE'
+                subtype = 'INSUFFICIENT_DATA'
+                adjusted_confidence = min(adjusted_confidence, 0.5)
+                # Reset scores to reflect RANGE regime
+                results['range']['score'] = adjusted_confidence
+                results['trending']['score'] = 0.0
+                results['breakout']['score'] = 0.0
+                results['volatile']['score'] = 0.0
+            else:
+                logger.info(f"Regime confidence: raw={raw_confidence:.2%}, adjusted={adjusted_confidence:.2%} (completeness={data_completeness:.1%})")
 
             result = {
                 'primary_regime': primary_regime,
                 'subtype': subtype,
-                'confidence': confidence,
+                'confidence': adjusted_confidence,  # Use adjusted confidence
+                'raw_confidence': raw_confidence,  # Keep raw for reference
+                'data_completeness': data_completeness,
+                'available_candles': available_candles,
+                'required_candles': required_candles,
                 'regime_scores': {
                     'TRENDING': results['trending']['score'],
                     'RANGE': results['range']['score'],
@@ -131,6 +160,7 @@ class MarketRegimeClassifier:
                     'calculation_window': self.calculation_window,
                     'timeframe_minutes': self.detected_timeframe,
                     'data_points': len(window_data),
+                    'total_data_points': available_candles,
                     'price_change_pct': price_change,
                     'timestamp': pd.Timestamp.now()
                 }
@@ -161,25 +191,54 @@ class MarketRegimeClassifier:
             direction = "UP" if price_change > 0 else "DOWN"
             abs_change = abs(price_change)
             
+            # FIX: Calculate ADX multiplier for initial trending score
+            # ADX < 15: very weak trend strength
+            # ADX 15-20: weak trend strength
+            # ADX 20-25: moderate trend strength
+            # ADX >= 25: confirmed trend strength
+            if adx < 15:
+                adx_multiplier = 0.4
+            elif adx < 20:
+                adx_multiplier = 0.6
+            elif adx < 25:
+                adx_multiplier = 0.8
+            else:
+                adx_multiplier = 1.0
+            
+            raw_score = 0.0
+            
             if abs_change > self.thresholds['trend']['strong_change'] and r_squared > 0.5:
                 subtype = f"STRONG_{'BULL' if direction == 'UP' else 'BEAR'}"
-                score = np.clip((abs_change / 0.03) * (r_squared / 0.7) * (adx / 35), 0.0, 1.0)
+                raw_score = np.clip((abs_change / 0.03) * (r_squared / 0.7), 0.0, 1.0)
+                # Apply ADX multiplier to initial score
+                score = raw_score * adx_multiplier
                 
             elif abs_change > self.thresholds['trend']['moderate_change'] and r_squared > 0.4:
                 subtype = f"MODERATE_{'BULL' if direction == 'UP' else 'BEAR'}"
-                score = 0.70
+                raw_score = 0.70
+                # Apply ADX multiplier to initial score
+                score = raw_score * adx_multiplier
                 
             elif abs_change > self.thresholds['trend']['weak_change'] and r_squared > 0.3:
                 subtype = f"WEAK_{'BULL' if direction == 'UP' else 'BEAR'}"
                 # AGGRESSIVE: Allow BUY signals for WEAK_BULL (lowered from 0.55 to 0.45 threshold)
-                score = 0.50  # Lower score but still allow directional signal
+                raw_score = 0.50  # Lower score but still allow directional signal
+                # Apply ADX multiplier to initial score
+                score = raw_score * adx_multiplier
                 
             else:
                 subtype = None
-                score = np.clip(abs_change / 0.008, 0.0, 1.0)
+                raw_score = np.clip(abs_change / 0.008, 0.0, 1.0)
+                # Apply ADX multiplier to initial score
+                score = raw_score * adx_multiplier
+
+            # FIX: Add log for ADX-adjusted trending score
+            if adx_multiplier < 1.0:
+                logger.info(f"📊 ADX-adjusted trending score: raw={raw_score:.2f} → adjusted={score:.2f} (ADX={adx:.1f}, multiplier={adx_multiplier})")
 
             return {
                 'score': score,
+                'raw_score': raw_score,  # Keep raw score for reference
                 'subtype': subtype,
                 'metrics': {
                     'slope': slope,
@@ -187,7 +246,8 @@ class MarketRegimeClassifier:
                     'r_squared': r_squared,
                     'adx': adx,
                     'rsi': rsi,
-                    'direction': direction
+                    'direction': direction,
+                    'adx_multiplier': adx_multiplier
                 }
             }
 
@@ -416,9 +476,22 @@ class MarketRegimeClassifier:
 
             # 2. TRENDING priority
             if abs_price_change > self.thresholds['trend']['weak_change'] and results['trending']['score'] > 0.45:
-                score = np.clip(results['trending']['score'], 0.0, 1.0)
+                raw_confidence = np.clip(results['trending']['score'], 0.0, 1.0)
                 adx = results['trending']['metrics'].get('adx', 20)
                 rsi = results['trending']['metrics'].get('rsi', 50)
+                
+                # ADX penalty for weak trends (second layer - maintained for additional safety)
+                score = raw_confidence
+                if adx < 20:
+                    adx_penalty = adx / 20.0  # 0.0 a 1.0
+                    score = raw_confidence * adx_penalty
+                    logger.warning(f"⚠️ TRENDING CONFIDENCE PENALIZED by weak ADX (2nd layer): {raw_confidence:.0%} → {score:.0%} (ADX={adx:.1f} < 20)")
+                elif adx < 25:
+                    # ADX moderado - penalización parcial
+                    adx_penalty = 0.8
+                    score = raw_confidence * adx_penalty
+                    logger.warning(f"⚠️ TRENDING CONFIDENCE PENALIZED by moderate ADX (2nd layer): {raw_confidence:.0%} → {score:.0%} (ADX={adx:.1f} < 25)")
+                
                 logger.info(f"Audit: Regime=TRENDING, Confidence={score:.2f}, PriceChange={price_change:.2%}, ADX={adx:.1f}, RSI={rsi:.1f}")
                 return 'TRENDING', score, results['trending']['subtype']
 
@@ -676,13 +749,27 @@ def _generate_strategy_from_regime(regime_result: Dict) -> Dict:
     regime = regime_result['primary_regime']
     subtype = regime_result['subtype']
     confidence = regime_result['confidence']
+    
+    # PROPAGATE data completeness metrics for downstream modules
+    data_completeness = regime_result.get('data_completeness', 1.0)
+    available_candles = regime_result.get('available_candles', 0)
+    required_candles = regime_result.get('required_candles', 360)
+    raw_confidence = regime_result.get('raw_confidence', confidence)
 
     base_strategy = {
         'regime': regime,
         'subtype': subtype,
         'confidence': confidence,
+        'raw_confidence': raw_confidence,
+        'data_completeness': data_completeness,
+        'available_candles': available_candles,
+        'required_candles': required_candles,
         'strategy_type': 'regime_adaptive'
     }
+    
+    # Log data completeness warning if below threshold
+    if data_completeness < 0.5:
+        logger.warning(f"⚠️ STRATEGY GENERATED WITH INSUFFICIENT DATA: {available_candles}/{required_candles} candles ({data_completeness:.1%}) - Regime forced to RANGE")
 
     # NEW: Handle setups within range regimes
     if subtype == 'OVERSOLD_SETUP':

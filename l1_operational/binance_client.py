@@ -286,7 +286,7 @@ class BinanceClient:
 
     def force_reset(self, initial_balances: Dict[str, float] = None):
         if self.paper_mode and self.simulated_client:
-            self.simulated_client.force_reset(initial_balances or {"BTC": 0.0, "ETH": 0.0, "USDT": 3000.0})
+            self.simulated_client.force_reset(initial_balances or {"BTC": 0.0, "ETH": 0.0, "USDT": 500.0})
 
     async def place_stop_loss_order(self, symbol: str, side: str, quantity: float, stop_price: float, limit_price: Optional[float] = None) -> Dict[str, Any]:
         if self.paper_mode:

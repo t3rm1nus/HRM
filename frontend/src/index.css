@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primario: #2563EB;
+  --color-secundario: #1D4ED8;
+  --color-exito: #16A34A;
+  --color-advertencia: #F59E0B;
+  --color-error: #DC2626;
+  --color-ascenso: #22C55E;
+  --color-descenso: #EF4444;
+}
+
+/* Tema oscuro */
+[data-theme="oscuro"] {
+  --color-fondo: #111827;
+  --color-fondo-suave: #1F2937;
+  --color-borde: #374151;
+  --color-texto: #F9FAFB;
+  --color-texto-secundario: #9CA3AF;
+  --color-sup texto: #6B7280;
+  --color-boton-primario: #2563EB;
+  --color-boton-primario-hover: #1D4ED8;
+  --color-banner-fondo: #DC2626;
+  --color-banner-texto: #FFFFFF;
+  --color-banner-bitacora: #FFFFFFCC;
+  --color-banner-boton: #F97316;
+  --color-banner-boton-texto: #FFFFFF;
+  --color-modal-fondo: #1F2937;
+  --color-modal-borde: #4B5563;
+  --color-modal-titulo: #F9FAFB;
+}
+
+/* Estilos base */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #F8FAFC;
+  color: #1E293B;
+}
+
+/* Banner fijo cuando el modo es LIVE */
+[data-banner="vivo"] {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background-color: #DC2626;
+  color: #FFFFFF;
+  overflow: hidden;
+}
+
+[data-banner="vivo"] .banner-contenido {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+
+[data-banner="vivo"] .banner-contenido .banner-icono {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+  animation: shake 0.5s ease-in-out;
+}
+
+[data-banner="vivo"] .banner-contenido .banner-titulo {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+}
+
+[data-banner="vivo"] .banner-contenido .banner-subtitulo {
+  font-size: 1.1rem;
+  opacity: 0.9;
+  max-width: 600px;
+}
+
+[data-banner="vivo"] .banner-contenido .banner-accion {
+  margin-top: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background-color: #F97316;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+[data-banner="vivo"] .banner-contenido .banner-accion:hover {
+  background-color: #EA580C;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-10px); }
+  40%, 80% { transform: translateX(10px); }
+}
+
+/* Scrollbar personalizada */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #9CA3AF;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6B7280;
+}
+
+/* Transiciones de tema */
+html {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Animaciones */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Input y formularios */
+input, textarea, select {
+  font-family: inherit;
+  color: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #2563EB;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+/* Switch de tema */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background-color: #D1D5DB;
+  border-radius: 24px;
+  transition: background-color 0.3s;
+}
+
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #FFFFFF;
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+
+.switch input:checked + .switch-slider {
+  background-color: #22C55E;
+}
+
+.switch input:checked + .switch-slider::before {
+  transform: translateX(20px);
+}
+
+.switch input:focus + .switch-slider {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}

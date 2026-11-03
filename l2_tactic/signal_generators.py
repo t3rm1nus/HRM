@@ -712,18 +712,34 @@ class SignalGenerators:
             'ema_12', 'ema_26', 'macd'
         ]
         values: List[float] = []
-        data = input_data or {}
+        
+        # Handle nested dict (e.g., {'market_data': {...}, 'symbol': '...'})
+        if isinstance(input_data, dict) and 'market_data' in input_data:
+            data = input_data.get('market_data', {})
+        else:
+            data = input_data or {}
+        
         # Support pandas Series as well
         get_val = data.get if hasattr(data, 'get') else lambda k, d=None: None
         for name in feature_names:
             try:
                 v = get_val(name, 0.0)
+                # Skip if v is a dict, list, or other non-scalar
+                if isinstance(v, (dict, list, tuple)):
+                    v = 0.0
                 if hasattr(v, 'item'):
                     v = v.item()
                 v = safe_float(v) if v is not None else 0.0
             except Exception:
                 v = 0.0
-            values.append(v if pd.notna(v) else 0.0)
+            # Ensure v is a valid number
+            try:
+                v = float(v)
+                if not np.isfinite(v):
+                    v = 0.0
+            except:
+                v = 0.0
+            values.append(v)
         # Ensure length 13
         if len(values) < 13:
             values.extend([0.0] * (13 - len(values)))

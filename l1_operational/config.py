@@ -13,7 +13,7 @@ OPERATION_MODE = "LIVE"  # "paper", "live", "development", "testing"
 RISK_LIMITS = {
     "MAX_ORDER_SIZE_BTC": 0.05,      # ~$5,420 por orden (más agresivo)
     "MAX_ORDER_SIZE_USDT": 1500,     # Máximo 50% del capital por orden
-    "MIN_ORDER_SIZE_USDT": 5,        # Mínimo muy reducido para máximo volumen de trading
+    "MIN_ORDER_SIZE_USDT": 2,        # Mínimo unificado a 2.0 USDT (Prompt 3A FIX)
     "MAX_ORDER_SIZE_ETH": 0.5,       # ~$2,185 por orden (más agresivo)
     "MAX_ORDER_SIZE_ADA": 100,       # Sin cambios
 }

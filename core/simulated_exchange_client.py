@@ -656,9 +656,9 @@ if __name__ == "__main__":
     # Crear cliente simulado
     fake_client = SimulatedExchangeClient(
         initial_balances={
-            "BTC": 0.01549,
-            "ETH": 0.385,
-            "USDT": 3000.0
+            "BTC": 0.0,
+            "ETH": 0.0,
+            "USDT": 500.0
         },
         enable_commissions=True,
         enable_slippage=True

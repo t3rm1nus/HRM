@@ -469,17 +469,17 @@ class MarketDataManager:
             logger.error(f"❌ Error en refresh_data: {e}")
             return {}
     
-    async def force_warmup(self, symbol: str = "BTCUSDT", timeframe: str = "1m", limit: int = 100) -> bool:
+    async def force_warmup(self, symbol: str = "BTCUSDT", timeframe: str = "1m", limit: int = 400) -> bool:
         """
         💥 PRIORIDAD 2: Warm-up de datos antes del trading loop.
         
-        Descarga datos para 1 símbolo, 1 timeframe, 100 velas.
+        Descarga datos para 1 símbolo, 1 timeframe, 400 velas.
         Verifica que el caché no esté vacío.
         
         Args:
             symbol: Símbolo a descargar (default: BTCUSDT)
             timeframe: Timeframe (default: 1m)
-            limit: Número de velas (default: 100)
+            limit: Número de velas (default: 400)
             
         Returns:
             True si el warmup fue exitoso, False si falló
@@ -522,7 +522,7 @@ class MarketDataManager:
             logger.error(f"❌ Error en force_warmup: {e}")
             return False
 
-    async def warmup_all_symbols(self, timeframe: str = "1m", limit: int = 100) -> bool:
+    async def warmup_all_symbols(self, timeframe: str = "1m", limit: int = 400) -> bool:
         """
         💥 PRIORIDAD 2: Warm-up de datos para TODOS los símbolos.
         
@@ -531,7 +531,7 @@ class MarketDataManager:
         
         Args:
             timeframe: Timeframe (default: 1m)
-            limit: Número de velas (default: 100)
+            limit: Número de velas (default: 400)
             
         Returns:
             True si al menos un símbolo fue descargado exitosamente, False si falló todo

@@ -484,6 +484,7 @@ _shutdown_components = {
     'data_feed': None,
     'portfolio_manager': None,
     'order_manager': None,
+    'order_flow_capture': None,
 }
 
 
@@ -594,6 +595,16 @@ async def shutdown():
             logger.info("✅ OrderManager cerrado")
         except Exception as e:
             logger.warning(f"⚠️ Error cerrando OrderManager: {e}")
+    
+    # 6.5 Cerrar OrderFlowCapture
+    if _shutdown_components.get('order_flow_capture') is not None:
+        try:
+            ofc = _shutdown_components['order_flow_capture']
+            if hasattr(ofc, 'close'):
+                await ofc.close()
+            logger.info("✅ OrderFlowCapture cerrado")
+        except Exception as e:
+            logger.warning(f"⚠️ Error cerrando OrderFlowCapture: {e}")
     
     # 7. Cerrar todas las sesiones aiohttp pendientes
     await _close_aiohttp_sessions()

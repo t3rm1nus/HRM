@@ -1,0 +1,14 @@
+{
+  "capital_usdt": 500.0,
+  "btc": 0.0,
+  "eth": 0.0,
+  "mode": "paper",
+  "auto_learning": "fix",
+  "initial_balances": {
+    "USDT": 500.0,
+    "BTC": 0.0,
+    "ETH": 0.0
+  },
+  "reset_singletons": true,
+  "timestamp": "2026-02-21T20:00:00.000000"
+}

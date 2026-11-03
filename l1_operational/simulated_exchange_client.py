@@ -16,6 +16,7 @@ class SimulatedExchangeClient:
     """
     _instance = None
     _initialized = False
+    _just_initialized = False  # Flag para detectar instancia recién creada vs sesión continua
 
     def __new__(cls, initial_balances: Dict[str, float] = None,
                  fee: float = 0.001,
@@ -38,14 +39,24 @@ class SimulatedExchangeClient:
             
         Returns:
             SimulatedExchangeClient: Instancia singleton
+            
+        Raises:
+            RuntimeError: Si no se proporcionan initial_balances y el singleton no existe
         """
         if cls._instance is not None:
             logger.info("SimulatedExchangeClient: returning existing singleton instance")
             return cls._instance
             
+        # 🚨 CRITICAL: Se REQUIERE initial_balances - NO hay valores por defecto hardcodeados
         if initial_balances is None:
-            # Default balances for paper trading
-            initial_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 500.0}
+            logger.critical("🚨 FATAL: SimulatedExchangeClient.get_instance() requiere initial_balances")
+            logger.critical("   No se permiten valores por defecto hardcodeados para evitar discrepancias de capital")
+            raise RuntimeError(
+                "SimulatedExchangeClient.get_instance() requires initial_balances parameter. "
+                "Hardcoded defaults are NOT allowed to prevent capital mismatches. "
+                "Provide balances from config."
+            )
+        
         cls._instance = cls(initial_balances, fee, slippage)
         return cls._instance
 
@@ -99,6 +110,7 @@ class SimulatedExchangeClient:
         
         # Mark as initialized BEFORE setting attributes to prevent race conditions
         SimulatedExchangeClient._initialized = True
+        SimulatedExchangeClient._just_initialized = True  # Flag para detectar instancia recién creada
         
         self.initial_balances = initial_balances.copy()
         self.balances: Dict[str, float] = initial_balances.copy()
@@ -342,6 +354,18 @@ class SimulatedExchangeClient:
     async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
         return []
     
+    def set_balance(self, asset: str, amount: float):
+        """
+        Set balance for a specific asset.
+        
+        Args:
+            asset: Asset symbol (e.g., 'USDT', 'BTC', 'ETH')
+            amount: New balance amount
+        """
+        old_balance = self.balances.get(asset, 0.0)
+        self.balances[asset] = amount
+        logger.info(f"💰 Balance updated: {asset} {old_balance:.6f} → {amount:.6f}")
+    
     def force_reset(self, initial_balances: Dict[str, float] = None):
         """Force reset the client with new initial balances"""
         if initial_balances:
@@ -389,8 +413,34 @@ class SimulatedExchangeClient:
         """
         cls._instance = None
         cls._initialized = False
+        cls._just_initialized = False
         logger.info("🔄 SimulatedExchangeClient.cleanup() completado - singleton listo para re-init")
         return True
+
+    @classmethod
+    def mark_cycle_completed(cls) -> bool:
+        """
+        Marca que el primer ciclo ha sido completado.
+        Esto pone _just_initialized a False, indicando que ya no es una sesión nueva.
+        
+        Returns:
+            True si el flag estaba en True (instancia recién creada), False si ya estaba en False
+        """
+        was_just_initialized = cls._just_initialized
+        if cls._just_initialized:
+            cls._just_initialized = False
+            logger.info("🔄 SimulatedExchangeClient: Primer ciclo completado - instancia marcada como 'en uso'")
+        return was_just_initialized
+
+    @classmethod
+    def is_just_initialized(cls) -> bool:
+        """
+        Verifica si la instancia es recién creada (primer ciclo).
+        
+        Returns:
+            True si es instancia recién creada, False si es sesión continua
+        """
+        return cls._just_initialized
 
     # ------------------------------------------------------------------
     # Market Price - DEPRECATED

@@ -1182,7 +1182,8 @@ class PortfolioManager:
                             logger.error(f"❌ Error registrando operación en TaxTracker: {e}")
                     
                     # Log to paper trade logger if available
-                    if self.paper_logger:
+                    # DEDUPLICATION FIX: Skip logging if order was already logged by order_executors
+                    if self.paper_logger and not o.get('_already_logged', False):
                         try:
                             # Get market prices from MarketDataManager si está disponible
                             market_prices = await self._get_market_prices() if self.market_data_manager else {}
@@ -1492,3 +1493,142 @@ class PortfolioManager:
         except Exception as e:
             logger.error(f"Error calculando NAV: {e}", exc_info=True)
             return 0.0
+
+    # =========================
+    # PERSISTENCE - save_to_json / load_from_json
+    # =========================
+
+    def save_to_json(self, filepath: Optional[str] = None) -> bool:
+        """
+        Save portfolio state to JSON file.
+        
+        Args:
+            filepath: Path to save the JSON file. If None, uses default path.
+            
+        Returns:
+            bool: True if save was successful, False otherwise
+        """
+        try:
+            import json
+            
+            if filepath is None:
+                # Default path for live mode state
+                filepath = "persistent_state/portfolio_state_live.json"
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            # Prepare state to save
+            state = {
+                "portfolio": {
+                    "USDT": {"free": self.portfolio.get("USDT", {}).get("free", 0.0)},
+                    "total": self.portfolio.get("total", self.initial_balance),
+                    "peak_value": self.portfolio.get("peak_value", self.initial_balance),
+                    "total_fees": self.portfolio.get("total_fees", 0.0),
+                    "BTCUSDT": {
+                        "position": self.portfolio.get("BTCUSDT", {}).get("position", 0.0),
+                        "free": self.portfolio.get("BTCUSDT", {}).get("free", 0.0)
+                    },
+                    "ETHUSDT": {
+                        "position": self.portfolio.get("ETHUSDT", {}).get("position", 0.0),
+                        "free": self.portfolio.get("ETHUSDT", {}).get("free", 0.0)
+                    }
+                },
+                "peak_value": self.peak_value,
+                "total_fees": self.total_fees,
+                "mode": self.mode,
+                "initial_balance": self.initial_balance,
+                "symbols": self.symbols,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": "1.0"
+            }
+            
+            # Save to file
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+            
+            logger.info(f"💾 Portfolio state saved to {filepath}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving portfolio state to JSON: {e}")
+            return False
+
+    def load_from_json(self, filepath: Optional[str] = None) -> bool:
+        """
+        Load portfolio state from JSON file.
+        
+        Args:
+            filepath: Path to load the JSON file from. If None, uses default path.
+            
+        Returns:
+            bool: True if load was successful and balances are non-zero, False otherwise
+        """
+        try:
+            import json
+            
+            if filepath is None:
+                # Default path for live mode state
+                filepath = "persistent_state/portfolio_state_live.json"
+            
+            # Check if file exists
+            if not os.path.exists(filepath):
+                logger.warning(f"⚠️ Portfolio state file not found: {filepath}")
+                return False
+            
+            # Load from file
+            with open(filepath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            
+            # Extract portfolio data
+            portfolio_data = state.get("portfolio", {})
+            
+            # Check if all balances are zero
+            usdt_balance = portfolio_data.get("USDT", {}).get("free", 0.0)
+            btc_position = portfolio_data.get("BTCUSDT", {}).get("position", 0.0)
+            eth_position = portfolio_data.get("ETHUSDT", {}).get("position", 0.0)
+            
+            if usdt_balance == 0.0 and btc_position == 0.0 and eth_position == 0.0:
+                logger.warning(f"⚠️ Loaded portfolio state has all balances zero - rejecting")
+                return False
+            
+            # Restore portfolio state
+            self.portfolio = {
+                "USDT": {"free": usdt_balance},
+                "total": portfolio_data.get("total", self.initial_balance),
+                "peak_value": portfolio_data.get("peak_value", self.initial_balance),
+                "total_fees": portfolio_data.get("total_fees", 0.0),
+                "BTCUSDT": {
+                    "position": btc_position,
+                    "free": portfolio_data.get("BTCUSDT", {}).get("free", 0.0)
+                },
+                "ETHUSDT": {
+                    "position": eth_position,
+                    "free": portfolio_data.get("ETHUSDT", {}).get("free", 0.0)
+                }
+            }
+            
+            # Restore other attributes
+            self.peak_value = state.get("peak_value", self.initial_balance)
+            self.total_fees = state.get("total_fees", 0.0)
+            
+            # Update cache
+            import time
+            self._balance_cache = {
+                "BTC": btc_position,
+                "ETH": eth_position,
+                "USDT": usdt_balance
+            }
+            self._balance_cache_time = {
+                "BTC": time.time(),
+                "ETH": time.time(),
+                "USDT": time.time()
+            }
+            
+            logger.info(f"📂 Portfolio state loaded from {filepath}")
+            logger.info(f"   BTC: {btc_position:.6f}, ETH: {eth_position:.6f}, USDT: {usdt_balance:.2f}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading portfolio state from JSON: {e}")
+            return False

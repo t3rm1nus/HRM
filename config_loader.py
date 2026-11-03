@@ -14,13 +14,13 @@ from pathlib import Path
 
 # Default configuration
 DEFAULT_CONFIG = {
-    "capital_usdt": 3000.0,
+    "capital_usdt": 500.0,
     "btc": 0.0,
     "eth": 0.0,
     "mode": "paper",
     "auto_learning": "fix",
     "initial_balances": {
-        "USDT": 3000.0,
+        "USDT": 500.0,
         "BTC": 0.0,
         "ETH": 0.0
     },
@@ -94,21 +94,21 @@ def get_initial_balances(config_path: str = "initial_state.json") -> Dict[str, f
         return {
             "BTC": float(balances.get("BTC", 0.0)),
             "ETH": float(balances.get("ETH", 0.0)),
-            "USDT": float(balances.get("USDT", 3000.0))
+            "USDT": float(balances.get("USDT", 500.0))
         }
     
     # Fallback to individual fields
     return {
         "BTC": float(config.get("btc", 0.0)),
         "ETH": float(config.get("eth", 0.0)),
-        "USDT": float(config.get("capital_usdt", 3000.0))
+        "USDT": float(config.get("capital_usdt", 500.0))
     }
 
 
 def get_capital_usd(config_path: str = "initial_state.json") -> float:
     """Get initial capital in USD."""
     config = load_initial_state(config_path)
-    return float(config.get("capital_usdt", 3000.0))
+    return float(config.get("capital_usdt", 500.0))
 
 
 def get_mode(config_path: str = "initial_state.json") -> str:

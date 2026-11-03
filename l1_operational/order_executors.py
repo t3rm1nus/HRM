@@ -131,9 +131,21 @@ class OrderExecutors:
             # In paper mode (simulation), use SimulatedExchangeClient
             if self.paper_mode:
                 try:
-                    # CRITICAL FIX: Log NAV before execution
+                    # CRITICAL FIX: Sync portfolio and calculate NAV BEFORE execution
+                    # This ensures NAV Before reflects the actual current state including
+                    # any previous trades in the same batch
                     if self.portfolio_manager:
-                        nav_before = getattr(self.portfolio_manager, 'portfolio', {}).get('total', 0.0)
+                        try:
+                            # Sync portfolio from SimulatedExchangeClient (single source of truth)
+                            await self.portfolio_manager.sync_from_exchange_async(self.simulated_client)
+                            
+                            # Calculate NAV using PortfolioManager's async method
+                            nav_before = await self.portfolio_manager.get_total_value_async()
+                            
+                            logger.info(f"📊 NAV Before order: ${nav_before:.2f}")
+                        except Exception as nav_error:
+                            logger.error(f"❌ Error calculating NAV before: {nav_error}")
+                            nav_before = 0.0
                     
                     # Execute order through simulated client
                     try:
@@ -159,7 +171,7 @@ class OrderExecutors:
                     # CRITICAL FIX: Calculate NAV after execution using PortfolioManager
                     if self.portfolio_manager:
                         try:
-                            # Sync portfolio from SimulatedExchangeClient (single source of truth)
+                            # Sync portfolio again after execution to get updated state
                             await self.portfolio_manager.sync_from_exchange_async(self.simulated_client)
                             
                             # Calculate NAV using PortfolioManager's async method
@@ -266,6 +278,8 @@ class OrderExecutors:
                                 cycle_id=None,  # Podría pasarse desde el caller
                                 strategy="order_executor"
                             )
+                            # DEDUPLICATION FIX: Mark order as already logged to prevent duplicate logging in portfolio_manager
+                            execution_result['_already_logged'] = True
                             logger.info(f"📝 Trade logged to PaperTradeLogger: {symbol} {action.upper()} {quantity:.6f}")
                         except Exception as log_error:
                             logger.error(f"❌ Error logging to PaperTradeLogger: {log_error}")

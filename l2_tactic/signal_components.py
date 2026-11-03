@@ -11,9 +11,9 @@ Contains common functionality shared across signal generators:
 from typing import Dict, List, Any, Optional
 from abc import ABC, abstractmethod
 from core.logging import logger
-from core.models import TacticalSignal
+from .models import TacticalSignal
 import pandas as pd
-from utils import safe_float
+from .l2_utils import safe_float
 
 
 class BTCEthereumSynchronizationMixin:

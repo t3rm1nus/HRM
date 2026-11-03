@@ -1,0 +1,29 @@
+Reglas obligatorias para TODO código que genero (Python y TypeScript):
+
+1. NOMBRES EN ESPAÑOL: Funciones, variables, componentes y archivos en español, descriptivos y con verbo (obtenerOperaciones, calcularDrawdown, validarConfiguracion).
+
+2. FUNCIONES UNICAS: Una función hace una sola cosa. Máximo 20 líneas por función y 3 parámetros. Si hay más parámetros, usar un objeto tipado.
+
+3. COMPONENTES REACT: Componentes de 150 líneas o menos. Extraer hooks y subcomponentes si exceden este límite.
+
+4. SIN NUMEROS MÁGICOS: Todas las constantes deben tener nombre definidas en un archivo de constantes. No usar números o strings sin nombre en el código.
+
+5. SIN COMENTARIOS REDUNDANTES: No comentar qué hace el código. Los comentarios deben explicar el porqué de una decisión, no el qué.
+
+6. CAPAS SEPARADAS:
+   - Datos: api/
+   - Lógica pura: dominio/
+   - Presentación: componentes/, paginas/
+
+7. TIPADO ESTRICTO:
+   - TypeScript: strict mode, sin 'any'. Usar tipos explícitos.
+   - Python: type hints obligatorios en todas las funciones.
+
+8. TEST UNITARIOS: Cada función de dominio debe tener test unitario asociado.
+
+9. SEGURIDAD: Nunca imprimir, registrar ni devolver claves API en logs o respuestas.
+
+Estructura de carpetas requerida:
+- api/       -> backend FastAPI
+- frontend/  -> Vite + TypeScript
+- docs/front/-> documentación de frontend

@@ -83,7 +83,7 @@ def validate_state_structure(state: Dict) -> Dict:
     
     if not isinstance(state, dict):
         logger.error("❌ Estado inválido: no es un diccionario")
-        return initialize_state(["BTCUSDT", "ETHUSDT"], 3000.0)
+        return initialize_state(["BTCUSDT", "ETHUSDT"], 500.0)
     
     # Validar estructura mínima requerida
     required_keys = ["market_data", "portfolio", "l3_output"]
@@ -112,8 +112,8 @@ def validate_state_structure(state: Dict) -> Dict:
         state["portfolio"] = {
             "btc_balance": 0.0,
             "eth_balance": 0.0,
-            "usdt_balance": 3000.0,
-            "total_value": 3000.0
+            "usdt_balance": 500.0,
+            "total_value": 500.0
         }
     
     # Validar balances

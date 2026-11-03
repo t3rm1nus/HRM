@@ -20,6 +20,7 @@ from .signal_generators import (
     create_generator
 )
 from .signal_components import PostProcessingMixin
+from .models import TacticalSignal
 
 
 class L2TacticProcessor(PostProcessingMixin):
@@ -173,7 +174,7 @@ class L2TacticProcessor(PostProcessingMixin):
                 except Exception as e:
                     logger.error(f"❌ Error generating signal for {symbol}: {e}")
                     # Create fallback signal
-                    from core.models import TacticalSignal
+                    from .models import TacticalSignal
                     fallback_signal = TacticalSignal(
                         symbol=symbol,
                         side='hold',
@@ -368,5 +369,3 @@ class L2TacticProcessor(PostProcessingMixin):
         return False
 
 
-# Import core models for signal creation
-from core.models import TacticalSignal

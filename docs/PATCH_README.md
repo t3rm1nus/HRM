@@ -20,7 +20,7 @@ Este parche implementa tres mejoras críticas para el sistema HRM:
 ### 2. `l1_operational/simulated_exchange_client.py`
 - Agregado método `get_instance()` para obtener/crear la instancia singleton
 - Agregado método `reset_instance()` para testing
-- Valores por defecto para paper trading: BTC=0.01549, ETH=0.385, USDT=3000.0
+- Valores por defecto para paper trading: BTC=0.01549, ETH=0.385, USDT=500.0
 
 ### 3. `auto_learning_system.py`
 - Agregado patrón Singleton a `SelfImprovingTradingSystem`

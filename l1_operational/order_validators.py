@@ -61,7 +61,8 @@ class OrderValidators:
         """
         # Validar tamaño mínimo de orden
         order_value = order['quantity'] * order['price']
-        min_order_size = self.config.get('MIN_ORDER_SIZE_USDT', 5.0)
+        # Prompt 3A: Default unificado a 2.0 USDT (era 5.0, inconsistente con order_manager)
+        min_order_size = self.config.get('MIN_ORDER_SIZE_USDT', 2.0)
 
         if order_value < min_order_size:
             return f"Valor de orden (${order_value:.2f}) menor al mínimo permitido (${min_order_size:.2f})"
@@ -147,9 +148,12 @@ class OrderValidators:
             normalized_order['side'] = normalized_order['action']
 
         # Agregar campos adicionales si existen
-        for key in ['timestamp', 'signal_source', 'reason', 'status', 'order_type', 'execution_type']:
+        for key in ['timestamp', 'signal_source', 'status', 'order_type', 'execution_type']:
             if key in order:
                 normalized_order[key] = order[key]
+
+        # Garantizar que el campo reason siempre existe con valor por defecto
+        normalized_order['reason'] = order.get('reason', 'strategy_signal')
 
         return normalized_order
 

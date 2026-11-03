@@ -76,12 +76,13 @@ class AllocationConfig:
 @dataclass
 class TradingConfig:
     """Configuración de trading"""
-    min_order_size: int = 10          # Mínimo $10 por orden
+    min_order_size: int = 2           # Mínimo $2 por orden (Prompt 3A FIX)
     max_order_size: int = 100         # Máximo $100 por orden
     risk_per_trade: float = 0.02      # 2% riesgo por trade
     max_portfolio_risk: float = 0.10   # 10% riesgo total
     position_sizing: PositionSizingConfig = field(default_factory=PositionSizingConfig)
-    min_order_size_usd: float = 10.0
+    min_order_size_usd: float = 2.0   # Prompt 3A FIX: unificado a 2.0 USDT
+    min_usdt_reserve: float = 5.0     # Prompt 6A FIX: reserva mínima de USDT para liquidez
     max_allocation_per_symbol_pct: float = 30.0
     available_trading_capital_pct: float = 80.0
     cash_reserve_pct: float = 20.0
@@ -126,7 +127,7 @@ class HRMAppConfig:
     
     # Balances iniciales simulados - desde initial_state.json
     simulated_initial_balances: Dict[str, float] = field(
-        default_factory=lambda: {"BTC": 0.0, "ETH": 0.0, "USDT": 3000.0}
+        default_factory=lambda: {"BTC": 0.0, "ETH": 0.0, "USDT": 500.0}
     )
     
     # API Keys

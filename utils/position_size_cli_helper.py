@@ -1031,12 +1031,12 @@ async def main():
             self._balance_cache = {
                 "BTC": 0.01549,
                 "ETH": 0.385,
-                "USDT": 3000.0
+                "USDT": 500.0
             }
             self.portfolio = {
                 "BTCUSDT": {"position": 0.01549, "free": 0.01549},
                 "ETHUSDT": {"position": 0.385, "free": 0.385},
-                "USDT": {"free": 3000.0}
+                "USDT": {"free": 500.0}
             }
         
         async def get_asset_balance_async(self, asset: str) -> float:

@@ -18,6 +18,78 @@ from l3_strategy.decision_maker import make_decision
 from l3_strategy.regime_classifier import ejecutar_estrategia_por_regimen
 
 
+def _calculate_nav_for_l3(pm, market_data: Dict) -> Dict:
+    """
+    Calcula el NAV para L3 usando balances del PortfolioManager y precios del market_data.
+    
+    Args:
+        pm: PortfolioManager instance
+        market_data: Dict con datos de mercado actuales
+        
+    Returns:
+        Dict con NAV breakdown o None si no se puede calcular
+    """
+    try:
+        # Obtener balances del PortfolioManager (sync)
+        usdt_balance = 0.0
+        btc_balance = 0.0
+        eth_balance = 0.0
+        
+        # Intentar obtener balances desde el portfolio del PM
+        if hasattr(pm, 'portfolio') and pm.portfolio:
+            portfolio = pm.portfolio
+            usdt_balance = portfolio.get('USDT', {}).get('free', 0.0)
+            btc_balance = portfolio.get('BTCUSDT', {}).get('position', 0.0)
+            eth_balance = portfolio.get('ETHUSDT', {}).get('position', 0.0)
+        
+        # Si no hay balances en portfolio, intentar con _balance_cache
+        if usdt_balance == 0 and btc_balance == 0 and eth_balance == 0:
+            if hasattr(pm, '_balance_cache') and pm._balance_cache:
+                usdt_balance = pm._balance_cache.get('USDT', 0.0)
+                btc_balance = pm._balance_cache.get('BTC', 0.0)
+                eth_balance = pm._balance_cache.get('ETH', 0.0)
+        
+        # Obtener precios del market_data
+        btc_price = 0.0
+        eth_price = 0.0
+        
+        if market_data:
+            # BTC price
+            if 'BTCUSDT' in market_data:
+                btc_data = market_data['BTCUSDT']
+                if isinstance(btc_data, dict):
+                    btc_price = float(btc_data.get('close', 0.0))
+                elif hasattr(btc_data, 'iloc') and len(btc_data) > 0:
+                    btc_price = float(btc_data['close'].iloc[-1])
+            
+            # ETH price
+            if 'ETHUSDT' in market_data:
+                eth_data = market_data['ETHUSDT']
+                if isinstance(eth_data, dict):
+                    eth_price = float(eth_data.get('close', 0.0))
+                elif hasattr(eth_data, 'iloc') and len(eth_data) > 0:
+                    eth_price = float(eth_data['close'].iloc[-1])
+        
+        # Calcular valores
+        btc_value = btc_balance * btc_price
+        eth_value = eth_balance * eth_price
+        total_nav = usdt_balance + btc_value + eth_value
+        
+        return {
+            'usdt': usdt_balance,
+            'btc_balance': btc_balance,
+            'btc_price': btc_price,
+            'btc_value': btc_value,
+            'eth_balance': eth_balance,
+            'eth_price': eth_price,
+            'eth_value': eth_value,
+            'total_nav': total_nav
+        }
+    except Exception as e:
+        logger.warning(f"⚠️ Error calculando NAV para L3: {e}")
+        return None
+
+
 def get_l3_decision(market_data: Dict) -> Dict:
     """
     Obtiene una decisión fresca de L3 basada en datos de mercado actuales.
@@ -32,11 +104,21 @@ def get_l3_decision(market_data: Dict) -> Dict:
         # Obtener régimen actual usando el clasificador completo
         regimen_resultado = ejecutar_estrategia_por_regimen(market_data)
 
+        # PROPAGATE data completeness metrics from regime classifier
+        data_completeness = regimen_resultado.get('data_completeness', 1.0)
+        available_candles = regimen_resultado.get('available_candles', 0)
+        required_candles = regimen_resultado.get('required_candles', 360)
+        raw_confidence = regimen_resultado.get('raw_confidence', regimen_resultado.get('confidence', 0.5))
+        
         # Crear output L3 con timestamp fresco
         l3_output = {
             'regime': regimen_resultado.get('regime', 'unknown'),
             'signal': regimen_resultado.get('signal', 'hold'),
             'confidence': regimen_resultado.get('confidence', 0.5),
+            'raw_confidence': raw_confidence,
+            'data_completeness': data_completeness,
+            'available_candles': available_candles,
+            'required_candles': required_candles,
             'market_regime': regimen_resultado.get('regime', 'unknown'),
             'allow_l2_signals': regimen_resultado.get('allow_l2_signal', True),
             'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -44,6 +126,10 @@ def get_l3_decision(market_data: Dict) -> Dict:
             'setup_type': regimen_resultado.get('setup_type'),
             'subtype': regimen_resultado.get('subtype', 'unknown')
         }
+        
+        # Log data completeness warning if applicable
+        if data_completeness < 0.5:
+            logger.warning(f"⚠️ L3 OUTPUT GENERATED WITH PENALIZED CONFIDENCE: {raw_confidence:.0%} → {regimen_resultado.get('confidence', 0.5):.0%} (data: {available_candles}/{required_candles} candles)")
 
         # TEMPORARY AGGRESSIVE MODE - Override L3 decision to allow L2 signals
         from core.config import TEMPORARY_AGGRESSIVE_MODE
@@ -72,9 +158,32 @@ def get_l3_decision(market_data: Dict) -> Dict:
                     'system_state_metadata': {'l3_balance_sync_failed': False}
                 }
             
+            # CRITICAL FIX: Obtener portfolio_state real del PortfolioManager
+            portfolio_state = {}
+            try:
+                from core.portfolio_manager import PortfolioManager
+                pm = PortfolioManager.get_instance()
+                if pm:
+                    # Obtener NAV calculado con precios actuales del market_data
+                    nav_result = _calculate_nav_for_l3(pm, market_data)
+                    if nav_result:
+                        portfolio_state = {
+                            'usdt_balance': nav_result.get('usdt', 0.0),
+                            'total_nav': nav_result.get('total_nav', 0.0),
+                            'btc_value': nav_result.get('btc_value', 0.0),
+                            'eth_value': nav_result.get('eth_value', 0.0)
+                        }
+                        logger.info(f"📊 Portfolio state inyectado en L3: NAV=${portfolio_state['total_nav']:.2f}, "
+                                   f"USDT=${portfolio_state['usdt_balance']:.2f}, "
+                                   f"BTC=${portfolio_state['btc_value']:.2f}, "
+                                   f"ETH=${portfolio_state['eth_value']:.2f}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener portfolio_state del PortfolioManager: {e}")
+                portfolio_state = {}
+            
             strategic_decision = make_decision(
                 inputs={},
-                portfolio_state={},
+                portfolio_state=portfolio_state,
                 market_data=market_data,
                 regime_decision=regimen_resultado,
                 state=state

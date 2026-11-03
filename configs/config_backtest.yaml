@@ -18,7 +18,7 @@ trading:
   # Costs & Fees - Historical average
   commission_rate: 0.0012  # Historical Binance fees
   slippage_bps: 3  # Conservative slippage assumption
-  min_order_value_usdt: 1.0  # Small orders for backtest
+  min_order_value_usdt: 2.0  # Prompt 3A FIX: Unificado a 2.0 USDT
 
   # Trading Logic - Test all modes
   hrm_path_mode: "PATH2"  # Test hybrid mode

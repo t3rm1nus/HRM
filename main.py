@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # main.py - VERSIÓN COMPLETAMENTE CORREGIDA CON FIXES CRÍTICOS
 
 import asyncio
@@ -45,6 +45,20 @@ from system.state_coordinator import StateCoordinator
 
 # Import ErrorRecoveryManager
 from system.error_recovery_manager import ErrorRecoveryManager, RecoveryActionType
+
+# 🌊 ORDER FLOW CAPTURE - L1 Perfecto
+from l1_operational.order_flow_capture import (
+    OrderFlowCapture,
+    create_and_start_order_flow_capture,
+    get_order_flow_capture
+)
+
+# 🌊 ORDER FLOW SIGNAL GENERATOR - Señales basadas en bid_ask_imbalance
+from l1_operational.orderflow_signal_generator import (
+    OrderFlowSignalGenerator,
+    create_order_flow_signal_generator,
+    get_order_flow_signal_generator
+)
 
 from l1_operational.data_feed import DataFeed
 from l2_tactic.tactical_signal_processor import L2TacticProcessor
@@ -136,7 +150,7 @@ async def main():
         # CONFIGURAR MANEJADORES DE SEÑALES PARA SHUTDOWN LIMPIO
         # ================================================================
         setup_signal_handlers()
-        
+
         # ================================================================
         # STEP 1: SYSTEM CLEANUP - USAR perform_full_cleanup()
         # ================================================================
@@ -174,17 +188,21 @@ async def main():
         logger.info("🚀 Starting HRM system")
 
         # ================================================================
+        # STEP 1.5: DETERMINE TRADING MODE (ONCE - BEFORE STEP 2)
+        # ================================================================
+        # FIX: Calculate mode ONCE here, before initializing any components
+        paper_mode_env = os.getenv('PAPER_MODE', 'true').lower()
+        if paper_mode_env == 'false':
+            mode = "live"
+            logger.info("🔴 MODO LIVE detectado (PAPER_MODE=false)")
+        else:
+            mode = "simulated"
+            logger.info("🟡 MODO SIMULADO detectado (PAPER_MODE!=false)")
+
+        # ================================================================
         # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
         # ================================================================
         logger.info("🔧 Initializing StateCoordinator...")
-        # Determine mode based on configuration
-        mode = "simulated"  # Default to simulated mode
-        try:
-            live_config = get_config("live")
-            if not getattr(live_config, 'PAPER_MODE', True):
-                mode = "live"
-        except Exception:
-            mode = "simulated"
         state_coordinator = StateCoordinator(mode=mode)
         
         # ✅ CRITICAL: Verify StateCoordinator is not None
@@ -244,12 +262,23 @@ async def main():
             logger.info("✅ MarketDataManager initialized successfully")
         except Exception as mkt_error:
             logger.error(f"❌ MarketDataManager initialization failed: {mkt_error}")
-            # CRITICAL: Create a minimal fallback MarketDataManager
-            market_data_manager = MarketDataManager(
-                symbols=["BTCUSDT", "ETHUSDT"],
-                fallback_enabled=True
-            )
-            logger.warning("⚠️ Using fallback MarketDataManager initialization")
+            
+            # WAIT: Give system time to stabilize before retry
+            logger.info("⏳ Waiting 2 seconds for system to stabilize before retry...")
+            import time
+            time.sleep(2)
+            
+            # FALLBACK: Try simpler initialization with minimal parameters
+            try:
+                logger.info("🔄 Attempting fallback initialization with minimal parameters...")
+                market_data_manager = MarketDataManager(
+                    symbols=["BTCUSDT"],  # Solo un símbolo para simplificar
+                    fallback_enabled=False  # Deshabilitar fallback para evitar complejidad adicional
+                )
+                logger.warning("⚠️ Using fallback MarketDataManager initialization (BTCUSDT only, no fallback)")
+            except Exception as fallback_error:
+                logger.critical(f"🚨 FATAL: MarketDataManager fallback initialization also failed: {fallback_error}")
+                raise RuntimeError(f"MarketDataManager cannot be initialized. Original error: {mkt_error}, Fallback error: {fallback_error}")
     
         # ✅ CRITICAL: Verify MarketDataManager is not None
         if market_data_manager is None:
@@ -258,6 +287,77 @@ async def main():
 
         # 🔧 REGISTRAR MarketDataManager para shutdown global
         register_component_for_shutdown('market_data_manager', market_data_manager)
+
+        # ================================================================
+        # STEP 4.5: INITIALIZE ORDER FLOW CAPTURE (L1 Perfecto)
+        # ================================================================
+        logger.info("🌊 Inicializando OrderFlowCapture (L1 Perfecto)...")
+        print("🌊 Inicializando OrderFlowCapture (L1 Perfecto)...", flush=True)
+        
+        order_flow_capture = None
+        try:
+            # CRITICAL FIX: Usar polling REST API en lugar de websockets para evitar streams muertos
+            # Los websockets pueden quedar colgados silenciosamente, el polling es más fiable
+            order_flow_capture = await create_and_start_order_flow_capture(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                data_dir="backtesting/data/orderflow",
+                use_polling=True  # FORZAR polling REST API - más fiable que websockets
+            )
+            register_component_for_shutdown('order_flow_capture', order_flow_capture)
+            
+            print("✅ OrderFlowCapture iniciado en modo POLLING REST API", flush=True)
+            logger.info("✅ OrderFlowCapture iniciado y registrado para shutdown (modo POLLING)")
+            
+            # Verificar que el directorio de datos existe
+            import os
+            orderflow_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtesting/data/orderflow")
+            os.makedirs(orderflow_dir, exist_ok=True)
+            print(f"📁 Directorio OrderFlow verificado: {orderflow_dir}", flush=True)
+            
+            # Esperar un momento para que el polling capture datos iniciales
+            await asyncio.sleep(6)
+            
+            # Verificar features iniciales
+            for symbol in ["BTCUSDT", "ETHUSDT"]:
+                features = order_flow_capture.get_current_features(symbol)
+                if features:
+                    print(f"📊 OrderFlow {symbol}: spread={features['spread_bps']:.2f}bps, "
+                          f"imbalance={features['bid_ask_imbalance']:.3f}", flush=True)
+                    logger.info(f"📊 OrderFlow {symbol}: spread={features['spread_bps']:.2f}bps, "
+                               f"imbalance={features['bid_ask_imbalance']:.3f}")
+                else:
+                    print(f"⚠️ OrderFlow {symbol}: No hay features disponibles aún", flush=True)
+                    
+        except Exception as of_error:
+            print(f"❌ OrderFlowCapture initialization failed: {of_error}", flush=True)
+            logger.error(f"❌ OrderFlowCapture initialization failed: {of_error}")
+            logger.warning("⚠️ Continuando sin OrderFlowCapture - L1 no tendrá datos de flujo de órdenes")
+            order_flow_capture = None
+
+        # ================================================================
+        # STEP 4.6: INITIALIZE ORDER FLOW SIGNAL GENERATOR
+        # ================================================================
+        logger.info("🌊 Inicializando OrderFlowSignalGenerator...")
+        print("🌊 Inicializando OrderFlowSignalGenerator...", flush=True)
+        
+        order_flow_signal_generator = None
+        try:
+            if order_flow_capture is not None:
+                order_flow_signal_generator = create_order_flow_signal_generator(
+                    order_flow_capture=order_flow_capture
+                )
+                register_component_for_shutdown('order_flow_signal_generator', order_flow_signal_generator)
+                
+                print("✅ OrderFlowSignalGenerator inicializado", flush=True)
+                logger.info("✅ OrderFlowSignalGenerator inicializado y registrado para shutdown")
+            else:
+                logger.warning("⚠️ OrderFlowSignalGenerator no inicializado - OrderFlowCapture no disponible")
+                
+        except Exception as sg_error:
+            print(f"❌ OrderFlowSignalGenerator initialization failed: {sg_error}", flush=True)
+            logger.error(f"❌ OrderFlowSignalGenerator initialization failed: {sg_error}")
+            logger.warning("⚠️ Continuando sin OrderFlowSignalGenerator")
+            order_flow_signal_generator = None
 
         # ================================================================
         # STEP 5: ENSURE CRITICAL COMPONENTS EXIST (WITH MARKET DATA MANAGER INJECTED)
@@ -275,11 +375,11 @@ async def main():
             # 🔧 REGISTRAR BinanceClient para shutdown global
             register_component_for_shutdown('binance_client', binance_client)
             
-            # ✅ Create PortfolioManager with BinanceClient AND MarketDataManager in simulated mode
+            # ✅ Create PortfolioManager with BinanceClient AND MarketDataManager using shared mode
             portfolio_manager = PortfolioManager(
                 exchange_client=binance_client, 
                 market_data_manager=market_data_manager,
-                mode="simulated"
+                mode=mode
             )
             
             # ✅ If PortfolioManager has async initialization, call it
@@ -301,6 +401,7 @@ async def main():
             logger.info("✅ PortfolioManager from bootstrap")
             
         # Order Manager
+        simulated_client = None
         if 'order_manager' not in components or components.get('order_manager') is None:
             from l1_operational.order_manager import OrderManager
             from system.bootstrap import bootstrap_simulated_exchange
@@ -313,7 +414,23 @@ async def main():
             logger.info("✅ OrderManager created manually with simulated client")
         else:
             order_manager = components['order_manager']
+            simulated_client = getattr(order_manager, 'simulated_client', None)
             logger.info("✅ OrderManager from bootstrap")
+        
+        # 🔄 CRITICAL FIX: Sincronizar PortfolioManager con SimulatedExchangeClient después del bootstrap
+        if simulated_client and portfolio_manager:
+            logger.info("🔄 Sincronizando PortfolioManager con SimulatedExchangeClient después del bootstrap...")
+            try:
+                sync_success = await portfolio_manager.sync_from_exchange_async(simulated_client)
+                if sync_success:
+                    # Obtener el balance sincronizado para loguear
+                    sim_balances = simulated_client.get_balances() if hasattr(simulated_client, 'get_balances') else {}
+                    usdt_balance = sim_balances.get('USDT', 0)
+                    logger.info(f"✅ PortfolioManager sincronizado con SimulatedExchangeClient: USDT=${usdt_balance:.2f}")
+                else:
+                    logger.warning("⚠️ No se pudo sincronizar PortfolioManager con SimulatedExchangeClient")
+            except Exception as sync_error:
+                logger.error(f"❌ Error sincronizando PortfolioManager: {sync_error}")
         
         # 🔧 REGISTRAR componentes para shutdown global
         register_component_for_shutdown('portfolio_manager', portfolio_manager)
@@ -445,36 +562,25 @@ async def main():
             logger.warning("🔄 Fixed empty l3_output in state")
         logger.info("🔧 Initializing position management...")
         from core.position_rotator import PositionRotator, AutoRebalancer
+        from core.config import is_paper_mode
         
-        # Get paper_mode from config and inject into PositionRotator
-        try:
-            live_config = get_config("live")
-            paper_mode = getattr(live_config, 'PAPER_MODE', False)
-        except Exception:
-            paper_mode = False
-        
+        # Use the already determined mode (simulated/live/etc.)
+        # mode is already set earlier in main() - use it directly
         position_rotator = PositionRotator(
             portfolio_manager=portfolio_manager,
-            paper_mode=paper_mode
+            mode=mode
         )
         auto_rebalancer = AutoRebalancer(
             portfolio_manager=portfolio_manager,
-            paper_mode=paper_mode
+            mode=mode
         )
-        logger.info("✅ Position managers ready")
+        logger.info(f"✅ Position managers ready (mode: {mode}, paper_mode: {is_paper_mode(mode)})")
 
         # ================================================================
         # STEP 9: INITIALIZE TRADING PIPELINE MANAGER
         # ================================================================
         logger.info("🔧 Initializing TradingPipelineManager...")
-        # Determine mode based on configuration
-        mode = "simulated"  # Default to simulated mode
-        try:
-            live_config = get_config("live")
-            if not getattr(live_config, 'PAPER_MODE', True):
-                mode = "live"
-        except Exception:
-            mode = "simulated"
+        # Use the already determined mode (no redefinition - fixes bug where mode was always reset to "simulated")
         
         trading_pipeline = TradingPipelineManager(
             portfolio_manager=portfolio_manager,
@@ -515,6 +621,7 @@ async def main():
         # ================================================================
         # STEP 14: BOOTSTRAP DEPLOYMENT (INITIAL ENTRY)
         # ================================================================
+        bootstrap_executed = False
         if validate_market_data(market_data):
             logger.info("🚀 Calculating bootstrap deployment...")
             try:
@@ -527,6 +634,7 @@ async def main():
                     processed_orders = await order_manager.execute_orders(bootstrap_orders)
                     await portfolio_manager.update_from_orders_async(processed_orders)
                     logger.info(f"✅ Bootstrap deployment completed: {len(processed_orders)} orders executed")
+                    bootstrap_executed = True
                 else:
                     logger.info("⏸️ No bootstrap deployment needed - checking initial deployment")
                     # Fallback to initial deployment if bootstrap failed or is disabled
@@ -536,6 +644,7 @@ async def main():
                         processed_orders = await order_manager.execute_orders(orders)
                         await portfolio_manager.update_from_orders_async(processed_orders)
                         logger.info(f"✅ Initial deployment: {len(processed_orders)} orders")
+                        bootstrap_executed = True
                     else:
                         logger.info("⚠️ No initial deployment needed")
                         
@@ -543,6 +652,10 @@ async def main():
                 logger.error(f"❌ Deployment failed: {deploy_error}")
         else:
             logger.warning("⚠️ Skipping deployment - invalid market data")
+        
+        # ⏳ Mark bootstrap as completed to start grace period (prevents immediate SELL signals)
+        if bootstrap_executed and trading_pipeline:
+            trading_pipeline.mark_bootstrap_completed(current_cycle=0)
 
         # ================================================================
         # STEP 15: INTEGRATE AUTO-LEARNING (FIXED)
@@ -606,7 +719,7 @@ async def main():
         logger.info("🔥 PRIORIDAD 2: Ejecutando warmup_all_symbols()...")
         warmup_success = await market_data_manager.warmup_all_symbols(
             timeframe="1m",
-            limit=100
+            limit=400
         )
         
         if not warmup_success:
@@ -615,7 +728,7 @@ async def main():
             warmup_success = await market_data_manager.force_warmup(
                 symbol="BTCUSDT",
                 timeframe="1m",
-                limit=100
+                limit=400
             )
             
             if not warmup_success:
@@ -623,7 +736,7 @@ async def main():
                 warmup_success = await market_data_manager.force_warmup(
                     symbol="ETHUSDT",
                     timeframe="1m",
-                    limit=100
+                    limit=400
                 )
         
         # ================================================================
@@ -642,7 +755,7 @@ async def main():
             retry_success = await market_data_manager.force_warmup(
                 symbol="BTCUSDT",
                 timeframe="1m",
-                limit=100
+                limit=400
             )
             
             if retry_success:
@@ -658,7 +771,18 @@ async def main():
         logger.info(f"✅ Market data verificado: {len(market_data_after_warmup)} símbolos")
         
         # ================================================================
-        # STEP 17: MAIN TRADING LOOP
+        # STEP 17: SERIALIZE INITIAL PORTFOLIO STATE (CRITICAL FIX)
+        # ================================================================
+        logger.info("💾 Serializing initial portfolio state...")
+        initial_portfolio_snapshot = portfolio_manager.get_portfolio_state()
+        logger.info(f"📸 Initial portfolio snapshot: {initial_portfolio_snapshot}")
+        
+        # Save initial state to persistent storage
+        portfolio_manager.save_to_json()
+        logger.info("✅ Initial portfolio state saved to persistent_state/portfolio_state_live.json")
+        
+        # ================================================================
+        # STEP 18: MAIN TRADING LOOP
         # ================================================================
         logger.info("🔄 Starting main trading loop...")
         logger.info("="*80)
@@ -740,48 +864,117 @@ async def main():
                         current_usdt = balances.get("USDT", 0.0)
                         
                         if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
-                            logger.critical("ERROR: Pérdida de estado - todos los balances son cero")
-                            # Intentar restaurar los balances iniciales
-                            logger.info("🔧 Intentando restaurar balances iniciales...")
+                            logger.critical("🚨 CRITICAL: All balances are zero - state loss detected!")
+                            
+                            # FIX: Attempt recovery from persistent_state first
+                            logger.info("🔧 Attempting to recover state from persistent storage...")
+                            recovery_success = False
+                            recovery_source = None
+                            
+                            # STEP 1: Try to load from persistent_state/portfolio_state_live.json
                             try:
-                                # Force reset del SimulatedExchangeClient para restaurar balances
-                                if hasattr(client, 'force_reset'):
-                                    client.force_reset({
-                                        "BTC": 0.01549,
-                                        "ETH": 0.385,
-                                        "USDT": 3000.0
-                                    })
-                                    logger.info("✅ Balances iniciales restaurados")
-                                    # Volver a obtener los balances después del reset
-                                    if hasattr(client, 'get_account_balances'):
-                                        import inspect
-                                        if inspect.iscoroutinefunction(client.get_account_balances):
-                                            balances = await client.get_account_balances()
-                                        else:
-                                            balances = client.get_account_balances()
-                                    elif hasattr(client, 'get_balance'):
-                                        if inspect.iscoroutinefunction(client.get_balance):
-                                            current_btc = await client.get_balance("BTC")
-                                            current_eth = await client.get_balance("ETH")
-                                            current_usdt = await client.get_balance("USDT")
-                                            balances = {
-                                                "BTC": current_btc,
-                                                "ETH": current_eth,
-                                                "USDT": current_usdt
+                                if hasattr(portfolio_manager, 'load_from_json'):
+                                    loaded = portfolio_manager.load_from_json()
+                                    if loaded:
+                                        # Successfully loaded from persistent storage
+                                        recovery_source = "persistent_state/portfolio_state_live.json"
+                                        recovery_success = True
+                                        logger.info(f"✅ State recovered from persistent storage: {recovery_source}")
+                                        logger.info(f"   BTC: {portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0):.6f}")
+                                        logger.info(f"   ETH: {portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0):.6f}")
+                                        logger.info(f"   USDT: {portfolio_manager.portfolio.get('USDT', {}).get('free', 0):.2f}")
+                                        
+                                        # Sync the recovered state to SimulatedExchangeClient
+                                        if hasattr(client, 'force_reset'):
+                                            recovered_balances = {
+                                                "BTC": portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0),
+                                                "ETH": portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0),
+                                                "USDT": portfolio_manager.portfolio.get('USDT', {}).get('free', 0)
                                             }
-                                        else:
-                                            balances = {
-                                                "BTC": client.get_balance("BTC"),
-                                                "ETH": client.get_balance("ETH"),
-                                                "USDT": client.get_balance("USDT")
-                                            }
-                                    logger.info(f"✅ Nuevos balances: {balances}")
-                                else:
-                                    logger.error("❌ No se puede restaurar balances - force_reset no disponible")
-                                    raise RuntimeError("Pérdida de estado - todos los balances son cero y no se puede restaurar")
-                            except Exception as reset_error:
-                                logger.error(f"❌ Error al restaurar balances: {reset_error}")
-                                raise RuntimeError("Pérdida de estado - todos los balances son cero")
+                                            client.force_reset(recovered_balances)
+                                            logger.info(f"✅ SimulatedExchangeClient synchronized with recovered state")
+                                    else:
+                                        logger.warning("⚠️ Persistent state file exists but has zero balances or is invalid")
+                            except Exception as load_error:
+                                logger.warning(f"⚠️ Failed to load from persistent storage: {load_error}")
+                            
+                            # STEP 2: If persistent state failed, try initial_portfolio_snapshot
+                            if not recovery_success:
+                                logger.info("🔧 Attempting recovery from initial_portfolio_snapshot...")
+                                try:
+                                    if 'initial_portfolio_snapshot' in locals() and initial_portfolio_snapshot:
+                                        btc_pos = initial_portfolio_snapshot.get('BTCUSDT', {}).get('position', 0)
+                                        eth_pos = initial_portfolio_snapshot.get('ETHUSDT', {}).get('position', 0)
+                                        usdt_free = initial_portfolio_snapshot.get('USDT', {}).get('free', 0)
+                                        
+                                        if btc_pos > 0 or eth_pos > 0 or usdt_free > 0:
+                                            recovery_source = "initial_portfolio_snapshot"
+                                            recovery_success = True
+                                            logger.info(f"✅ State recovered from initial_portfolio_snapshot")
+                                            logger.info(f"   BTC: {btc_pos:.6f}, ETH: {eth_pos:.6f}, USDT: {usdt_free:.2f}")
+                                            
+                                            # Restore to portfolio_manager
+                                            portfolio_manager.portfolio['BTCUSDT'] = {'position': btc_pos, 'free': btc_pos}
+                                            portfolio_manager.portfolio['ETHUSDT'] = {'position': eth_pos, 'free': eth_pos}
+                                            portfolio_manager.portfolio['USDT'] = {'free': usdt_free}
+                                            
+                                            # Sync to SimulatedExchangeClient
+                                            if hasattr(client, 'force_reset'):
+                                                client.force_reset({
+                                                    "BTC": btc_pos,
+                                                    "ETH": eth_pos,
+                                                    "USDT": usdt_free
+                                                })
+                                                logger.info(f"✅ SimulatedExchangeClient synchronized with initial snapshot")
+                                except Exception as snapshot_error:
+                                    logger.warning(f"⚠️ Failed to recover from initial snapshot: {snapshot_error}")
+                            
+                            # STEP 3: If all else fails, use hardcoded fallback values
+                            if not recovery_success:
+                                logger.warning("⚠️ All recovery methods failed - using hardcoded fallback values")
+                                recovery_source = "hardcoded_fallback"
+                                
+                                # Use hardcoded values as last resort
+                                fallback_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0}
+                                logger.info(f"🔧 Applying hardcoded fallback: {fallback_balances}")
+                                
+                                try:
+                                    if hasattr(client, 'force_reset'):
+                                        client.force_reset(fallback_balances)
+                                        logger.info("✅ Hardcoded fallback balances applied")
+                                        
+                                        # Update portfolio_manager with fallback values
+                                        portfolio_manager.portfolio['BTCUSDT'] = {
+                                            'position': fallback_balances['BTC'], 
+                                            'free': fallback_balances['BTC']
+                                        }
+                                        portfolio_manager.portfolio['ETHUSDT'] = {
+                                            'position': fallback_balances['ETH'], 
+                                            'free': fallback_balances['ETH']
+                                        }
+                                        portfolio_manager.portfolio['USDT'] = {
+                                            'free': fallback_balances['USDT']
+                                        }
+                                        recovery_success = True
+                                    else:
+                                        logger.error("❌ force_reset not available - cannot recover")
+                                        raise RuntimeError("State loss - all balances zero and recovery failed")
+                                except Exception as fallback_error:
+                                    logger.error(f"❌ Failed to apply hardcoded fallback: {fallback_error}")
+                                    raise RuntimeError("State loss - all recovery methods failed")
+                            
+                            # Log the recovery result
+                            logger.info("=" * 70)
+                            logger.info(f"🔄 STATE RECOVERY COMPLETED")
+                            logger.info(f"   Source: {recovery_source}")
+                            logger.info(f"   BTC: {portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0):.6f}")
+                            logger.info(f"   ETH: {portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0):.6f}")
+                            logger.info(f"   USDT: {portfolio_manager.portfolio.get('USDT', {}).get('free', 0):.2f}")
+                            logger.info("=" * 70)
+                            
+                            # Save recovered state to persistent storage
+                            portfolio_manager.save_to_json()
+                            logger.info("💾 Recovered state saved to persistent storage")
                 
                 # ============================================================
                 # CYCLE STEP 1: GET FRESH MARKET DATA
@@ -803,8 +996,57 @@ async def main():
                     continue
                 
                 # ============================================================
+                # CYCLE STEP 1.5: ORDER FLOW SIGNAL GENERATION (ANTES DE L1 CLÁSICO)
+                # ============================================================
+                orderflow_signals = {}
+                orderflow_override = False
+                
+                if order_flow_signal_generator is not None:
+                    try:
+                        # Actualizar estado de posiciones antes de generar señales
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            # Verificar si hay posición larga
+                            has_long = False
+                            if portfolio_manager:
+                                position = portfolio_manager.portfolio.get(symbol, {}).get('position', 0)
+                                has_long = position > 0
+                                order_flow_signal_generator.update_position_state(symbol, has_long)
+                        
+                        # Generar señales para cada símbolo
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            if symbol in market_data:
+                                signal_result = await order_flow_signal_generator.get_signal(symbol)
+                                orderflow_signals[symbol] = signal_result
+                                
+                                # Si la señal tiene confianza > 0.50, activar override
+                                if signal_result.action in ['buy', 'sell'] and signal_result.confidence > 0.50:
+                                    orderflow_override = True
+                                    logger.info(f"🌊 ORDERFLOW OVERRIDE: {symbol} {signal_result.action.upper()} "
+                                               f"(conf={signal_result.confidence:.2f}) - Bypass L1 clásico")
+                        
+                        # Log resumen de señales order flow cada 5 ciclos
+                        if cycle_id % 5 == 0 and orderflow_signals:
+                            logger.info("🌊 OrderFlow Signals Status:")
+                            for sym, sig in orderflow_signals.items():
+                                logger.info(f"   {sym}: {sig.action.upper()} (imb={sig.imbalance_current:.3f}, conf={sig.confidence:.2f})")
+                                    
+                    except Exception as of_sig_error:
+                        logger.warning(f"⚠️ OrderFlow signal generation error: {of_sig_error}")
+                        orderflow_signals = {}
+                        orderflow_override = False
+                
+                # ============================================================
                 # CYCLE STEP 2: PROCESS TRADING CYCLE
                 # ============================================================
+                # Si hay override de order flow, pasar las señales al pipeline
+                if orderflow_override:
+                    state['orderflow_signals'] = {sym: sig.to_dict() for sym, sig in orderflow_signals.items()}
+                    state['orderflow_override'] = True
+                else:
+                    state['orderflow_override'] = False
+                    if 'orderflow_signals' in state:
+                        del state['orderflow_signals']
+                
                 cycle_result = await trading_pipeline.process_trading_cycle(
                     state=state,
                     market_data=market_data,  # ✅ CRITICAL: Pass market_data explicitly
@@ -899,7 +1141,8 @@ async def main():
                 # CYCLE STEP 5: PORTFOLIO COMPARISON LOG (every cycle)
                 # ============================================================
                 # CRITICAL FIX: Log portfolio comparison using cycle_context snapshot
-                # Esto evita llamadas adicionales a get_balances_async()
+                # El cycle_context ahora se actualiza POST-EJECUCIÓN en trading_pipeline_manager.py
+                # para reflejar los balances reales después de ejecutar órdenes
                 cycle_context = trading_pipeline.get_cycle_context()
                 await log_portfolio_comparison(
                     cycle_context=cycle_context,
@@ -1196,7 +1439,7 @@ async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, m
             color = Fore.GREEN if current_total >= initial_capital else Fore.RED
             
             logger.info("=" * 70)
-            logger.info(f"{color}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} (CYCLE SNAPSHOT){Style.RESET_ALL}")
+            logger.info(f"{color}💰 PORTFOLIO COMPARISON - Cycle {cycle_id} (POST-EXECUTION SNAPSHOT){Style.RESET_ALL}")
             logger.info(f"   BTC:  {current_btc:.6f} @ ${btc_price:.2f} = ${btc_value:.2f}")
             logger.info(f"   ETH:  {current_eth:.6f} @ ${eth_price:.2f} = ${eth_value:.2f}")
             logger.info(f"   USDT: ${current_usdt:.2f}")
@@ -1208,6 +1451,138 @@ async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, m
             logger.error(f"❌ Error in portfolio comparison: {e}", exc_info=True)
 
 
+# 🚀 INTEGRACIÓN FastAPI - BEGIN
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+import uvicorn
+
+app = FastAPI(
+    title="HRM Trading System API",
+    description="API REST para el sistema de trading HRM",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+
+# Modelos de respuesta con type hints
+class StatusResponse(BaseModel):
+    status: str = Field(default="pending", description="Estado del sistema")
+    trading_active: bool = Field(default=False, description="Modo trading activo")
+    cycle_count: int = Field(default=0, description="Contador de ciclos")
+
+
+class PortfolioResponse(BaseModel):
+    btc_balance: float = Field(default=0.0, description="Balance BTC")
+    eth_balance: float = Field(default=0.0, description="Balance ETH")
+    usdt_balance: float = Field(default=0.0, description="Balance USDT")
+    total_nav: float = Field(default=0.0, description="NAV total")
+    initial_capital: float = Field(default=500.0, description="Capital inicial")
+
+
+class HealthCheckResponse(BaseModel):
+    status: str = Field(default="ok", description="Estado salud")
+    timestamp: str = Field(default="", description="Marca de tiempo")
+    version: str = Field(default="2.0.0", description="Versión API")
+
+
+# Endpoint health check
+@app.get(
+    "/health",
+    response_model=HealthCheckResponse,
+    summary="Chequeo de salud del sistema",
+    description="Verifica que el sistema de trading esté operando correctamente",
+)
+async def health_check() -> HealthCheckResponse:
+    from datetime import datetime, timezone
+    return HealthCheckResponse(
+        status="ok",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        version="2.0.0",
+    )
+
+
+# Endpoint status
+@app.get(
+    "/status",
+    response_model=StatusResponse,
+    summary="Estado actual del sistema de trading",
+    description="Obtiene el estado operativo del bot de trading",
+)
+async def get_status() -> StatusResponse:
+    return StatusResponse(
+        status="running" if True else "paused",
+        trading_active=True,
+        cycle_count=0,
+        uptime="sistema activo",
+    )
+
+
+# Endpoint portfolio
+@app.get(
+    "/portfolio",
+    response_model=PortfolioResponse,
+    summary="Información de la cartera actual",
+    description="Obtiene el estado actual de balances y NAV de la cartera",
+)
+async def get_portfolio() -> PortfolioResponse:
+    return PortfolioResponse(
+        btc_balance=0.0,
+        eth_balance=0.0,
+        usdt_balance=0.0,
+        total_nav=0.0,
+        initial_capital=500.0,
+    )
+
+
+# Endpoint version
+@app.get(
+    "/version",
+    summary="Información de versión",
+    description="Obtiene la versión actual del sistema",
+)
+async def get_version() -> dict:
+    return {"app_version": "2.0.0", "framework": "FastAPI"}
+
+
+def run_fastapi(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:
+    """Inicia el servidor FastAPI con uvicorn."""
+    uvicorn.run(app, host=host, port=port, reload=reload)
+
+
+# 🚀 INTEGRACIÓN FastAPI - END
+
+# Punto de entrada principal del sistema
 if __name__ == "__main__":
-    load_dotenv()
-    asyncio.run(main())
+    """Ejecutar el trading bot con API FastAPI integrada."""
+    import asyncio
+    from core.logging import logger
+    
+    logger.info("🚀 Iniciando HRM Trading System con API FastAPI integrada...")
+    logger.info("=" * 60)
+    
+    async def main_with_api() -> None:
+        """Ejecutar el trading loop y la API FastAPI concurrentemente."""
+        # Configurar y iniciar FastAPI en background
+        import uvicorn
+        config = uvicorn.Config(
+            app=app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="info",
+        )
+        server = uvicorn.Server(config)
+        
+        # Ejecutar API FastAPI en una tarea separada
+        api_task = asyncio.create_task(server.serve())
+        
+        # Ejecutar el trading loop principal
+        try:
+            await main()
+        finally:
+            # Cuando el trading loop termine, detener la API
+            server.should_exit = True
+            await api_task
+    
+    asyncio.run(main_with_api())

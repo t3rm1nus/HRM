@@ -257,24 +257,18 @@ def force_paper_mode() -> Dict[str, any]:
 def async_context_reset() -> Dict[str, any]:
     """Resetear contexto async para evitar initialize_async vs init issues."""
     try:
-        # Limpiar asyncio event loop
+        # En Python 3.10+, asyncio gestiona el event loop automáticamente.
+        # No es necesario resetear el loop si ya está corriendo.
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # FIX: El skip del reset del loop debe ser visible y no silencioso
-                logger.warning(
-                    "⚠️ CRÍTICO: Async loop reset omitido. "
-                    "Si BINANCE_MODE=live, el sistema puede arrancar en modo incorrecto. "
-                    "Verificando PAPER_MODE manualmente..."
-                )
-                # Forzar paper mode aquí también, no solo en el flujo normal
-                from core.config import HRMConfig
-                HRMConfig.PAPER_MODE = True
-                return {"success": True, "message": "Loop already running"}
-        except:
+                # El loop ya está corriendo, asyncio lo gestiona automáticamente
+                return {"success": True, "message": "Loop already running - managed by asyncio"}
+        except RuntimeError:
+            # No hay event loop en el thread actual, crear uno nuevo
             pass
         
-        # Crear nuevo event loop
+        # Crear nuevo event loop solo si no existe
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
         

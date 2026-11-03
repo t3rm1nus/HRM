@@ -18,7 +18,7 @@ trading:
   # Costs & Fees - Real market conditions
   commission_rate: 0.001  # Binance spot trading fees
   slippage_bps: 3  # Higher slippage in live markets
-  min_order_value_usdt: 10.0  # Round numbers for execution
+  min_order_value_usdt: 2.0   # Prompt 3A FIX: Unificado a 2.0 USDT
 
   # Trading Logic - Safe path for live trading
   hrm_path_mode: "PATH3"  # Full L3 dominance - maximum safety

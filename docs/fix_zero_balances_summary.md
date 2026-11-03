@@ -38,7 +38,7 @@ All tests passed successfully:
 ## How the Fix Works
 1. When a SimulatedExchangeClient instance is created, it checks if it's already initialized (singleton pattern)
 2. If it is already initialized, it checks if all balances are zero
-3. If all balances are zero, it restores the default initial balances (0.01549 BTC, 0.385 ETH, 3000 USDT)
+3. If all balances are zero, it restores the default initial balances (0.01549 BTC, 0.385 ETH, 500 USDT)
 4. Logs detailed information about the recovery process
 5. The system continues to operate with valid balances
 

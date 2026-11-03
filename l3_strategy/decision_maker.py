@@ -22,6 +22,9 @@ OUTPUT_FILE = os.path.join(INFER_DIR, "strategic_decision.json")
 # WEAK SIGNALS BLOCKED - Aggressive mode enabled (lowered from 0.55 to 0.45)
 WEAK_THRESHOLD = 0.45
 
+# MINIMUM CONFIDENCE THRESHOLD - Below this, L2 signals are blocked
+MIN_CONFIDENCE_THRESHOLD = 0.35
+
 
 def ensure_dir(directory: str):
     """Crea el directorio si no existe"""
@@ -415,8 +418,26 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
         # ========================================================================================
         # EVALUACIÓN DE DOMINANCIA L3 - UNA SOLA VEZ POR CICLO
         # ========================================================================================
+        
+        # CRITICAL RULE 0: LOW CONFIDENCE BLOCK - When confidence < MIN_CONFIDENCE_THRESHOLD (0.35)
+        # This is the highest priority rule - it blocks all L2 signals when confidence is too low
+        if regime_confidence < MIN_CONFIDENCE_THRESHOLD:
+            l3_dominance_state.update({
+                'allow_l2_signals': False,  # 🛡️ BLOCK L2 signals
+                'strategic_hold_active': True,
+                'strategic_hold_reason': f"LOW CONFIDENCE HOLD: confidence {regime_confidence:.2f} < {MIN_CONFIDENCE_THRESHOLD} - blocking active signals",
+                'strategic_hold_type': "HOLD_L3_LOW_CONFIDENCE",
+                'capital_preservation_mode': True,
+                'l2_signals_blocked': True,
+                'block_autorebalancer': False,  # Rebalancer has its own grace period control
+                'freeze_positions': True
+            })
+            regime_signal = 'hold'
+            # SINGLE CLEAR LOG MESSAGE - No other logs for this condition
+            logger.warning(f"🛡️ LOW CONFIDENCE HOLD: confidence={regime_confidence:.2f} < {MIN_CONFIDENCE_THRESHOLD} - blocking active signals")
+
         # RULE GOLD: TRENDING regime with confidence < 0.5 should NEVER block setups
-        if regime == "TRENDING" and regime_confidence < 0.5:
+        elif regime == "TRENDING" and regime_confidence < 0.5:
             logger.info(f"🎯 TRENDING LOW CONFIDENCE RULE: confidence {regime_confidence:.2f} < 0.5 - treating as UNCERTAIN, allowing setup trades")
             l3_dominance_state.update({
                 'allow_l2_signals': True,
@@ -468,11 +489,11 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
                     })
                     logger.info(f"🛡️ STRATEGIC HOLD: L3 emitting HOLD - allowing L2 signals and rebalance")
 
-            # RULE 2: WEAK SIGNALS BLOCKED - Apply WEAK_THRESHOLD logic
+            # RULE 2: WEAK SIGNALS BLOCKED - Apply WEAK_THRESHOLD logic (only when confidence >= MIN_CONFIDENCE_THRESHOLD)
             elif regime_confidence < WEAK_THRESHOLD:
-                # WEAK_THRESHOLD: Block signals when confidence < 0.55
+                # WEAK_THRESHOLD: Block signals when confidence < 0.45 (but >= 0.35)
                 l3_dominance_state.update({
-                    'allow_l2_signals': True,  # ✅ PERMITIR L2
+                    'allow_l2_signals': True,  # ✅ PERMITIR L2 (but with caution)
                     'strategic_hold_active': True,
                     'strategic_hold_reason': f"WEAK SIGNALS BLOCKED: confidence {regime_confidence:.2f} < {WEAK_THRESHOLD} threshold",
                     'strategic_hold_type': "HOLD_L3_WEAK_SIGNALS_BLOCKED",
@@ -674,37 +695,58 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     # EXPOSURE MANAGEMENT - FIX: Provide default exposure decisions when data is insufficient
     # ========================================================================================
     exposure_decisions = {}
+    
+    # Get data completeness from regime_decision if available
+    regime_data_completeness = regime_decision.get('data_completeness', 1.0) if regime_decision else 1.0
+    regime_available_candles = regime_decision.get('available_candles', 0) if regime_decision else 0
+    regime_required_candles = regime_decision.get('required_candles', 360) if regime_decision else 360
+    
     if portfolio_state and market_data:
         universo = ["BTCUSDT", "ETHUSDT"]
         exposure_decisions = gestionar_exposicion(universo, portfolio_state, market_data, regime)
         logger.info("📊 Decisiones de exposición calculadas exitosamente")
     else:
-        logger.warning("⚠️ Datos insuficientes para gestión de exposición - usando configuración por defecto")
+        # Log warning with data completeness context
+        if regime_data_completeness < 0.5:
+            logger.warning(f"⚠️ Datos insuficientes para gestión de exposición - Régimen clasificado con {regime_available_candles}/{regime_required_candles} velas ({regime_data_completeness:.1%})")
+        else:
+            logger.warning("⚠️ Datos insuficientes para gestión de exposición - portfolio_state o market_data no disponibles")
+        
         # FIX: Provide default exposure decisions instead of empty dict
-        # Default allocations based on regime
-        if regime.lower() == "bear":
+        # Default allocations based on regime and data completeness
+        if regime_data_completeness < 0.5:
+            # When data is insufficient, be more conservative
+            target_allocations = {'BTC': 0.30, 'ETH': 0.20, 'USDT': 0.50}
+            exposure_reason = f'Conservative allocation - insufficient regime data ({regime_data_completeness:.1%})'
+        elif regime.lower() == "bear":
             target_allocations = {'BTC': 0.00, 'ETH': 0.00, 'USDT': 1.00}
+            exposure_reason = 'Default allocation - bear regime'
         elif regime.lower() == "bull":
             target_allocations = {'BTC': 0.60, 'ETH': 0.30, 'USDT': 0.10}
+            exposure_reason = 'Default allocation - bull regime'
         else:
             target_allocations = {'BTC': 0.40, 'ETH': 0.30, 'USDT': 0.30}
+            exposure_reason = 'Default allocation - neutral regime'
         
         # Create default exposure decisions
         exposure_decisions = {
             'BTC': {
                 'action': 'hold',
                 'target_allocation': target_allocations['BTC'],
-                'reason': 'Default allocation - insufficient data'
+                'reason': exposure_reason,
+                'data_completeness': regime_data_completeness
             },
             'ETH': {
                 'action': 'hold',
                 'target_allocation': target_allocations['ETH'],
-                'reason': 'Default allocation - insufficient data'
+                'reason': exposure_reason,
+                'data_completeness': regime_data_completeness
             },
             'USDT': {
                 'action': 'hold',
                 'target_allocation': target_allocations['USDT'],
-                'reason': 'Default allocation - insufficient data'
+                'reason': exposure_reason,
+                'data_completeness': regime_data_completeness
             }
         }
 
@@ -815,12 +857,13 @@ def make_decision(inputs: dict, portfolio_state: dict = None, market_data: dict 
     # ========================================================================================
     # STRATEGIC HOLD LOGGING: Differentiate HOLD_L2 vs HOLD_L3
     # ========================================================================================
-    if strategic_hold_type:
+    # CRITICAL: Skip additional logging for LOW_CONFIDENCE hold - it already has a single clear log message
+    if strategic_hold_type and strategic_hold_type != "HOLD_L3_LOW_CONFIDENCE":
         logger.info(f"🛡️ STRATEGIC HOLD ACTIVE: {strategic_hold_type} - {strategic_hold_reason}")
         logger.info(f"📊 L3 DOMINANCE: allow_l2_signals={allow_l2_signal}, regime={regime}, confidence={regime_confidence:.2f}")
         if regime == 'RANGE':
             logger.info(f"🎯 CAPITAL PRESERVATION: RANGE regime - L3 blocking weak signals, HOLD is strategic imperative")
-    elif regime == 'RANGE' and not setup_type:
+    elif regime == 'RANGE' and not setup_type and not (strategic_hold_type == "HOLD_L3_LOW_CONFIDENCE"):
         logger.info(f"🛡️ RANGE REGIME HOLD: HOLD_L3_RANGE_DEFAULT - Blocking L2 signals in sideways market")
     elif setup_type:
         logger.info(f"✅ SETUP STRATEGY ACTIVE: {setup_type} setup allows controlled L2 signals")

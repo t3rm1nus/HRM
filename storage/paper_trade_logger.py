@@ -51,6 +51,9 @@ class PaperTradeLogger:
             'last_update': datetime.now().isoformat()
         }
 
+        # DEDUPLICATION: Track logged trade IDs to prevent duplicates
+        self._logged_trade_ids = set()
+
         # Limpiar trades existentes si se solicita
         if clear_on_init:
             self._clear_existing_files()
@@ -58,8 +61,43 @@ class PaperTradeLogger:
         # Cargar trades existentes si los hay (solo si no se limpiaron)
         if not clear_on_init:
             self._load_existing_trades()
+            # Populate deduplication set from loaded trades
+            for trade in self.trades:
+                trade_key = self._get_trade_key(trade)
+                self._logged_trade_ids.add(trade_key)
 
         logger.info(f"✅ PaperTradeLogger inicializado - Guardando en: {self.base_dir}")
+
+    def _get_trade_key(self, trade: Dict[str, Any]) -> str:
+        """
+        Generate a unique key for trade deduplication.
+        Uses order_id if available, otherwise falls back to timestamp+symbol+side+qty
+        
+        Args:
+            trade: Trade dictionary
+            
+        Returns:
+            Unique key string for deduplication
+        """
+        order_id = trade.get('order_id')
+        if order_id and order_id != f"paper_{int(datetime.now().timestamp())}":
+            return f"order_id:{order_id}"
+        
+        # Fallback: composite key from timestamp (rounded to second), symbol, side, qty
+        timestamp = trade.get('timestamp', '')
+        # Round timestamp to nearest second to handle microsecond differences
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                pass
+        
+        symbol = trade.get('symbol', 'UNKNOWN')
+        side = trade.get('side', 'unknown')
+        quantity = float(trade.get('quantity', 0))
+        
+        return f"{timestamp}|{symbol}|{side}|{quantity:.6f}"
 
     def _load_existing_trades(self):
         """Carga trades existentes desde archivos"""
@@ -144,6 +182,23 @@ class PaperTradeLogger:
             quantity = abs(float(order.get('quantity', 0)))
             filled_price = float(order.get('filled_price', 0))
             commission = float(order.get('commission', 0))
+
+            # DEDUPLICATION CHECK: Prevent duplicate logging
+            temp_trade = {
+                'order_id': order.get('order_id'),
+                'timestamp': datetime.now().isoformat(),
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity
+            }
+            trade_key = self._get_trade_key(temp_trade)
+            
+            if trade_key in self._logged_trade_ids:
+                logger.debug(f"🔄 Trade duplicate detected and skipped: {symbol} {side} {quantity:.6f} (key: {trade_key})")
+                return
+            
+            # Mark as logged to prevent duplicates
+            self._logged_trade_ids.add(trade_key)
 
             # Calcular PnL si es una venta (closing trade)
             pnl = 0.0

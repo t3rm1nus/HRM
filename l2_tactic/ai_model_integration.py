@@ -83,8 +83,8 @@ class AIModelWrapper:
                 logger.warning(f"⚠️  Sin datos de mercado para {symbol} | features keys: {list(features.keys())} | features: {features} | market_data: {market_data}")
                 return None
 
-            # Generar señal usando FinRL
-            signal = self.finrl_processor.generate_signal(market_data, symbol)
+            # Generar señal usando FinRL (argumentos en orden correcto)
+            signal = self.finrl_processor.generate_signal(symbol=symbol, market_data=market_data)
 
             if signal is None:
                 return None

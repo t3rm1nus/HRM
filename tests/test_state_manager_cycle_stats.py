@@ -8,7 +8,7 @@ async def run_test_with_l2state():
     state = {
         'l2': L2State(),
         'ordenes': [{'id':1,'status':'rejected'},{'id':2,'status':'filled'}],
-        'portfolio': {'BTCUSDT':0.0,'ETHUSDT':0.0,'USDT':3000.0}
+        'portfolio': {'BTCUSDT':0.0,'ETHUSDT':0.0,'USDT':500.0}
     }
     state['l2'].signals = [{'symbol':'BTCUSDT','action':'buy'}]
     start = pd.Timestamp.utcnow() - pd.Timedelta(seconds=1)
@@ -19,7 +19,7 @@ async def run_test_with_dict():
     state = {
         'l2': {'signals':[{'symbol':'ETHUSDT','action':'sell'}]},
         'ordenes': [{'id':1,'status':'rejected'}],
-        'portfolio': {'BTCUSDT':0.0,'ETHUSDT':0.0,'USDT':3000.0}
+        'portfolio': {'BTCUSDT':0.0,'ETHUSDT':0.0,'USDT':500.0}
     }
     start = pd.Timestamp.utcnow() - pd.Timedelta(seconds=2)
     await log_cycle_data(state, cycle_id=2, ciclo_start=start)

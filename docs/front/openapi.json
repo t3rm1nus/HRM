@@ -1,0 +1,9 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HRM Trading API",
+    "summary": "API del sistema de trading HRM",
+    "version": "1.0.0"
+  },
+  "paths": {}
+}

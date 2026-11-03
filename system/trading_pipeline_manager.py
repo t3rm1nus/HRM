@@ -42,6 +42,11 @@ class TradingPipelineManager:
         self.auto_learning_bridge = None
         self.cycle_context: Optional[Dict[str, Any]] = None
 
+        # ⏳ BOOTSTRAP GRACE PERIOD - Prevents SELL signals right after bootstrap
+        self._bootstrap_completed_at: Optional[int] = None
+        self._bootstrap_grace_cycles: int = 3  # Minimum 3 cycles
+        self._bootstrap_grace_seconds: int = 30  # Minimum 30 seconds
+
     # ==========================================================
     # MAIN PIPELINE
     # ==========================================================
@@ -166,6 +171,11 @@ class TradingPipelineManager:
                 logger.info(f"   USDT: ${balances_after.get('USDT', 0.0):.2f}")
                 logger.info("=" * 80)
 
+                # 🔑 CRITICAL FIX: Update cycle_context with post-execution balances
+                # This ensures log_portfolio_comparison shows the actual state after orders
+                self.cycle_context["balances"] = balances_after
+                logger.info(f"📸 CYCLE SNAPSHOT UPDATED | Post-execution balances: {balances_after}")
+
                 await self._record_trades_for_auto_learning(
                     filled, l3_output, market_data
                 )
@@ -175,13 +185,33 @@ class TradingPipelineManager:
                 )
 
             # ==========================================================
-            # 6️⃣ SYNC STATE (NO EXTRA BALANCE CALLS)
+            # 6️⃣ OPTIONAL ROTATION / REBALANCE (MOVED BEFORE SYNC)
+            # ==========================================================
+
+            rotation_filled = await self._process_position_rotation(
+                state, market_data
+            )
+            result.orders_executed += rotation_filled
+
+            rebalancing_filled = await self._process_rebalancing(
+                state, market_data, l3_output, valid_signals
+            )
+            result.orders_executed += rebalancing_filled
+
+            # 🔑 CRITICAL FIX: Update cycle_context if rotation/rebalancing executed orders
+            if rotation_filled > 0 or rebalancing_filled > 0:
+                balances_after_rebalance = await self.portfolio_manager.get_balances_async()
+                self.cycle_context["balances"] = balances_after_rebalance
+                logger.info(f"📸 CYCLE SNAPSHOT UPDATED | Post-rebalance balances: {balances_after_rebalance}")
+
+            # ==========================================================
+            # 7️⃣ SYNC STATE (NO EXTRA BALANCE CALLS) - MOVED AFTER ALL OPERATIONS
             # ==========================================================
 
             await self._sync_state_from_snapshot(state)
 
             # ==========================================================
-            # 7️⃣ CALCULATE NAV (FROM SNAPSHOT) - ENSURE IT'S CORRECT
+            # 8️⃣ CALCULATE NAV (FROM SNAPSHOT) - ENSURE IT'S CORRECT
             # ==========================================================
 
             # CRITICAL FIX: Use the portfolio manager's NAV calculation with proper prices
@@ -207,18 +237,6 @@ class TradingPipelineManager:
                     min_nav = usdt + btc * 1.0 + eth * 1.0
                     result.portfolio_value = max(min_nav, 0.01)
                     logger.warning(f"⚠️ NAV adjusted to minimum: ${result.portfolio_value:.2f}")
-
-            # ==========================================================
-            # 8️⃣ OPTIONAL ROTATION / REBALANCE
-            # ==========================================================
-
-            result.orders_executed += await self._process_position_rotation(
-                state, market_data
-            )
-
-            result.orders_executed += await self._process_rebalancing(
-                state, market_data, l3_output, valid_signals
-            )
 
         except Exception as e:
             logger.error(f"❌ Error en ciclo de trading: {e}", exc_info=True)
@@ -314,17 +332,33 @@ class TradingPipelineManager:
         cycle_id: int,
         l3_output: Dict
     ) -> None:
-
+        """
+        NO-OP: Paper trade logging is now handled directly in order_executors.py
+        to prevent duplicate logging. Trades are logged immediately after execution
+        in OrderExecutors.execute_order() which is the correct single source of truth.
+        
+        This method is kept for backwards compatibility but does nothing.
+        Each order marked with '_already_logged=True' is skipped.
+        """
+        # Deduplication: Only log trades that weren't already logged by order_executors
         try:
             from storage.paper_trade_logger import log_paper_trade
 
             for order in filled_orders:
+                # Skip if already logged by order_executors (single source of truth)
+                if order.get('_already_logged'):
+                    logger.debug(f"Trade {order.get('order_id')} already logged by order_executors, skipping")
+                    continue
+                
+                # Fallback: Log only trades that weren't logged by order_executors
+                # This should not happen in normal operation
                 log_paper_trade(
                     order,
                     market_data=market_data,
                     cycle_id=cycle_id,
                     strategy=l3_output.get("strategy_type", "paper")
                 )
+                logger.warning(f"Trade {order.get('order_id')} was not pre-marked as logged - logged from fallback")
 
         except Exception as e:
             logger.error(f"Paper logger error: {e}")
@@ -368,13 +402,90 @@ class TradingPipelineManager:
     ) -> List[Dict]:
 
         try:
-            return self.l2_processor.generate_signals_conservative(
+            signals = self.l2_processor.generate_signals_conservative(
                 market_data=market_data,
                 l3_context=l3_decision
             )
+            
+            # ⏳ BOOTSTRAP GRACE PERIOD: Filter ALL signals (BUY/SELL) if active (FIX FALLO #2)
+            if self._is_bootstrap_grace_period_active(state):
+                filtered_signals = []
+                for signal in signals:
+                    try:
+                        signal_type = getattr(signal, 'side', '').lower()
+                        symbol = getattr(signal, 'symbol', 'UNKNOWN')
+                        
+                        # Block BOTH BUY and SELL signals during grace period
+                        if signal_type in ["sell", "buy"]:
+                            logger.info(f"⏳ Grace period active: {signal_type.upper()} signal blocked for {symbol}")
+                            continue
+                        else:
+                            # Only allow HOLD signals during grace period
+                            filtered_signals.append(signal)
+                    except AttributeError as e:
+                        logger.error(f"Signal attribute error: {e} | Type: {type(signal)} | Repr: {repr(signal)[:200]}")
+                        continue
+                
+                blocked_count = len(signals) - len(filtered_signals)
+                if blocked_count > 0:
+                    cycles_remaining = self._bootstrap_grace_cycles - (state.get("cycle_id", 0) - (self._bootstrap_completed_at or 0))
+                    logger.info(f"⏳ Grace period active: ALL signals (BUY/SELL) blocked for {cycles_remaining} cycles | {blocked_count} blocked, {len(filtered_signals)} allowed")
+                
+                return filtered_signals
+            
+            return signals
+            
         except Exception as e:
             logger.error(f"L2 error: {e}")
             return []
+
+    # ==========================================================
+    # BOOTSTRAP GRACE PERIOD
+    # ==========================================================
+
+    def mark_bootstrap_completed(self, current_cycle: int = 0) -> None:
+        """
+        Mark the bootstrap deployment as completed.
+        This starts the grace period during which ALL signals (BUY/SELL) are blocked.
+        
+        Args:
+            current_cycle: The current trading cycle number (0 = before first cycle)
+        """
+        self._bootstrap_completed_at = current_cycle
+        logger.info(f"✅ Bootstrap deployment marked as completed at cycle {current_cycle}")
+        logger.info(f"⏳ Grace period active: ALL signals (BUY/SELL) blocked for {self._bootstrap_grace_cycles} cycles or {self._bootstrap_grace_seconds} seconds")
+
+    def _is_bootstrap_grace_period_active(self, state: Dict) -> bool:
+        """
+        Check if the bootstrap grace period is currently active.
+        
+        The grace period is active if:
+        - Bootstrap has been marked as completed
+        - Less than _bootstrap_grace_cycles have passed since bootstrap
+        
+        During grace period, ALL signals (BUY/SELL) are blocked to prevent
+        premature trading with stale data.
+        
+        Args:
+            state: The current system state (contains cycle info if available)
+            
+        Returns:
+            bool: True if grace period is active and ALL signals should be blocked
+        """
+        if self._bootstrap_completed_at is None:
+            # Bootstrap hasn't been marked as completed yet
+            return False
+        
+        # Get current cycle from state or use 0 as fallback
+        current_cycle = state.get("cycle_id", 0)
+        
+        # Check if we've passed the minimum number of cycles
+        cycles_since_bootstrap = current_cycle - self._bootstrap_completed_at
+        
+        if cycles_since_bootstrap < self._bootstrap_grace_cycles:
+            return True
+        
+        return False
 
     # ==========================================================
     # VALIDATION
@@ -474,6 +585,11 @@ class TradingPipelineManager:
         if l3_output.get("signal") == "sell":
             return 0
 
+        # ⏳ BOOTSTRAP GRACE PERIOD: Skip rebalancing during grace period
+        if self.is_in_grace_period:
+            logger.info("⏳ AutoRebalancer: Skipping rebalance - bootstrap grace period active")
+            return 0
+
         try:
             rebalance = await self.auto_rebalancer.check_and_execute_rebalance(
                 market_data,
@@ -505,3 +621,36 @@ class TradingPipelineManager:
             Optional[Dict]: The cycle context or None if not set
         """
         return self.cycle_context
+
+    # ==========================================================
+    # BOOTSTRAP GRACE PERIOD PROPERTY
+    # ==========================================================
+
+    @property
+    def is_in_grace_period(self) -> bool:
+        """
+        Check if the bootstrap grace period is currently active.
+        
+        The grace period is active for a minimum number of cycles or seconds
+        after bootstrap deployment to prevent premature SELL signals and
+        aggressive rebalancing.
+        
+        Returns:
+            bool: True if grace period is active, False otherwise
+        """
+        if self._bootstrap_completed_at is None:
+            # Bootstrap hasn't been marked as completed yet
+            return False
+        
+        # Get current cycle from cycle_context or use 0 as fallback
+        current_cycle = 0
+        if self.cycle_context:
+            current_cycle = self.cycle_context.get("cycle_id", 0)
+        
+        # Check if we've passed the minimum number of cycles
+        cycles_since_bootstrap = current_cycle - self._bootstrap_completed_at
+        
+        if cycles_since_bootstrap < self._bootstrap_grace_cycles:
+            return True
+        
+        return False

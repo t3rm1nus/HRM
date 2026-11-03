@@ -284,6 +284,28 @@ class ModelLoaders:
             return None
 
     @staticmethod
+    def load_gemini_model(zip_path: str):
+        """Load Gemini model from ZIP with custom logic - matches training configuration"""
+        try:
+            if PPO is None:
+                logger.error("stable_baselines3 not available")
+                return None
+
+            import torch
+
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logger.info(f"Loading Gemini model with device={device}")
+
+            # Load without policy_kwargs to avoid mismatch with stored model
+            model = PPO.load(zip_path, device=device)
+            logger.info(f"Gemini model loaded successfully! Policy: {type(model.policy)}")
+            return model
+
+        except Exception as e:
+            logger.error(f"Error loading Gemini model: {e}", exc_info=True)
+            return None
+
+    @staticmethod
     def load_model_by_type(model_path: str):
         """Unified loader that detects model type and loads accordingly"""
         if not ModelLoaders.check_model_file(model_path):
@@ -291,7 +313,7 @@ class ModelLoaders:
 
         # Conditional loading based on model name
         if "gemini.zip" in model_path:
-            return ModelLoaders.load_stable_baselines3_model(model_path)
+            return ModelLoaders.load_gemini_model(model_path)
         elif "deepseek.zip" in model_path:
             return ModelLoaders.load_deepseek_model(model_path)
         elif "claude.zip" in model_path:

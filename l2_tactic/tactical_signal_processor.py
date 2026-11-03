@@ -40,8 +40,15 @@ class L2TacticProcessor:
         """Initialize processor with core components."""
         # Provide default config if none given
         if config is None:
-            default_signals = type('Signals', (), {})()
+            # FIX D: SignalComposer recibe objeto con atributos por defecto
+            default_signals = type('Signals', (), {
+                'thresholds': {'buy': 0.6, 'sell': 0.6, 'hold': 0.4},
+                'weights': {'technical': 0.4, 'ai': 0.4, 'risk': 0.2},
+                'cooldown_period': 5,
+                'max_signals_per_hour': 10
+            })()
             self.config = type('Config', (), {'signals': default_signals})()
+            logger.warning("⚠️ Usando config por defecto para SignalComposer - revisar configuración")
         else:
             self.config = config
         self.portfolio_manager = portfolio_manager
@@ -51,6 +58,10 @@ class L2TacticProcessor:
         self.multi_timeframe = MultiTimeframeTechnical(self.config)
         self.risk_overlay = RiskOverlay()
         self.signal_composer = SignalComposer(self.config.signals)
+
+        # FIX C: PathModeSignalGenerator como atributo de instancia (no recrear en cada ciclo)
+        self.path_mode_generator = PathModeSignalGenerator()
+        logger.info("✅ PathModeSignalGenerator inicializado como singleton")
 
         # Conditionally initialize BTC/ETH synchronizer (disabled in PAPER mode)
         if not os.getenv('DISABLE_BTC_ETH_SYNC'):
@@ -71,7 +82,7 @@ class L2TacticProcessor:
 
     def _setup_finrl_processor(self):
         """Setup FinRL processor and wrapper."""
-        model_path = "models/L2/deepseek.zip"
+        model_path = "models/L2/claude.zip"
         self.finrl_processor = FinRLProcessor(model_path)
         self.finrl_wrapper = FinRLProcessorWrapper(self.finrl_processor, "deepseek")
 
@@ -116,18 +127,45 @@ class L2TacticProcessor:
             # Get L3 output for path modes
             l3_output = self._get_l3_output(state)
 
-            # Generate signals using HRM path mode logic
-            path_mode_generator = PathModeSignalGenerator()
+            # FIX A: Obtener señales L2 reales en lugar de usar mocks
+            logger.info("🔧 FIX A: Generating real L2 signals for PATH MODE")
+            real_l2_signals = await self._process_traditional_signals(state, market_data)
+            
+            # Crear diccionario de señales L2 por símbolo para fácil acceso
+            l2_signals_by_symbol = {}
+            for sig in real_l2_signals:
+                if hasattr(sig, 'symbol'):
+                    l2_signals_by_symbol[sig.symbol] = sig
+            
+            # Usar self.path_mode_generator (FIX C - ya inicializado en __init__)
             path_signals = []
 
             for symbol in ["BTCUSDT", "ETHUSDT"]:
-                # Create mock L1/L2 signal for now (should come from real L2 processor)
-                mock_l2_signal = type('Signal', (), {
-                    'action': 'hold',
-                    'symbol': symbol,
-                    'confidence': 0.5,
-                    'direction': 'hold'
-                })()
+                # FIX A: Buscar señal L2 real para este símbolo
+                real_l2_signal = l2_signals_by_symbol.get(symbol)
+                
+                if real_l2_signal and hasattr(real_l2_signal, 'side'):
+                    # Usar la señal L2 real
+                    l2_action = real_l2_signal.side.lower() if hasattr(real_l2_signal, 'side') else 'hold'
+                    l2_confidence = getattr(real_l2_signal, 'confidence', 0.5)
+                    logger.info(f"✅ FIX A: Using REAL L2 signal for {symbol}: {l2_action} (conf={l2_confidence:.2f})")
+                    
+                    # Crear objeto señal compatible
+                    mock_l2_signal = type('Signal', (), {
+                        'action': l2_action,
+                        'symbol': symbol,
+                        'confidence': l2_confidence,
+                        'direction': l2_action
+                    })()
+                else:
+                    # Solo usar mock si no hay señal L2 real (fallback)
+                    logger.warning(f"⚠️ FIX A: No real L2 signal for {symbol}, using fallback HOLD")
+                    mock_l2_signal = type('Signal', (), {
+                        'action': 'hold',
+                        'symbol': symbol,
+                        'confidence': 0.5,
+                        'direction': 'hold'
+                    })()
 
                 # Create mock L3 context from l3_output with safe defaults
                 mock_l3_context = {
@@ -141,8 +179,8 @@ class L2TacticProcessor:
                     'allow_setup_trades': l3_output.get('allow_setup_trades', False)
                 }
 
-                # Generate signal for this symbol
-                processed_signal = path_mode_generator.generate_signal(
+                # Generate signal for this symbol using self.path_mode_generator (FIX C)
+                processed_signal = self.path_mode_generator.generate_signal(
                     symbol=symbol,
                     l1_l2_signal=mock_l2_signal.action,
                     l3_context=mock_l3_context
@@ -772,10 +810,14 @@ class L2TacticProcessor:
         # Add L3 context metadata to signal for debugging/tracking
         if hasattr(signal, 'metadata'):
             signal.metadata.update({
-                'l3_regime': l3_regime,
+                'l3_regime': l3_context.get('regime', 'unknown'),
+                'l3_signal': l3_context.get('signal', 'hold'),
                 'l3_confidence': l3_confidence,
-                'l3_allow_l2': l3_allow_l2,
-                'l3_context_validated': True
+                'l3_data_completeness': l3_context.get('data_completeness', 1.0),
+                'l3_available_candles': l3_context.get('available_candles', 0),
+                'l3_required_candles': l3_context.get('required_candles', 360),
+                'l3_validation': 'L2 signal validated with L3 context',
+                'l3_confidence_penalized': l3_context.get('data_completeness', 1.0) < 0.5
             })
 
         return signal
@@ -1793,22 +1835,34 @@ class L2TacticProcessor:
         logger.info(f"✅ L2 threshold validation complete: {len(signals)} signals generated")
         return signals
 
-    def _process_signals_normal(self, market_data, l3_info):
+    async def _process_signals_normal(self, market_data, l3_info):
         """
-        Procesamiento normal de señales L2 cuando no hay override L3.
+        FIX B: Procesamiento normal de señales L2 cuando no hay override L3.
+        
+        Ahora es async y llama a _process_traditional_signals para obtener
+        señales reales, no HOLDs por defecto.
         """
         # Usar la lógica existente del método process_signals
         mock_state = {
             "market_data": market_data,
+            "market_data_simple": market_data,
             "l3_output": l3_info
         }
 
         try:
-            # Avoid async event loop issues by using simple synchronous processing
-            logger.info("🔄 Using synchronous fallbacks to avoid event loop conflicts")
-            return self._generate_hold_signals(market_data)
+            # FIX B: Llamar a _process_traditional_signals para señales reales
+            logger.info("🔧 FIX B: Generating real L2 signals via _process_traditional_signals")
+            real_signals = await self._process_traditional_signals(mock_state, market_data)
+            
+            if real_signals and len(real_signals) > 0:
+                logger.info(f"✅ FIX B: Generated {len(real_signals)} real L2 signals")
+                return real_signals
+            else:
+                logger.warning("⚠️ FIX B: No real signals generated, using HOLD fallback")
+                return self._generate_hold_signals(market_data)
+                
         except Exception as e:
-            logger.error(f"❌ Error in normal L2 processing: {e}")
+            logger.error(f"❌ FIX B: Error in normal L2 processing: {e}, using HOLD fallback")
             return self._generate_hold_signals(market_data)
 
     # Model switching and helper methods

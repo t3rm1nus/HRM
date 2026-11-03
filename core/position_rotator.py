@@ -23,9 +23,9 @@ from core.logging import logger
 from l2_tactic.l2_utils import safe_float
 from l1_operational.config import ConfigObject
 from l1_operational.order_validators import OrderValidators
-from core.config import HRM_PATH_MODE
+from core.config import HRM_PATH_MODE, is_paper_mode
 
-# paper_mode now injected via constructor (never use get_config("live") or get_config("paper"))
+# mode now injected via constructor as string (never use get_config("live") or get_config("paper"))
 
 
 def _extract_current_price(symbol: str, market_data: Dict[str, Any]) -> Optional[float]:
@@ -103,11 +103,12 @@ class PositionRotator:
     - Rotar capital de activos con pérdidas > 3%
     """
 
-    def __init__(self, portfolio_manager, exchange_client=None, paper_mode: bool = False):
+    def __init__(self, portfolio_manager, exchange_client=None, mode: str = "live"):
         self.portfolio_manager = portfolio_manager
         self.exchange_client = exchange_client
         self.logger = logger
-        self.paper_mode = paper_mode
+        self.mode = mode
+        self.paper_mode = is_paper_mode(mode)  # Unified paper mode detection
         self.seed_first_position = False  # Default, can be set via setter
         self.seed_max_exposure = 0.2  # Default 20% max exposure for seed
 
@@ -402,16 +403,18 @@ class AutoRebalancer:
     - Liberar capital en condiciones de riesgo excesivo
     """
 
-    def __init__(self, portfolio_manager, exchange_client=None, paper_mode: bool = False):
+    def __init__(self, portfolio_manager, exchange_client=None, mode: str = "live"):
         self.portfolio_manager = portfolio_manager
         self.exchange_client = exchange_client
         self.logger = logger
         self.last_rebalance_time = 0  # Timestamp of last rebalance to prevent loops
-        self.paper_mode = paper_mode
+        self.mode = mode
+        self.paper_mode = is_paper_mode(mode)  # Unified paper mode detection
 
     async def check_and_execute_rebalance(self, market_data: Dict[str, Any], l3_active: bool = False,
                                         l3_asset_allocation: Dict[str, float] = None,
-                                        l3_decision: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+                                        l3_decision: Dict[str, Any] = None,
+                                        skip_rebalance: bool = False) -> List[Dict[str, Any]]:
         """
         Check if portfolio rebalancing is needed and generate rebalance orders.
 
@@ -431,10 +434,15 @@ class AutoRebalancer:
             l3_active: Whether L3 strategy is active
             l3_asset_allocation: Asset allocation from L3 strategy
             l3_decision: Full L3 decision object with strategic_control metadata
+            skip_rebalance: If True, skip rebalancing (e.g., during bootstrap grace period)
 
         Returns:
             List of orders to execute for rebalancing, or empty list if no rebalancing needed
         """
+        # ⏳ BOOTSTRAP GRACE PERIOD: Skip rebalancing if explicitly requested
+        if skip_rebalance:
+            logger.info("⏳ AutoRebalancer: Skipping rebalance - skip_rebalance flag is True")
+            return []
         try:
             # ========================================================================================
             # CRITICAL FIX: Sync from exchange before any rebalance decision

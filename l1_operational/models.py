@@ -150,7 +150,7 @@ class MomentumModel(BaseL1Model):
         super().__init__(config)
         self.short_period = self.config.get('short_period', 5)
         self.medium_period = self.config.get('medium_period', 20)
-        self.momentum_threshold = self.config.get('momentum_threshold', 0.5)
+        self.momentum_threshold = self.config.get('momentum_threshold', 0.002)
 
     def generate_signals(self, market_data: Dict[str, pd.DataFrame]) -> List[L1Signal]:
         signals = []
@@ -196,13 +196,17 @@ class MomentumModel(BaseL1Model):
             # Calcular momentum score
             momentum_score = (current_price - prev_price) / prev_price
 
+            # Filtro: ignorar movimientos mínimos
+            if abs(momentum_score) < 0.003:
+                return None
+
             # Determinar dirección y confianza
             if abs(momentum_score) < self.momentum_threshold:
                 direction = 'hold'
                 confidence = 0.5
             else:
                 direction = 'buy' if momentum_score > 0 else 'sell'
-                confidence = min(0.9, 0.5 + abs(momentum_score) * 2)
+                confidence = min(0.85, 0.55 + abs(momentum_score) * 10)
 
             strength = min(1.0, abs(momentum_score) * 3)
 
@@ -248,6 +252,10 @@ class MomentumModel(BaseL1Model):
             prev_diff = prev_short - prev_medium
             current_diff = current_short - current_medium
 
+            # Solo generar señal en crossover real
+            if not (prev_diff * current_diff < 0):
+                return None
+
             momentum_score = current_diff / current_medium  # Normalizado
 
             # Señales basadas en crossover
@@ -292,9 +300,9 @@ class TechnicalIndicatorsModel(BaseL1Model):
 
     def __init__(self, config: Optional[Dict] = None):
         super().__init__(config)
-        self.rsi_overbought = self.config.get('rsi_overbought', 70)
-        self.rsi_oversold = self.config.get('rsi_oversold', 30)
-        self.macd_threshold = self.config.get('macd_threshold', 0.1)
+        self.rsi_overbought = self.config.get('rsi_overbought', 72)
+        self.rsi_oversold = self.config.get('rsi_oversold', 28)
+        self.macd_threshold = self.config.get('macd_threshold', 0.5)
 
     def generate_signals(self, market_data: Dict[str, pd.DataFrame]) -> List[L1Signal]:
         signals = []
@@ -494,8 +502,8 @@ class VolumeSignalsModel(BaseL1Model):
     def __init__(self, config: Optional[Dict] = None):
         super().__init__(config)
         self.volume_period = self.config.get('volume_period', 20)
-        self.volume_threshold = self.config.get('volume_threshold', 1.5)
-        self.liquidity_threshold = self.config.get('liquidity_threshold', 0.7)
+        self.volume_threshold = self.config.get('volume_threshold', 2.0)
+        self.liquidity_threshold = self.config.get('liquidity_threshold', 0.8)
 
     def generate_signals(self, market_data: Dict[str, pd.DataFrame]) -> List[L1Signal]:
         signals = []
@@ -675,17 +683,30 @@ class L1Model:
     def predict(self, market_data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """Generate L1 signals and return metrics"""
         all_signals = []
+        
+        # DIAGNÓSTICO: Info de market_data
+        for sym, df in list(market_data.items())[:1]:
+            logger.info(f"[DIAG-L1Model] Input {sym}: {len(df)} rows, cols={list(df.columns)}")
 
         for model_name, model in self.models.items():
             try:
                 signals = model.generate_signals(market_data)
                 all_signals.extend(signals)
-                logger.info(f"L1 {model_name} model generated {len(signals)} signals")
+                
+                # DIAGNÓSTICO: Detalle de señales
+                buy_count = sum(1 for s in signals if s.direction == 'buy')
+                sell_count = sum(1 for s in signals if s.direction == 'sell')
+                hold_count = sum(1 for s in signals if s.direction == 'hold')
+                logger.info(f"[DIAG-L1Model] {model_name}: {len(signals)} signals (BUY={buy_count}, SELL={sell_count}, HOLD={hold_count})")
+                
             except Exception as e:
-                logger.error(f"Error in L1 {model_name} model: {e}")
+                logger.error(f"[DIAG-L1Model] Error in {model_name} model: {e}")
+                import traceback
+                logger.error(f"[DIAG-L1Model] Traceback: {traceback.format_exc()}")
 
         # Calcular métricas agregadas
         metrics = self._calculate_metrics(all_signals)
+        logger.info(f"[DIAG-L1Model] TOTAL: {len(all_signals)} signals, metrics={metrics}")
 
         return {
             'signals': all_signals,

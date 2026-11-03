@@ -1,0 +1,14 @@
+﻿Get-Content : No se encuentra la ruta de acceso 
+'C:\proyectos\HRM\api\esquemas\senales.py' porque 
+no existe.
+En línea: 1 Carácter: 1
++ Get-Content 
+C:\proyectos\HRM\api\esquemas\senales.py
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~
+    + CategoryInfo          : ObjectNotFound: (C:\ 
+   proyectos\HRM\api\esquemas\senales.py:String)   
+  [Get-Content], ItemNotFoundException
+    + FullyQualifiedErrorId : PathNotFound,Microso 
+   ft.PowerShell.Commands.GetContentCommand
+ 

@@ -140,7 +140,7 @@ class FinRLProcessor:
                 if isinstance(input_data, dict):
                     df_data = {}
                     for key, value in input_data.items():
-                        if pd.api.types.is_numeric_dtype(type(value)):
+                        if isinstance(value, (int, float, np.integer, np.floating)):
                             df_data[key] = [value]
                         else:
                             df_data[key] = [0.0]
@@ -166,7 +166,7 @@ class FinRLProcessor:
                     # Convert to DataFrame format expected by build_multiasset_obs
                     df_data = {}
                     for key, value in input_data.items():
-                        if pd.api.types.is_numeric_dtype(type(value)):
+                        if isinstance(value, (int, float, np.integer, np.floating)):
                             df_data[key] = [value]
                         else:
                             df_data[key] = [0.0]
@@ -185,7 +185,7 @@ class FinRLProcessor:
                 if isinstance(input_data, dict):
                     df_data = {}
                     for key, value in input_data.items():
-                        if pd.api.types.is_numeric_dtype(type(value)):
+                        if isinstance(value, (int, float, np.integer, np.floating)):
                             df_data[key] = [value]
                         else:
                             df_data[key] = [0.0]
@@ -203,7 +203,7 @@ class FinRLProcessor:
                 if isinstance(input_data, dict):
                     df_data = {}
                     for key, value in input_data.items():
-                        if pd.api.types.is_numeric_dtype(type(value)):
+                        if isinstance(value, (int, float, np.integer, np.floating)):
                             df_data[key] = [value]
                         else:
                             df_data[key] = [0.0]

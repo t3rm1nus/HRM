@@ -2,6 +2,7 @@
 import pandas as pd
 from datetime import datetime
 import time
+import traceback
 
 from core.logging import logger
 from l2_tactic.models import TacticalSignal
@@ -23,7 +24,7 @@ except ImportError:
 # ========================================================================================
 DUST_THRESHOLD_BTC = 0.00005
 DUST_THRESHOLD_ETH = 0.005
-MIN_ORDER_USDT = 2.0
+# MIN_ORDER_USDT ELIMINADO - Prompt 3A: Ahora se lee desde config (MIN_ORDER_SIZE_USDT)
 
 
 class OrderManager:
@@ -96,8 +97,15 @@ class OrderManager:
             order = self._intent_to_order(intent)
             if order:
                 orders.append(order)
+            else:
+                # Prompt 2B: Loggear el motivo concreto de cada fallo
+                logger.warning(f"❌ Intent dropped: {intent.symbol} {intent.action} conf={intent.confidence:.2f} - conversion returned None")
 
-        logger.info(f"📊 Order generation complete: {len(signals)} signals → {len(order_intents)} intents → {len(orders)} orders")
+        # Prompt 2A: Detectar fallo funcional cuando hay intents pero 0 orders
+        if len(order_intents) > 0 and len(orders) == 0:
+            logger.error(f"⚠️ CRITICAL: {len(order_intents)} intents generated but 0 orders produced - all conversions failed")
+        else:
+            logger.info(f"📊 Order generation complete: {len(signals)} signals → {len(order_intents)} intents → {len(orders)} orders")
         return orders
 
     # ====================================================================================
@@ -153,11 +161,22 @@ class OrderManager:
     def _intent_to_order(self, intent: OrderIntent) -> Optional[Dict[str, Any]]:
         """Convert OrderIntent to executable order with validation"""
         try:
-            # Obtener reason de forma segura (soporta objeto o dict)
-            if isinstance(intent, dict):
-                reason = intent.get("reason", "strategy_signal")
-            else:
-                reason = getattr(intent, "reason", None) or "strategy_signal"
+            # Obtener reason de forma completamente defensiva
+            reason = None
+            try:
+                if isinstance(intent, dict):
+                    reason = intent.get("reason")
+                else:
+                    reason = getattr(intent, "reason", None)
+            except Exception as access_error:
+                logger.debug(f"Could not access reason attribute: {access_error}")
+                reason = None
+
+            # Log WARNING solo si reason no existe o está vacío (no si es el valor por defecto)
+            if reason is None or reason == "":
+                reason = "strategy_signal"
+                symbol_name = getattr(intent, 'symbol', None) or (intent.get('symbol', 'unknown') if isinstance(intent, dict) else 'unknown')
+                logger.warning(f"⚠️ Using fallback 'strategy_signal' for {symbol_name}: reason not found in intent")
 
             # Build order from intent
             order = {
@@ -178,7 +197,8 @@ class OrderManager:
             # Validate order
             validation = self.validators.validate_and_normalize_order(order)
             if validation["validation"]["status"] != "valid":
-                logger.warning(f"❌ Order validation failed for {intent.symbol}: {validation['validation']['reason']}")
+                errors = validation.get('validation', {}).get('errors', ['unknown error'])
+                logger.warning(f"❌ Order validation failed for {intent.symbol}: {errors}")
                 return None
 
             logger.info(f"🎯 Order created from intent: {intent.symbol} {intent.action} {intent.quantity:.6f} @ {intent.price:.2f}")
@@ -186,6 +206,7 @@ class OrderManager:
 
         except Exception as e:
             logger.error(f"❌ Error converting intent to order: {e}")
+            logger.error(f"📋 Traceback: {traceback.format_exc()}")
             return None
 
     # ====================================================================================
@@ -194,7 +215,9 @@ class OrderManager:
 
     def _build_order(self, symbol: str, action: str, qty: float, price: float) -> Dict[str, Any]:
         value = qty * price
-        if qty <= 0 or value < MIN_ORDER_USDT:
+        # Prompt 3A: Usar MIN_ORDER_SIZE_USDT desde config en lugar de constante local
+        min_order_usdt = self.config.get('MIN_ORDER_SIZE_USDT', 2.0)
+        if qty <= 0 or value < min_order_usdt:
             return self._reject(symbol, action, "order_too_small")
 
         order = {

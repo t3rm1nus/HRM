@@ -82,8 +82,9 @@ class OrderIntentBuilder:
         self.position_manager = position_manager
         self.config = config
         self.min_order_value = config.get("MIN_ORDER_USDT", 2.0)
-        self.cooldown_seconds = config.get("COOLDOWN_SECONDS", 36)
-        self.last_trade_time: Dict[str, float] = {}
+        # MIN_USDT_RESERVE: minimum USDT reserve to maintain liquidity
+        self.min_usdt_reserve = config.get("min_usdt_reserve", 5.0)
+        # REMOVED: cooldown_seconds and last_trade_time - cooldown is managed by SmartCooldownManager in OrderManager
         
         # REQUIRE explicit paper_mode - ERROR if not provided
         if paper_mode is None:
@@ -99,7 +100,7 @@ class OrderIntentBuilder:
         self._cycle_allocated_usdt: float = 0.0
         self._cycle_intent_count: int = 0
         
-        logger.info(f"OrderIntentBuilder initialized (paper_mode={self.paper_mode})")
+        logger.info(f"OrderIntentBuilder initialized (paper_mode={self.paper_mode}, min_usdt_reserve=${self.min_usdt_reserve:.2f})")
 
     def reset_cycle_allocation(self):
         """
@@ -125,43 +126,42 @@ class OrderIntentBuilder:
         
         return self._cycle_usdt_snapshot
 
-    def _cooldown_ok(self, symbol: str, signal_confidence: float = None, l3_regime: str = None) -> bool:
-        """Check if cooldown period has elapsed for a symbol with adaptive cooldown"""
-        last = self.last_trade_time.get(symbol)
-        
-        if last is None:
-            return True
-            
-        cooldown_seconds = self._get_adaptive_cooldown(signal_confidence, l3_regime)
-        return (time.time() - last) >= cooldown_seconds
-    
-    def _get_adaptive_cooldown(self, signal_confidence: float, l3_regime: str) -> float:
+    # REMOVED: _cooldown_ok and _get_adaptive_cooldown methods - cooldown is managed by SmartCooldownManager in OrderManager
+
+    def _scale_allocation_by_confidence(self, confidence: float) -> float:
         """
-        Get adaptive cooldown based on L3 regime and signal confidence.
+        Escala el porcentaje de allocation basado en la confianza de la señal.
         
-        - TRENDING with confidence >0.6: 2 cycles (24s)
-        - TRENDING with confidence <0.6: 3 cycles (36s)
-        - RANGE: 4 cycles (48s)
-        - Confidence <0.4: 5 cycles (60s)
-        """
-        if signal_confidence is None and l3_regime is None:
-            return self.cooldown_seconds
+        FIX FALLO #3: Previene allocation excesiva con señales de baja confianza.
         
-        if signal_confidence is not None and signal_confidence < 0.4:
-            return 60
+        Reglas de escalado:
+        - confidence < 0.45 → allocation máximo 15%
+        - confidence 0.45-0.55 → allocation máximo 25%
+        - confidence 0.55-0.65 → allocation máximo 40%
+        - confidence > 0.65 → allocation hasta 55%
         
-        if l3_regime is not None:
-            l3_regime = l3_regime.lower()
+        Args:
+            confidence: Valor de confianza de la señal (0.0 - 1.0)
             
-            if "trend" in l3_regime or "trending" in l3_regime:
-                if signal_confidence is not None and signal_confidence > 0.6:
-                    return 24
-                else:
-                    return 36
-            elif "range" in l3_regime:
-                return 48
-        
-        return self.cooldown_seconds
+        Returns:
+            float: Porcentaje de allocation escalado (0.0 - 0.55)
+        """
+        if confidence < 0.45:
+            scaled = min(confidence, 0.15)
+            logger.info(f"🔒 [ALLOCATION_FIX] Confianza baja ({confidence:.2f} < 0.45): allocation escalada a {scaled:.1%} (max 15%)")
+            return scaled
+        elif confidence < 0.55:
+            scaled = min(confidence, 0.25)
+            logger.info(f"🔒 [ALLOCATION_FIX] Confianza media-baja ({confidence:.2f} < 0.55): allocation escalada a {scaled:.1%} (max 25%)")
+            return scaled
+        elif confidence < 0.65:
+            scaled = min(confidence, 0.40)
+            logger.info(f"🔒 [ALLOCATION_FIX] Confianza media ({confidence:.2f} < 0.65): allocation escalada a {scaled:.1%} (max 40%)")
+            return scaled
+        else:
+            scaled = min(confidence, 0.55)
+            logger.info(f"✅ [ALLOCATION_FIX] Confianza alta ({confidence:.2f} >= 0.65): allocation escalada a {scaled:.1%} (max 55%)")
+            return scaled
 
     async def _calculate_order_quantity(self, signal: TacticalSignal, current_price: float,
                                         position_qty: float, available_usdt: Optional[float] = None) -> float:
@@ -179,7 +179,9 @@ class OrderIntentBuilder:
                 min_order_value=self.min_order_value
             )
             
-            allocation_pct = getattr(signal, 'confidence', 0.1)
+            # FIX FALLO #3: Escalar allocation según confianza
+            raw_confidence = getattr(signal, 'confidence', 0.1)
+            allocation_pct = self._scale_allocation_by_confidence(raw_confidence)
             
             # For BUY: use available_usdt as custom balance
             # For SELL: use position_qty as custom balance
@@ -239,10 +241,8 @@ class OrderIntentBuilder:
             remaining_usdt: Optional remaining USDT available for this intent
         """
         try:
-            # Skip if cooldown active
-            if not self._cooldown_ok(signal.symbol, signal.confidence, l3_regime):
-                logger.info(f"Cooldown active for {signal.symbol} - skipping signal (regime: {l3_regime or 'unknown'}, conf: {signal.confidence:.2f})")
-                return None
+            # NOTE: Cooldown check REMOVED - cooldown is managed by SmartCooldownManager in OrderManager
+            # OrderIntentBuilder only builds intents, does not apply cooldowns
 
             # Get temporary aggressive mode status
             from core.config import TEMPORARY_AGGRESSIVE_MODE, check_temporary_aggressive_mode
@@ -341,6 +341,14 @@ class OrderIntentBuilder:
                     logger.error(f"QTY_CALCULATION_ABORTED_REASON=INVALID_CALCULATED_QTY")
                     return None
             
+            # Build descriptive reason from signal information
+            signal_source = getattr(signal, 'source', 'unknown')
+            signal_type = getattr(signal, 'signal_type', signal.side.lower())
+            signal_strength = getattr(signal, 'strength', signal.confidence)
+            
+            # Format: "source_side_type_strength" (e.g., "ai_buy_momentum_0.75", "L2_sell_WEAK_BEAR")
+            reason = f"{signal_source}_{signal.side.lower()}_{signal_type}_{signal_strength:.2f}"
+            
             # Create intent
             intent = OrderIntent(
                 symbol=signal.symbol,
@@ -349,8 +357,9 @@ class OrderIntentBuilder:
                 price=current_price,
                 confidence=signal.confidence,
                 timestamp=datetime.utcnow().isoformat(),
-                source=getattr(signal, 'source', 'unknown'),
-                metadata=getattr(signal, 'metadata', {})
+                source=signal_source,
+                metadata=getattr(signal, 'metadata', {}),
+                reason=reason
             )
 
             # Validate intent
@@ -361,6 +370,8 @@ class OrderIntentBuilder:
                     if fallback_usdt > 0:
                         fallback_notional = fallback_usdt * 0.10
                         fallback_qty = fallback_notional / current_price
+                        # Build reason for fallback intent
+                        fallback_reason = f"{getattr(signal, 'source', 'unknown')}_{signal.side.lower()}_{getattr(signal, 'signal_type', signal.side.lower())}_fallback"
                         intent = OrderIntent(
                             symbol=signal.symbol,
                             action=signal.side.lower(),
@@ -369,15 +380,15 @@ class OrderIntentBuilder:
                             confidence=signal.confidence,
                             timestamp=datetime.utcnow().isoformat(),
                             source=getattr(signal, 'source', 'unknown'),
-                            metadata={**(getattr(signal, 'metadata', {})), 'fallback_order': True}
+                            metadata={**(getattr(signal, 'metadata', {})), 'fallback_order': True},
+                            reason=fallback_reason
                         )
                         logger.info(f"Created fallback OrderIntent for {signal.symbol}: {fallback_qty:.6f} @ {current_price:.2f}")
                 else:
                     logger.error(f"QTY_CALCULATION_ABORTED_REASON=INTENT_VALIDATION_FAILED")
                     return None
 
-            # Record trade time
-            self.last_trade_time[signal.symbol] = time.time()
+            # NOTE: Trade time recording REMOVED - cooldown is managed by SmartCooldownManager in OrderManager
 
             logger.debug(f"PRICE_USED={current_price} QTY_CALCULATED={intent.quantity}")
             logger.info(f"OrderIntent built: {signal.symbol} {signal.side} {intent.quantity:.6f} @ {current_price:.2f} (conf: {signal.confidence:.2f})")
@@ -421,8 +432,13 @@ class OrderIntentProcessor:
 
         # Get USDT balance ONCE per cycle
         portfolio_manager = self.intent_builder.position_manager.portfolio
-        usdt_available = await portfolio_manager.get_asset_balance_async("USDT")
-        logger.info(f"USDT balance snapshot for cycle: ${usdt_available:.2f}")
+        usdt_balance = await portfolio_manager.get_asset_balance_async("USDT")
+        logger.info(f"USDT balance snapshot for cycle: ${usdt_balance:.2f}")
+
+        # Apply MIN_USDT_RESERVE guard: available capital = max(0, balance - reserve)
+        min_reserve = self.intent_builder.min_usdt_reserve
+        usdt_available = max(0.0, usdt_balance - min_reserve)
+        logger.info(f"USDT available for allocation (after ${min_reserve:.2f} reserve): ${usdt_available:.2f}")
 
         # First pass: collect all BUY signals
         buy_signals = []
@@ -438,8 +454,18 @@ class OrderIntentProcessor:
             else:
                 other_signals.append(signal)
         
-        # Calculate proportional allocation for BUY signals
+        # Check if available capital is sufficient for BUY signals
         num_buy_signals = len(buy_signals)
+        min_order_value = self.intent_builder.min_order_value
+        
+        if num_buy_signals > 0 and usdt_available < min_order_value:
+            logger.warning(f"INSUFFICIENT_USDT_FOR_BUY: Available=${usdt_available:.2f} (balance=${usdt_balance:.2f} - reserve=${min_reserve:.2f}) < MIN_ORDER_USDT=${min_order_value:.2f}. Skipping all BUY signals.")
+            # Move all BUY signals to rejected and skip processing them
+            rejected_signals += num_buy_signals
+            buy_signals = []  # Clear buy signals so they won't be processed
+            num_buy_signals = 0
+        
+        # Calculate proportional allocation for BUY signals
         proportional_allocation = usdt_available / num_buy_signals if num_buy_signals > 0 else 0.0
         
         if num_buy_signals > 0:

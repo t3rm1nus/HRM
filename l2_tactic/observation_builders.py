@@ -403,7 +403,7 @@ class ObservationBuilders:
             else:
                 # Generic: use all numeric features, pad/truncate to expected_dims
                 last_row = features_df.iloc[-1]
-                numeric_cols = [c for c in features_df.columns if pd.api.types.is_numeric_dtype(features_df[c])]
+                numeric_cols = [c for c in features_df.columns if pd.api.types.is_numeric_dtype(features_df[c]) and not features_df[c].apply(lambda x: isinstance(x, (dict, list, tuple))).any()]
                 all_features = []
                 for c in numeric_cols[:expected_dims]:
                     try:
@@ -440,7 +440,7 @@ class ObservationBuilders:
         # Get all numeric columns
         numeric_cols = [
             c for c in features_df.columns
-            if pd.api.types.is_numeric_dtype(features_df[c])
+            if pd.api.types.is_numeric_dtype(features_df[c]) and not features_df[c].apply(lambda x: isinstance(x, (dict, list, tuple))).any()
         ]
 
         values = []
@@ -488,7 +488,7 @@ class ObservationBuilders:
         # Get all numeric columns
         numeric_cols = [
             c for c in features_df.columns
-            if pd.api.types.is_numeric_dtype(features_df[c])
+            if pd.api.types.is_numeric_dtype(features_df[c]) and not features_df[c].apply(lambda x: isinstance(x, (dict, list, tuple))).any()
         ]
 
         values = []
