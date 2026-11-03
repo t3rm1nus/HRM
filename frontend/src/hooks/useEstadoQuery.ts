@@ -8,13 +8,19 @@ export const usarEstado = (): {
   isLoading: boolean;
   refetch: () => void;
 } => {
-  return useQuery({
+  const consulta = useQuery({
     queryKey: ['status'],
     queryFn: fetchStatus,
     refetchInterval: TIEMPO_REFRESCO_STATUS,
     staleTime: TIEMPO_REFRESCO_STATUS,
-    retry: 2,
   });
+
+  return {
+    datos: consulta.data,
+    error: consulta.error,
+    isLoading: consulta.isLoading,
+    refetch: () => { void consulta.refetch(); },
+  };
 };
 
 export interface StatusRespuesta {

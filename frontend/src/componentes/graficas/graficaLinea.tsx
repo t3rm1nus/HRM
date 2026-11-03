@@ -18,7 +18,11 @@ export const GraficaLinea = ({ titulo, datos, height = 400, theme = 'dark', show
       <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
       <div style={{ width: '100%', height }}>
         <ResponsiveContainer>
-          <LineChart data={datos} onClick={(evento) => { const punto = evento?.activePayload?.[0]?.payload as { timestamp: string; valor: number } | undefined; if (punto) onPointClick?.(punto.valor, punto.timestamp); }}>
+          <LineChart data={datos} onClick={(evento) => {
+            const indice = Number(evento?.activeTooltipIndex);
+            const punto = Number.isInteger(indice) ? datos[indice] : undefined;
+            if (punto) onPointClick?.(punto.valor, punto.timestamp);
+          }}>
             {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#374151' : '#E5E7EB'} />}
             <XAxis dataKey="timestamp" tick={{ fill: colorTexto, fontSize: 11 }} />
             <YAxis tick={{ fill: colorTexto, fontSize: 11 }} />

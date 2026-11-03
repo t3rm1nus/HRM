@@ -20,7 +20,7 @@ export const getModoMock = (): 'papel' | 'testnet' | 'live' => {
 };
 
 // Respuestas dinámicas según el modo
-const getStatusRespuesta = (): any => {
+const getStatusRespuesta = (): { status: 'paused' | 'running'; trading_active: boolean; cycle_count: number; uptime: string } => {
   const esLive = estadoModoActual === 'live';
   const esTestnet = estadoModoActual === 'testnet';
   const esPapel = estadoModoActual === 'papel';
@@ -60,8 +60,11 @@ export const handlers = [
   }),
 
   http.post('http://localhost:8000/api/auth/login', async ({ request }) => {
-    const body = await request.json();
-    if (body.email === 'admin@hrm.local' && body.password === 'admin123') {
+    const cuerpo: unknown = await request.json().catch(() => null);
+    const credenciales = typeof cuerpo === 'object' && cuerpo !== null
+      ? cuerpo as Record<string, unknown>
+      : null;
+    if (credenciales?.email === 'admin@hrm.local' && credenciales.password === 'admin123') {
       const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock-token';
       return HttpResponse.json(
         {

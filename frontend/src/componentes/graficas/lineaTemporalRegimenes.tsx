@@ -21,7 +21,7 @@ export const LineaTemporalRegimenes = ({ titulo, datos, height = 400, theme = 'd
           <AreaChart data={datosGrafica}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="timestamp" tick={{ fill: colorTexto, fontSize: 11 }} />
-            <YAxis ticks={[0, 1, 2, 3]} tickFormatter={(valor: number) => ['Inactivo', 'PAPER', 'TESTNET', 'LIVE'][valor]} tick={{ fill: colorTexto, fontSize: 11 }} />
+            <YAxis ticks={[0, 1, 2, 3]} tickFormatter={(valor: number) => ['Inactivo', 'PAPER', 'TESTNET', 'LIVE'][valor] ?? ''} tick={{ fill: colorTexto, fontSize: 11 }} />
             <Tooltip />
             <Area type="stepAfter" dataKey="nivel" name="Régimen" stroke={mostrarBandas ? '#10B981' : '#64748B'} fill={mostrarBandas ? '#10B981' : '#64748B'} fillOpacity={0.2} isAnimationActive={false} />
           </AreaChart>

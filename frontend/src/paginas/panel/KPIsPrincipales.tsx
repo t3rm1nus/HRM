@@ -2,8 +2,10 @@ import React from 'react';
 import { BadgeModo } from '../../componentes/ui/badgeModo';
 import { InsigniaOrigen } from '../../componentes/ui/insigniaOrigen';
 import { TarjetaKpi } from '../../componentes/ui/tarjetaKpi';
+import { useModoStore } from '../../estado/storeModo';
 
 export const KPIsPrincipales: React.FC = () => {
+  const modoActual = useModoStore((estado) => estado.modo);
   // Datos simulados para KPIs
   const navTotal = 12547.89;
   const pnlTotalDiario = 285.50;
@@ -38,7 +40,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Drawdown Actual */}
         <TarjetaKpi
           titulo="Drawdown Actual"
-          valor={`${drawdownActual.toFixed(2)}%`}
+          valor={drawdownActual}
           variacion={drawdownActual - drawdownMaximo < 0 ? 31.3 : -31.3}
           tendencia="baja"
           unidad="%"
@@ -47,7 +49,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Drawdown Máximo */}
         <TarjetaKpi
           titulo="Drawdown Máx."
-          valor={`${drawdownMaximo.toFixed(2)}%`}
+          valor={drawdownMaximo}
           variacion={0}
           tendencia="baja"
           unidad="%"
@@ -59,7 +61,7 @@ export const KPIsPrincipales: React.FC = () => {
         {/* Win Rate */}
         <TarjetaKpi
           titulo="Win Rate"
-          valor={`${winRate.toFixed(1)}%`}
+          valor={winRate}
           variacion={winRate - 65}
           tendencia="alza"
           unidad="%"
@@ -78,7 +80,7 @@ export const KPIsPrincipales: React.FC = () => {
 
       {/* Insignias de modo y origen */}
       <div className="mt-4 flex items-center gap-3">
-        <BadgeModo />
+        <BadgeModo modo={modoActual === "papel" ? "paper" : modoActual} />
         <InsigniaOrigen
           tipo="sintetico"
           origen="API"

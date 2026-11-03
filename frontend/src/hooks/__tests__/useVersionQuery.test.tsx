@@ -1,14 +1,15 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { crearEnvolvedorConsultas } from '../../test/envolvedorConsultas';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { usarPortafolio } from '../usePortafolioQuery';
-import { fetchPortfolio } from '../../api/usuarios';
+import { usarVersion } from '../useVersionQuery';
+import { fetchVersion } from '../../api/usuarios';
 
-vi.mock('../../../api/clienteApi', () => ({
-  fetchPortfolio: vi.fn(),
+vi.mock('../../api/usuarios', () => ({
+  fetchVersion: vi.fn(),
 }));
 
-describe('usarPortafolio', () => {
-  const mockFetchPortfolio = vi.mocked(fetchPortfolio);
+describe('usarVersion', () => {
+  const mockFetchVersion = vi.mocked(fetchVersion);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -19,17 +20,15 @@ describe('usarPortafolio', () => {
     vi.restoreAllMocks();
   });
 
-  it('debe cargar el portafolio correctamente', async () => {
+  it('debe cargar la versión correctamente', async () => {
     const mockDatos = {
-      btc_balance: 0.002345,
-      eth_balance: 0.004567,
-      usdt_balance: 3000.0,
-      total_nav: 3000.0,
-      initial_capital: 3000.0,
+      app_version: '2.0.0',
+      framework: 'FastAPI',
+      python_version: '3.10+',
     };
-    mockFetchPortfolio.mockResolvedValue(mockDatos);
+    mockFetchVersion.mockResolvedValue(mockDatos);
 
-    const { result } = renderHook(() => usarPortafolio());
+    const { result } = renderHook(() => usarVersion(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -42,10 +41,10 @@ describe('usarPortafolio', () => {
   });
 
   it('debe manejar errores de la API', async () => {
-    const errorMessage = 'No se pudo obtener el portafolio';
-    mockFetchPortfolio.mockRejectedValue(new Error(errorMessage));
+    const errorMessage = 'No se pudo obtener la versión';
+    mockFetchVersion.mockRejectedValue(new Error(errorMessage));
 
-    const { result } = renderHook(() => usarPortafolio());
+    const { result } = renderHook(() => usarVersion(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -59,15 +58,13 @@ describe('usarPortafolio', () => {
 
   it('debe usar el intervalo de revalidación correcto', async () => {
     const mockDatos = {
-      btc_balance: 0.002345,
-      eth_balance: 0.004567,
-      usdt_balance: 3000.0,
-      total_nav: 3000.0,
-      initial_capital: 3000.0,
+      app_version: '2.0.0',
+      framework: 'FastAPI',
+      python_version: '3.10+',
     };
-    mockFetchPortfolio.mockResolvedValue(mockDatos);
+    mockFetchVersion.mockResolvedValue(mockDatos);
 
-    const { result, rerender } = renderHook(() => usarPortafolio());
+    const { result, rerender } = renderHook(() => usarVersion(), { wrapper: crearEnvolvedorConsultas() });
 
     await waitFor(() => {
       expect(result.current.datos).toEqual(mockDatos);

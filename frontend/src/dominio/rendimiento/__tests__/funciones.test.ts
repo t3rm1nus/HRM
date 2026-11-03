@@ -25,9 +25,9 @@ describe('Funciones de Rendimiento', () => {
   describe('calcularEquity', () => {
     it('calcula equity final correcto', () => {
       const { equityFinal, equityInicial, comisionTotal } = calcularEquity(operacionesPrueba);
-      expect(equityFinal).toBe(160); // 100 + (20-1) + (-10-1) + (30-2) + (25-1) = 100 + 19 - 11 + 28 + 24 = 230
+      expect(equityFinal).toBe(160); // 100 + 19 - 11 + 28 + 24 = 160
       expect(equityInicial).toBe(100);
-      expect(comisionTotal).toBe(6);
+      expect(comisionTotal).toBe(5);
     });
   });
 
@@ -118,7 +118,7 @@ describe('Funciones de Rendimiento', () => {
   describe('calcularComisionesAcumuladas', () => {
     it('calcula comisiones totales', () => {
       const comisiones = calcularComisionesAcumuladas(operacionesPrueba);
-      expect(comisiones).toBe(6); // 1+1+2+1
+      expect(comisiones).toBe(5); // 1+1+2+1
     });
   });
 

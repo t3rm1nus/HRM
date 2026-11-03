@@ -20,7 +20,11 @@ export const GraficaArea = ({ titulo, datos, height = 400, theme = 'dark', showG
       <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
       <div style={{ width: '100%', height }}>
         <ResponsiveContainer>
-          <AreaChart data={datosOrdenados} onMouseMove={(evento) => { if (evento?.activePayload?.[0]) { const punto = evento.activePayload[0].payload as { timestamp: string; valor: number }; onAreaHover?.(punto.valor, punto.timestamp); } }}>
+          <AreaChart data={datosOrdenados} onMouseMove={(evento) => {
+            const indice = Number(evento?.activeTooltipIndex);
+            const punto = Number.isInteger(indice) ? datosOrdenados[indice] : undefined;
+            if (punto) onAreaHover?.(punto.valor, punto.timestamp);
+          }}>
             {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#374151' : '#E5E7EB'} />}
             <XAxis dataKey="timestamp" tick={{ fill: colorTexto, fontSize: 11 }} />
             <YAxis tick={{ fill: colorTexto, fontSize: 11 }} />

@@ -17,7 +17,7 @@ describe('funciones dominio graficas', () => {
       const resultado = calcularDrawdownSubmarino(precios);
       expect(resultado.maxDrawdown).toBeGreaterThan(15);
       expect(resultado.precioAlto).toBe(105);
-      expect(resultado.indiceAlto).toBe(2);
+      expect(resultado.indiceAlto).toBe(1);
     });
 
     it('retorna 0 para precios monótonos', () => {

@@ -1,9 +1,10 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { crearEnvolvedorConsultas } from '../../test/envolvedorConsultas';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarEstado } from '../useEstadoQuery';
 import { fetchStatus } from '../../api/usuarios';
 
-vi.mock('../../../api/clienteApi', () => ({
+vi.mock('../../api/usuarios', () => ({
   fetchStatus: vi.fn(),
 }));
 
@@ -28,7 +29,7 @@ describe('usarEstado', () => {
     };
     mockFetchStatus.mockResolvedValue(mockDatos);
 
-    const { result } = renderHook(() => usarEstado());
+    const { result } = renderHook(() => usarEstado(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -44,7 +45,7 @@ describe('usarEstado', () => {
     const errorMessage = 'No se pudo obtener el estado';
     mockFetchStatus.mockRejectedValue(new Error(errorMessage));
 
-    const { result } = renderHook(() => usarEstado());
+    const { result } = renderHook(() => usarEstado(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -65,7 +66,7 @@ describe('usarEstado', () => {
     };
     mockFetchStatus.mockResolvedValue(mockDatos);
 
-    const { result, rerender } = renderHook(() => usarEstado());
+    const { result, rerender } = renderHook(() => usarEstado(), { wrapper: crearEnvolvedorConsultas() });
 
     await waitFor(() => {
       expect(result.current.datos).toEqual(mockDatos);

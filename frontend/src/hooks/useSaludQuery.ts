@@ -8,13 +8,19 @@ export const usarSalud = (): {
   isLoading: boolean;
   refetch: () => void;
 } => {
-  return useQuery({
+  const consulta = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
     refetchInterval: TIEMPO_REFRESCO_HEALTH,
     staleTime: TIEMPO_REFRESCO_HEALTH,
-    retry: 2,
   });
+
+  return {
+    datos: consulta.data,
+    error: consulta.error,
+    isLoading: consulta.isLoading,
+    refetch: () => { void consulta.refetch(); },
+  };
 };
 
 export interface HealthCheckRespuesta {

@@ -28,8 +28,8 @@ const construirOperaciones = (): Operacion[] =>
     simbodo: t.symbol,
     lado: t.side,
     fecha: t.timestamp.slice(0, 10),
-    estrategia: ESTRATEGIAS[i % ESTRATEGIAS.length],
-    estado: ESTADOS_TAB[i % ESTADOS_TAB.length],
+    estrategia: ESTRATEGIAS[i % ESTRATEGIAS.length] ?? ESTRATEGIAS[0],
+    estado: ESTADOS_TAB[i % ESTADOS_TAB.length] ?? ESTADOS_TAB[0],
     motivo:
       i % 3 === 1
         ? 'Confianza por debajo del umbral'

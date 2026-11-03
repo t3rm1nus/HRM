@@ -17,7 +17,10 @@ export const Donut = ({ titulo, datos, height = 300, theme = 'dark' }: DonutProp
         <ResponsiveContainer>
           <PieChart>
             <Pie data={datos} dataKey="valor" nameKey="nombre" innerRadius="55%" outerRadius="82%" paddingAngle={2}>
-              {datos.map((dato, indice) => <Cell key={`${dato.nombre}-${indice}`} fill={dato.color ?? ['#10B981', '#3B82F6', '#F59E0B', '#EF4444'][indice % 4]} />)}
+               {datos.map((dato, indice) => {
+                const colorPredeterminado = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444'][indice % 4] ?? '#64748B';
+                return <Cell key={`${dato.nombre}-${indice}`} fill={dato.color ?? colorPredeterminado} />;
+              })}
             </Pie>
             <Tooltip />
           </PieChart>

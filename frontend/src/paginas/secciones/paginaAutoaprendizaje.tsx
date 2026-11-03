@@ -1,5 +1,6 @@
 import React from 'react';
 import { useModoStore } from '../../estado/storeModo';
+import { ModoAplicacion } from '../../dominio/modo';
 
 const MECANISMOS = [
   'Validación de señal',
@@ -23,7 +24,7 @@ export const PaginaAutoaprendizaje: React.FC = () => {
     { fecha: '2026-02-05', resultado: 'fallido' },
   ]);
   const reentrenar = () => {
-    if (modo !== 'paper') return;
+    if (modo !== ModoAplicacion.PAPERA) return;
     if (window.confirm('¿Reentrenar manualmente?')) {
       // noop mock
     }
@@ -68,9 +69,9 @@ export const PaginaAutoaprendizaje: React.FC = () => {
       <div className="mt-6">
         <button
           type="button"
-          disabled={modo !== 'paper'}
+          disabled={modo !== ModoAplicacion.PAPERA}
           onClick={reentrenar}
-          className={`px-4 py-2 rounded-lg text-white ${modo !== 'paper' ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+          className={`px-4 py-2 rounded-lg text-white ${modo !== ModoAplicacion.PAPERA ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
         >
           Reentrenar manualmente
         </button>

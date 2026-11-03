@@ -104,7 +104,7 @@ export const calcularTasaExito = (estados: readonly EstadoOperacion[]): number =
 };
 
 /** Valida y transforma datos crudos a formato vela */
-export const validarDatosVela = (datosRaw: any[]): DatosCandle[] => {
+export const validarDatosVela = (datosRaw: unknown[]): DatosCandle[] => {
   const schema = z.object({
     timestamp: z.string().datetime(),
     open: z.number().positive(),
@@ -114,7 +114,17 @@ export const validarDatosVela = (datosRaw: any[]): DatosCandle[] => {
     volume: z.number().optional(),
   });
 
-  return datosRaw.map((d) => schema.parse(d));
+  return datosRaw.map((dato) => {
+    const vela = schema.parse(dato);
+    return {
+      timestamp: vela.timestamp,
+      open: vela.open,
+      high: vela.high,
+      low: vela.low,
+      close: vela.close,
+      ...(vela.volume !== undefined ? { volume: vela.volume } : {}),
+    };
+  });
 };
 
 /** Calcula medias móviles simples */
@@ -133,8 +143,7 @@ export const calcularMediaMovil = (precios: number[], periodos: number[]): Map<n
 };
 
 /** Formatea precio a cadena con 2 decimales */
-export const formatearPrecio = (precio: number): string =>
-  precio.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const formatearPrecio = (precio: number): string => precio.toFixed(2);
 
 /** Obtiene color según tendencia */
 export const obtenerColorTendencia = (actual: number, anterior: number): string =>

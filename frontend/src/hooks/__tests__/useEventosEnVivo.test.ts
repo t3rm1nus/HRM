@@ -2,167 +2,134 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarEventosEnVivo, obtenerURLWS } from '../useEventosEnVivo';
 
+const URL_PRUEBA = 'ws://localhost:3001';
+
+class WebSocketSimulado {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  static instancias: WebSocketSimulado[] = [];
+
+  readyState = WebSocketSimulado.CONNECTING;
+  onopen: (() => void) | null = null;
+  onmessage: ((evento: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  close = vi.fn((): void => this.cerrarSiEstaAbierto());
+
+  constructor(public url: string) {
+    WebSocketSimulado.instancias.push(this);
+    queueMicrotask(() => this.abrir());
+  }
+
+  send(datos: string): void {
+    this.onmessage?.({ data: datos });
+  }
+
+  private abrir(): void {
+    this.readyState = WebSocketSimulado.OPEN;
+    this.onopen?.();
+  }
+
+  private cerrarSiEstaAbierto(): void {
+    if (this.readyState === WebSocketSimulado.CLOSED) return;
+    this.readyState = WebSocketSimulado.CLOSED;
+    this.onclose?.();
+  }
+}
+
+const renderizarHookConectado = async (configuracion: Parameters<typeof usarEventosEnVivo>[0]) => {
+  const resultado = renderHook(() => usarEventosEnVivo(configuracion));
+  await waitFor(() => expect(resultado.result.current.estado).toBe('conectado'));
+  return resultado;
+};
+
 describe('obtenerURLWS', () => {
-  it('debe devolver ws://localhost:3001 cuando VITE_USAR_MOCKS=true', () => {
-    vi.stubGlobal('import.meta', {
-      env: { VITE_USAR_MOCKS: 'true' },
-    });
-
-    const url = obtenerURLWS();
-    expect(url).toBe('ws://localhost:3001');
-  });
-
-  it('debe devolver ws://localhost:8000/ws cuando VITE_USAR_MOCKS no está definido', () => {
-    vi.stubGlobal('import.meta', {
-      env: { VITE_USAR_MOCKS: 'false' },
-    });
-
-    const url = obtenerURLWS();
-    expect(url).toBe('ws://localhost:8000/ws');
-  });
-
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('debe devolver ws://localhost:3001 cuando VITE_USAR_MOCKS=true', () => {
+    vi.stubEnv('VITE_USAR_MOCKS', 'true');
+    expect(obtenerURLWS()).toBe(URL_PRUEBA);
+  });
+
+  it('debe devolver ws://localhost:8000/ws cuando VITE_USAR_MOCKS no es true', () => {
+    vi.stubEnv('VITE_USAR_MOCKS', 'false');
+    expect(obtenerURLWS()).toBe('ws://localhost:8000/ws');
   });
 });
 
 describe('usarEventosEnVivo', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    Object.defineProperty(window, 'WebSocket', {
-      value: class MockWebSocket {
-        static CONNECTING = 0;
-        static OPEN = 1;
-        static CLOSING = 2;
-        static CLOSED = 3;
-
-        readyState = MockWebSocket.OPEN;
-        onopen: ((event: Event) => void) | null = null;
-        onmessage: ((event: MessageEvent) => void) | null = null;
-        onclose: ((event: CloseEvent) => void) | null = null;
-        onerror: ((event: Event) => void) | null = null;
-
-        constructor(url: string) {
-          this.url = url;
-        }
-
-        send(data: string): void {
-          if (this.readyState === MockWebSocket.OPEN) {
-            this.onmessage?.({ data } as MessageEvent);
-          }
-        }
-
-        close(): void {
-          this.readyState = MockWebSocket.CLOSED;
-          this.onclose?.({ code: 1000, reason: '', wasClean: true } as CloseEvent);
-        }
-      },
-    });
+    WebSocketSimulado.instancias = [];
+    vi.stubGlobal('WebSocket', WebSocketSimulado);
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
-    delete (window as unknown as { WebSocket: unknown }).WebSocket;
+    vi.unstubAllGlobals();
   });
 
-  it('debe conectar al WebSocket y establecer estado conectado', () => {
-    const mockOnConnect = vi.fn();
-    const mockOnEvent = vi.fn();
+  it('debe conectar al WebSocket y establecer estado conectado', async () => {
+    const alConectar = vi.fn();
 
-    const { result } = renderHook(() =>
-      usarEventosEnVivo({
-        url: 'ws://localhost:3001',
-        onConnect: mockOnConnect,
-        onEvent: mockOnEvent,
-      })
-    );
+    await renderizarHookConectado({ url: URL_PRUEBA, onConnect: alConectar });
 
-    expect(result.current.estado).toBe('conectado');
-    expect(mockOnConnect).toHaveBeenCalled();
+    expect(alConectar).toHaveBeenCalledTimes(1);
   });
 
-  it('debe enviar datos mediante el método enviar', () => {
-    const mockOnEvent = vi.fn();
-
-    const { result } = renderHook(() =>
-      usarEventosEnVivo({
-        url: 'ws://localhost:3001',
-        onEvent: mockOnEvent,
-      })
-    );
+  it('debe enviar datos mediante el método enviar', async () => {
+    const alRecibirEvento = vi.fn();
+    const { result } = await renderizarHookConectado({ url: URL_PRUEBA, onEvent: alRecibirEvento });
 
     act(() => {
       result.current.enviar({ tipo: 'test', datos: { value: 1 } });
     });
 
-    expect(mockOnEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tipo: 'test',
-        timestamp: expect.any(String),
-      })
+    expect(alRecibirEvento).toHaveBeenCalledWith(
+      expect.objectContaining({ tipo: 'test', timestamp: expect.any(String) }),
     );
   });
 
-  it('debe cerrar la conexión al desmontar', () => {
-    const { unmount } = renderHook(() =>
-      usarEventosEnVivo({
-        url: 'ws://localhost:3001',
-      })
-    );
-
-    expect(result.current.estado).toBe('conectado');
+  it('debe cerrar la conexión al desmontar', async () => {
+    const { unmount } = await renderizarHookConectado({ url: URL_PRUEBA });
+    const [socket] = WebSocketSimulado.instancias;
 
     unmount();
 
-    expect(result.current.estado).toBe('desconectado');
+    expect(socket.close).toHaveBeenCalledWith(1000, 'Componente desmontado');
   });
 
-  it('debe manejar reintentos de reconexión', () => {
-    const mockOnReconnect = vi.fn();
-    const { result, rerender } = renderHook((props) =>
-      usarEventosEnVivo({ ...props, maxReconnects: 1 }),
-      { initialProps: { url: 'ws://localhost:3001' } }
-    );
+  it('debe manejar reintentos de reconexión', async () => {
+    const alReconectar = vi.fn();
+    const { result } = await renderizarHookConectado({
+      url: URL_PRUEBA,
+      maxReconnects: 1,
+      onReconnect: alReconectar,
+    });
 
-    expect(result.current.estado).toBe('conectado');
-
-    act(() => {
+    await act(async () => {
       result.current.forzarReconexion();
     });
 
-    expect(mockOnReconnect).not.toHaveBeenCalled();
-
-    rerender({
-      url: 'ws://localhost:3001',
-      maxReconnects: 1,
-      onReconnect: mockOnReconnect,
-    });
-
-    expect(mockOnReconnect).toHaveBeenCalled();
+    expect(alReconectar).toHaveBeenCalledWith(1);
   });
 
-  it('debe validar eventos con la función de validación', () => {
-    const mockOnEvent = vi.fn();
-    let receivedEvent: { tipo: string; datos: unknown; timestamp: string } | null = null;
-
-    const validateEvent = vi.fn((data: unknown) => {
-      return typeof (data as { tipo?: string }).tipo === 'string';
+  it('debe descartar eventos que no superan la función de validación', async () => {
+    const alRecibirEvento = vi.fn();
+    const validarEvento = vi.fn(() => false);
+    const { result } = await renderizarHookConectado({
+      url: URL_PRUEBA,
+      validateEvent: validarEvento,
+      onEvent: alRecibirEvento,
     });
-
-    const { result } = renderHook(() =>
-      usarEventosEnVivo({
-        url: 'ws://localhost:3001',
-        validateEvent,
-        onEvent: mockOnEvent,
-      })
-    );
 
     act(() => {
       result.current.enviar({ tipo: 'test', datos: { value: 1 } });
     });
 
-    expect(validateEvent).toHaveBeenCalled();
-    expect(receivedEvent).toBeNull();
+    expect(validarEvento).toHaveBeenCalled();
+    expect(alRecibirEvento).not.toHaveBeenCalled();
   });
 });

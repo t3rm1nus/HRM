@@ -8,13 +8,19 @@ export const usarVersion = (): {
   isLoading: boolean;
   refetch: () => void;
 } => {
-  return useQuery({
+  const consulta = useQuery({
     queryKey: ['version'],
     queryFn: fetchVersion,
     refetchInterval: TIEMPO_REFRESCO_VERSION,
     staleTime: TIEMPO_REFRESCO_VERSION,
-    retry: 2,
   });
+
+  return {
+    datos: consulta.data,
+    error: consulta.error,
+    isLoading: consulta.isLoading,
+    refetch: () => { void consulta.refetch(); },
+  };
 };
 
 export interface VersionRespuesta {

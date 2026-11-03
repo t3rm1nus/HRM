@@ -1,4 +1,4 @@
-import type { Usuario } from '../dominio';
+import { Rol, type Usuario } from '../dominio';
 
 export interface HealthCheckRespuesta {
   status: 'ok' | 'error';
@@ -73,21 +73,21 @@ export const USUARIOS_FIQUETAS: Usuario[] = [
     id: 'd3b07384-d477-448d-882b-8c7f2b6d4c9a',
     nombre: 'Ana Martinez',
     email: 'admin@hrm.local',
-    rol: 'admin',
+    rol: Rol.ADMIN,
     activo: true,
   },
   {
     id: 'e4c18a9e-6f12-42a3-9b78-3d8f1a2e4d5b',
     nombre: 'Carlos Ruiz',
     email: 'operador@hrm.local',
-    rol: 'operador',
+    rol: Rol.OPERADOR,
     activo: true,
   },
   {
     id: 'f5d29ba4-7a23-53b4-8c99-4e9a2b3f5e6c',
     nombre: 'Laura Gomez',
     email: 'analista@hrm.local',
-    rol: 'analista',
+    rol: Rol.ANALISTA,
     activo: false,
   },
 ];
@@ -224,3 +224,10 @@ export const TRADES_FIQUETAS: TradeFiqueta[] = [
     tax_year: 2026,
   },
 ];
+
+/** Devuelve operaciones de ejemplo para las respuestas simuladas de la API. */
+export const getTradesMock = (cantidad: number): TradeFiqueta[] =>
+  TRADES_FIQUETAS.slice(0, Math.max(0, cantidad));
+
+/** Devuelve el conjunto completo de operaciones sintéticas para eventos de prueba. */
+export const getTradesSinteticas = (): TradeFiqueta[] => [...TRADES_FIQUETAS];

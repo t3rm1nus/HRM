@@ -19,7 +19,11 @@ export const GraficaBarras = ({ titulo, datos, height = 400, theme = 'dark', sho
       <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
       <div style={{ width: '100%', height }}>
         <ResponsiveContainer>
-          <BarChart data={datosGrafica} onClick={(evento) => { const punto = evento?.activePayload?.[0]?.payload as (typeof datos)[number] | undefined; if (punto) onBarClick?.(punto.valor, punto.categoria ?? '', punto.timestamp); }}>
+          <BarChart data={datosGrafica} onClick={(evento) => {
+            const indice = Number(evento?.activeTooltipIndex);
+            const punto = Number.isInteger(indice) ? datosGrafica[indice] : undefined;
+            if (punto) onBarClick?.(punto.valor, punto.categoria ?? '', punto.timestamp);
+          }}>
             {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#374151' : '#E5E7EB'} />}
             <XAxis dataKey="ejeX" tick={{ fill: colorTexto, fontSize: 11 }} />
             <YAxis tick={{ fill: colorTexto, fontSize: 11 }} />

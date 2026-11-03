@@ -2,11 +2,12 @@ import React from 'react';
 import { useModoStore } from '../estado/storeModo';
 import { BadgeModo } from './ui/badgeModo';
 import { ModalConfirmacionFuerte } from './modaConfirmacionFuerte';
-import { PALABRAS_VERIFICACION } from '../dominio/modo';
+import { ModoAplicacion, PALABRAS_VERIFICACION } from '../dominio/modo';
 
 
 export const Navbar: React.FC = () => {
   const {
+    modo,
     estadoConexion,
     latenciaMs,
     deteniendo,
@@ -46,7 +47,7 @@ export const Navbar: React.FC = () => {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-4">
-            <BadgeModo />
+            <BadgeModo modo={modo === ModoAplicacion.PAPERA ? 'paper' : modo} />
             <div className="flex items-center gap-4 text-sm text-gray-600">
               <span className={`flex items-center gap-1.5 ${estadoConexion === 'conectado' ? 'text-green-600' : estadoConexion === 'desconectado' ? 'text-red-600' : 'text-amber-600'}`}>
                 <span className={`w-2 h-2 rounded-full ${estadoConexion === 'conectado' ? 'bg-green-500' : estadoConexion === 'desconectado' ? 'bg-red-500' : 'bg-amber-500'}`} />

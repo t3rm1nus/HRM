@@ -8,13 +8,19 @@ export const usarPortafolio = (): {
   isLoading: boolean;
   refetch: () => void;
 } => {
-  return useQuery({
+  const consulta = useQuery({
     queryKey: ['portfolio'],
     queryFn: fetchPortfolio,
     refetchInterval: TIEMPO_REFRESCO_PORTFOLIO,
     staleTime: TIEMPO_REFRESCO_PORTFOLIO,
-    retry: 2,
   });
+
+  return {
+    datos: consulta.data,
+    error: consulta.error,
+    isLoading: consulta.isLoading,
+    refetch: () => { void consulta.refetch(); },
+  };
 };
 
 export interface PortfolioRespuesta {

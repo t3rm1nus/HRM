@@ -23,20 +23,6 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-Object.defineProperty(window, 'navigator', {
-  value: {
-    languages: ['es-ES'],
-  },
-});
-
-Object.defineProperty(document, 'doctype', {
-  value: document.implementation.createDocumentType('html', '', ''),
-});
-
-Object.defineProperty(document, 'documentElement', {
-  value: document.createElement('div'),
-});
-
 beforeEach(() => {
   localStorage.clear();
 });

@@ -1,1 +1,1 @@
-export * from './operaciones';
+export { PaginaOperaciones } from '../secciones/paginaOperaciones';

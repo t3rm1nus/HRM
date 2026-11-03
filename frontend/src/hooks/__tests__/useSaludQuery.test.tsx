@@ -1,9 +1,10 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { crearEnvolvedorConsultas } from '../../test/envolvedorConsultas';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarSalud } from '../useSaludQuery';
 import { fetchHealth } from '../../api/usuarios';
 
-vi.mock('../../../api/clienteApi', () => ({
+vi.mock('../../api/usuarios', () => ({
   fetchHealth: vi.fn(),
 }));
 
@@ -27,7 +28,7 @@ describe('usarSalud', () => {
     };
     mockFetchHealth.mockResolvedValue(mockDatos);
 
-    const { result } = renderHook(() => usarSalud());
+    const { result } = renderHook(() => usarSalud(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -43,7 +44,7 @@ describe('usarSalud', () => {
     const errorMessage = 'Servicio no disponible';
     mockFetchHealth.mockRejectedValue(new Error(errorMessage));
 
-    const { result } = renderHook(() => usarSalud());
+    const { result } = renderHook(() => usarSalud(), { wrapper: crearEnvolvedorConsultas() });
 
     expect(result.current.isLoading).toBe(true);
 
@@ -63,7 +64,7 @@ describe('usarSalud', () => {
     };
     mockFetchHealth.mockResolvedValue(mockDatos);
 
-    const { result, rerender } = renderHook(() => usarSalud());
+    const { result, rerender } = renderHook(() => usarSalud(), { wrapper: crearEnvolvedorConsultas() });
 
     await waitFor(() => {
       expect(result.current.datos).toEqual(mockDatos);
