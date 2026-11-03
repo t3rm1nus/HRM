@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { LightweightCharts } from 'lightweight-charts';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export interface GraficaBarrasProps {
   titulo: string;
@@ -12,86 +11,24 @@ export interface GraficaBarrasProps {
   onBarClick?: (valor: number, categoria: string, timestamp: string) => void;
 }
 
-export const GraficaBarras = ({
-  titulo,
-  datos,
-  width = 800,
-  height = 400,
-  theme = 'dark',
-  showGrid = true,
-  crosshairSource,
-  onBarClick,
-}: GraficaBarrasProps) => {
-  const chartRef = useRef<LightweightCharts.Widget | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-
-    const chart = chartRef.current.renderer();
-    const themeConfig = theme === 'dark' ? {
-      background: { type: 'solid', color: '#111827' },
-      grid: { vertLine: { color: '#374151' }, horzLine: { color: '#374151' } },
-      rightPriceScale: { borderVisible: false, backgroundColor: '#111827', textColor: '#F9FAFB' },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-      crosshair: {
-        mode: 'visible',
-        color: '#FFFFFF',
-        vertLine: { color: '#FFFFFF' },
-        horzLine: { color: '#FFFFFF' },
-        horzLineVisibleInRange: false,
-      },
-      layout: { background: { type: 'solid', color: '#111827' }, textColor: '#F9FAFB' },
-    } : {
-      background: { type: 'solid', color: '#FFFFFF' },
-      grid: { vertLine: { color: '#E5E7EB' }, horzLine: { color: '#E5E7EB' } },
-      rightPriceScale: { borderVisible: true, backgroundColor: '#FFFFFF', textColor: '#111827' },
-      timeScale: { borderVisible: true, timeVisible: true, secondsVisible: false },
-      crosshair: {
-        mode: 'visible',
-        color: '#000000',
-        vertLine: { color: '#000000' },
-        horzLine: { color: '#000000' },
-        horzLineVisibleInRange: false,
-      },
-      layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
-    };
-
-    chart.applyOptions(themeConfig);
-
-    const series = chart.addBarSeries({
-      color: '#EF4444',
-      lineWidth: 0,
-      title: titulo,
-    });
-
-    series.setData(datos.map(d => ({
-      time: d.timestamp,
-      open: d.valor,
-      high: d.valor,
-      low: d.valor,
-    })));
-
-    setIsMounted(true);
-
-    return () => {
-      chartRef.current?.remove();
-    };
-  }, [datos, theme, width, height, crosshairSource, onBarClick]);
-
-  if (!isMounted) {
-    return <div className="h-[400px] w-full" />;
-  }
-
+export const GraficaBarras = ({ titulo, datos, height = 400, theme = 'dark', showGrid = true, onBarClick }: GraficaBarrasProps) => {
+  const colorTexto = theme === 'dark' ? '#F9FAFB' : '#111827';
+  const datosGrafica = datos.map((dato) => ({ ...dato, ejeX: dato.categoria ?? dato.timestamp }));
   return (
-    <div className="rounded-md p-4 border border-gray-200">
-      <h3 className="text-sm font-medium text-gray-700 mb-2">{titulo}</h3>
-      <div
-        ref={chartRef}
-        style={{ height: height }}
-        className="h-[400px] w-full"
-      />
-    </div>
+    <section className="w-full rounded-md border border-gray-200 p-4">
+      <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          <BarChart data={datosGrafica} onClick={(evento) => { const punto = evento?.activePayload?.[0]?.payload as (typeof datos)[number] | undefined; if (punto) onBarClick?.(punto.valor, punto.categoria ?? '', punto.timestamp); }}>
+            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#374151' : '#E5E7EB'} />}
+            <XAxis dataKey="ejeX" tick={{ fill: colorTexto, fontSize: 11 }} />
+            <YAxis tick={{ fill: colorTexto, fontSize: 11 }} />
+            <Tooltip />
+            <Bar dataKey="valor" name={titulo} fill="#3B82F6" isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
   );
 };
 

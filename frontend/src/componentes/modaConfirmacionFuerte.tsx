@@ -1,6 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { PALABRAS_VERIFICACION } from '../dominio/modo';
-import { BOTON_CONFIRMAR, BOTON_CANCELAR, BOTON_EMERGENCIA, BOTON_CERRAR } from '../constantes/boton';
+import { BOTON_CONFIRMAR, BOTON_CANCELAR, BOTON_CERRAR } from '../constantes/boton';
 
 interface ModalConfirmacionFuerteProps {
   titulo: string;

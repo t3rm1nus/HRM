@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { LightweightCharts } from 'lightweight-charts';
+import { useEffect, useRef } from 'react';
+import { CandlestickSeries, ColorType, createChart, HistogramSeries, type UTCTimestamp } from 'lightweight-charts';
 
 export interface GraficaVelasProps {
   simbolo: string;
@@ -8,91 +8,86 @@ export interface GraficaVelasProps {
   height?: number;
   theme?: 'light' | 'dark';
   showVolume?: boolean;
-  /** Crosshair sincronizado entre gráficas */
   crosshairSource?: string;
-  /** Callback cuando cambia el precio seleccionado */
   onPriceChange?: (price: number, timestamp: string) => void;
 }
 
-export const GraficaVelas = ({
-  simbolo,
-  candles,
-  width = 800,
-  height = 400,
-  theme = 'dark',
-  showVolume = true,
-  crosshairSource,
-  onPriceChange,
-}: GraficaVelasProps) => {
-  const chartRef = useRef<LightweightCharts.Widget | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
+function convertirTiempo(timestamp: string): UTCTimestamp {
+  const milisegundos = new Date(timestamp).getTime();
+  if (!Number.isFinite(milisegundos)) throw new Error(`Timestamp de vela no válido: ${timestamp}`);
+  return Math.floor(milisegundos / 1000) as UTCTimestamp;
+}
+
+export const GraficaVelas = ({ simbolo, candles, width, height = 400, theme = 'dark', showVolume = true, onPriceChange }: GraficaVelasProps) => {
+  const contenedorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!chartRef.current) return;
+    const contenedor = contenedorRef.current;
+    if (!contenedor) return undefined;
 
-    const chart = chartRef.current.renderer();
-    const themeConfig = theme === 'dark' ? {
-      background: { type: 'solid', color: '#111827' },
-      grid: { vertLine: { color: '#374151' }, horzLine: { color: '#374151' } },
-      rightPriceScale: { borderVisible: false, backgroundColor: '#111827', textColor: '#F9FAFB' },
+    const oscuro = theme === 'dark';
+    const grafica = createChart(contenedor, {
+      width: contenedor.clientWidth,
+      height,
+      layout: {
+        background: { type: ColorType.Solid, color: oscuro ? '#111827' : '#FFFFFF' },
+        textColor: oscuro ? '#F9FAFB' : '#111827',
+      },
+      grid: {
+        vertLines: { color: oscuro ? '#374151' : '#E5E7EB' },
+        horzLines: { color: oscuro ? '#374151' : '#E5E7EB' },
+      },
+      rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-      crosshair: {
-        mode: 'visible',
-        color: '#FFFFFF',
-        vertLine: { color: '#FFFFFF' },
-        horzLine: { color: '#FFFFFF' },
-        horzLineVisibleInRange: false,
-      },
-      layout: { background: { type: 'solid', color: '#111827' }, textColor: '#F9FAFB' },
-    } : {
-      background: { type: 'solid', color: '#FFFFFF' },
-      grid: { vertLine: { color: '#E5E7EB' }, horzLine: { color: '#E5E7EB' } },
-      rightPriceScale: { borderVisible: true, backgroundColor: '#FFFFFF', textColor: '#111827' },
-      timeScale: { borderVisible: true, timeVisible: true, secondsVisible: false },
-      crosshair: {
-        mode: 'visible',
-        color: '#000000',
-        vertLine: { color: '#000000' },
-        horzLine: { color: '#000000' },
-        horzLineVisibleInRange: false,
-      },
-      layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
-    };
-
-    chart.applyOptions(themeConfig);
-
-    const plotData = candles.map((c) => ({
-      time: c.timestamp,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      volume: c.volume,
-    }));
-
-    chart.setMarkup({
-      // Add volume bars if showVolume
     });
 
-    chart.set(plotData);
+    const velas = grafica.addSeries(CandlestickSeries, {
+      upColor: '#10B981', downColor: '#EF4444', borderUpColor: '#10B981',
+      borderDownColor: '#EF4444', wickUpColor: '#10B981', wickDownColor: '#EF4444',
+    });
+    velas.setData(candles.map((vela) => ({
+      time: convertirTiempo(vela.timestamp), open: vela.open, high: vela.high,
+      low: vela.low, close: vela.close,
+    })));
 
-    setIsMounted(true);
+    if (showVolume) {
+      const volumen = grafica.addSeries(HistogramSeries, {
+        priceFormat: { type: 'volume' }, priceScaleId: '',
+      });
+      volumen.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      volumen.setData(candles.filter((vela) => vela.volume !== undefined).map((vela) => ({
+        time: convertirTiempo(vela.timestamp), value: vela.volume ?? 0,
+        color: vela.close >= vela.open ? '#10B98166' : '#EF444466',
+      })));
+    }
+
+    grafica.timeScale().fitContent();
+    if (onPriceChange) {
+      grafica.subscribeCrosshairMove((evento) => {
+        const punto = evento.seriesData.get(velas);
+        if (punto && 'close' in punto && typeof evento.time === 'number') {
+          onPriceChange(punto.close, new Date(evento.time * 1000).toISOString());
+        }
+      });
+    }
+
+    const observador = new ResizeObserver((entradas) => {
+      const ancho = entradas[0]?.contentRect.width;
+      if (ancho && ancho > 0) grafica.applyOptions({ width: ancho });
+    });
+    observador.observe(contenedor);
 
     return () => {
-      chartRef.current?.remove();
+      observador.disconnect();
+      grafica.remove();
     };
-  }, [candles, theme, width, height, crosshairSource, onPriceChange]);
-
-  if (!isMounted) {
-    return <div className="h-[400px] w-full" />;
-  }
+  }, [candles, height, theme, showVolume, onPriceChange]);
 
   return (
-    <div
-      ref={chartRef}
-      style={{ width: width, height: height }}
-      className="border rounded-md"
-    />
+    <section className="w-full rounded-md border border-gray-200 p-4">
+      <h3 className="mb-2 text-sm font-medium">{simbolo}</h3>
+      <div ref={contenedorRef} className="max-w-full" style={{ width: width ? `${width}px` : '100%', height }} />
+    </section>
   );
 };
 

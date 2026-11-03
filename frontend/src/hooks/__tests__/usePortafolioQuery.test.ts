@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarPortafolio } from '../usePortafolioQuery';
-import { fetchPortfolio } from '../api/usuarios';
+import { fetchPortfolio } from '../../api/usuarios';
 
 vi.mock('../../../api/clienteApi', () => ({
   fetchPortfolio: vi.fn(),

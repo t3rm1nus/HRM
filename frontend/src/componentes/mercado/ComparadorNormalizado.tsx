@@ -1,4 +1,5 @@
-import React from 'react';
+import { useMemo } from 'react';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export interface ComparadorNormalizadoProps {
   btcDatos: { timestamp: string; precio: number }[];
@@ -8,72 +9,33 @@ export interface ComparadorNormalizadoProps {
   tema?: 'light' | 'dark';
 }
 
-export const ComparadorNormalizado: React.FC<ComparadorNormalizadoProps> = ({
-  btcDatos,
-  ethDatos,
-  width = 400,
-  height = 200,
-  tema = 'dark',
-}) => {
-  const chartRef = useRef<LightweightCharts.Widget | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-
-    const chart = chartRef.current.renderer();
-    const theme = tema === 'dark' ? {
-      background: { type: 'solid', color: '#111827' },
-      grid: { vertLine: { color: '#374151' }, horzLine: { color: '#374151' } },
-      timeScale: { borderVisible: false },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#111827' }, textColor: '#F9FAFB' },
-    } : {
-      background: { type: 'solid', color: '#FFFFFF' },
-      grid: { vertLine: { color: '#E5E7EB' }, horzLine: { color: '#E5E7EB' } },
-      timeScale: { borderVisible: true },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
+export const ComparadorNormalizado = ({ btcDatos, ethDatos, height = 200, tema = 'dark' }: ComparadorNormalizadoProps) => {
+  const datos = useMemo(() => {
+    const normalizar = (valores: typeof btcDatos) => {
+      const base = valores.find((dato) => dato.precio > 0)?.precio;
+      return new Map(valores.map((dato) => [dato.timestamp, base ? (dato.precio / base) * 100 : null]));
     };
-
-    chart.applyOptions(theme);
-
-    // Series BTC
-    const btcSeries = chart.addLineSeries({
-      color: '#F59E0B',
-      lineWidth: 2,
-      title: 'BTC',
-    });
-    btcSeries.setData(btcDatos.map(d => ({ time: d.timestamp, value: d.precio })));
-
-    // Series ETH
-    const ethSeries = chart.addLineSeries({
-      color: '#3B82F6',
-      lineWidth: 2,
-      title: 'ETH',
-    });
-    ethSeries.setData(ethDatos.map(d => ({ time: d.timestamp, value: d.precio })));
-
-    setIsMounted(true);
-
-    return () => {
-      chartRef.current?.remove();
-    };
-  }, [btcDatos, ethDatos, tema]);
-
-  if (!isMounted) {
-    return <div className="h-[200px] w-full" />;
-  }
-
+    const btc = normalizar(btcDatos);
+    const eth = normalizar(ethDatos);
+    return [...new Set([...btc.keys(), ...eth.keys()])].sort().map((timestamp) => ({ timestamp, btc: btc.get(timestamp) ?? null, eth: eth.get(timestamp) ?? null }));
+  }, [btcDatos, ethDatos]);
+  const colorTexto = tema === 'dark' ? '#F9FAFB' : '#111827';
   return (
-    <div className="rounded-md p-4 border border-gray-200">
-      <h3 className="text-sm font-medium text-gray-700 mb-2">Comparación BTC/ETH</h3>
-      <div
-        ref={chartRef}
-        style={{ width: width, height: height }}
-        className="h-[200px] w-full"
-      />
-    </div>
+    <section className="w-full rounded-md border border-gray-200 p-4">
+      <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>Comparación BTC/ETH (base 100)</h3>
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          <LineChart data={datos}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="timestamp" tick={{ fill: colorTexto, fontSize: 10 }} />
+            <YAxis tick={{ fill: colorTexto, fontSize: 10 }} />
+            <Tooltip />
+            <Line dataKey="btc" name="BTC" stroke="#F59E0B" dot={false} connectNulls isAnimationActive={false} />
+            <Line dataKey="eth" name="ETH" stroke="#3B82F6" dot={false} connectNulls isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
   );
 };
 

@@ -1,6 +1,3 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { LightweightCharts } from 'lightweight-charts';
-
 export interface MapaCalorProps {
   titulo: string;
   datos: { x: string; y: string; valor: number }[];
@@ -9,67 +6,34 @@ export interface MapaCalorProps {
   theme?: 'light' | 'dark';
 }
 
-export const MapaCalor = ({
-  titulo,
-  datos,
-  width = 800,
-  height = 400,
-  theme = 'dark',
-}: MapaCalorProps) => {
-  const chartRef = useRef<LightweightCharts.Widget | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
+function obtenerColor(valor: number, minimo: number, maximo: number): string {
+  const intensidad = maximo === minimo ? 0.5 : (valor - minimo) / (maximo - minimo);
+  const rojo = Math.round(239 * intensidad + 16 * (1 - intensidad));
+  const verde = Math.round(68 * intensidad + 185 * (1 - intensidad));
+  const azul = Math.round(68 * intensidad + 129 * (1 - intensidad));
+  return `rgb(${rojo}, ${verde}, ${azul})`;
+}
 
-  useEffect(() => {
-    if (!chartRef.current) return;
-
-    const chart = chartRef.current.renderer();
-    const themeConfig = theme === 'dark' ? {
-      background: { type: 'solid', color: '#111827' },
-      grid: { vertLine: { color: '#374151' }, horzLine: { color: '#374151' } },
-      timeScale: { borderVisible: false, timeVisible: true },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#111827' }, textColor: '#F9FAFB' },
-    } : {
-      background: { type: 'solid', color: '#FFFFFF' },
-      grid: { vertLine: { color: '#E5E7EB' }, horzLine: { color: '#E5E7EB' } },
-      timeScale: { borderVisible: true, timeVisible: true },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
-    };
-
-    chart.applyOptions(themeConfig);
-
-    // Mapa de calor usando heatmap serie
-    const series = chart.addHeatmapSeries({
-      color: '#F59E0B',
-      radius: 0.3,
-    });
-
-    series.setData(datos.map(d => ({
-      time: d.x,
-      value: d.y,
-    })));
-
-    setIsMounted(true);
-
-    return () => {
-      chartRef.current?.remove();
-    };
-  }, [datos, theme]);
-
-  if (!isMounted) {
-    return <div className="h-[400px] w-full" />;
-  }
-
+export const MapaCalor = ({ titulo, datos, height = 400, theme = 'dark' }: MapaCalorProps) => {
+  const ejesX = [...new Set(datos.map((dato) => dato.x))];
+  const ejesY = [...new Set(datos.map((dato) => dato.y))];
+  const valores = datos.map((dato) => dato.valor).filter(Number.isFinite);
+  const minimo = Math.min(...valores);
+  const maximo = Math.max(...valores);
+  const celdas = new Map(datos.map((dato) => [`${dato.x}\u0000${dato.y}`, dato]));
+  const colorTexto = theme === 'dark' ? '#F9FAFB' : '#111827';
   return (
-    <div className="rounded-md p-4 border border-gray-200">
-      <h3 className="text-sm font-medium text-gray-700 mb-2">{titulo}</h3>
-      <div
-        ref={chartRef}
-        style={{ height: height }}
-        className="h-[400px] w-full"
-      />
-    </div>
+    <section className="w-full rounded-md border border-gray-200 p-4">
+      <h3 className="mb-3 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
+      <div className="overflow-auto" style={{ height }}>
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(ejesX.length, 1)}, minmax(2.5rem, 1fr))` }}>
+          {ejesY.flatMap((ejeY) => ejesX.map((ejeX) => {
+            const celda = celdas.get(`${ejeX}\u0000${ejeY}`);
+            return <div key={`${ejeX}-${ejeY}`} className="flex min-h-10 items-center justify-center rounded text-xs text-white" title={celda ? `${ejeX} / ${ejeY}: ${celda.valor}` : `${ejeX} / ${ejeY}`} style={{ backgroundColor: celda ? obtenerColor(celda.valor, minimo, maximo) : '#64748B33' }}>{celda?.valor ?? '—'}</div>;
+          }))}
+        </div>
+      </div>
+    </section>
   );
 };
 

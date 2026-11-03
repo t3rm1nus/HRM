@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarSalud } from '../useSaludQuery';
-import { fetchHealth } from '../api/usuarios';
+import { fetchHealth } from '../../api/usuarios';
 
 vi.mock('../../../api/clienteApi', () => ({
   fetchHealth: vi.fn(),

@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarVersion } from '../useVersionQuery';
-import { fetchVersion } from '../api/usuarios';
+import { fetchVersion } from '../../api/usuarios';
 
 vi.mock('../../../api/clienteApi', () => ({
   fetchVersion: vi.fn(),

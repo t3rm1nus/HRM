@@ -7,4 +7,4 @@ export * from './donut';
 export * from './mapaCalor';
 export * from './lineaTemporalRegimenes';
 export * from './utils';
-export * from '../dominio/graficas/funciones';
+export * from '../../dominio/graficas/funciones';

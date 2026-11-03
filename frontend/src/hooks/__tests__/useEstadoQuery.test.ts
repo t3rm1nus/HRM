@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { usarEstado } from '../useEstadoQuery';
-import { fetchStatus } from '../api/usuarios';
+import { fetchStatus } from '../../api/usuarios';
 
 vi.mock('../../../api/clienteApi', () => ({
   fetchStatus: vi.fn(),

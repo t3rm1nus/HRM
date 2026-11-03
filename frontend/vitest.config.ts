@@ -9,21 +9,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
-    transformMode: {
-      web: [/\\.[jt]sx$/],
-    },
-    exclude: ['vite.config.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    exclude: ['node_modules', 'dist'],
   },
 });
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
-    css: false,
-    transformMode: {
-      web: [/\.[jt]sx$/],
-    },
-    exclude: ['vite.config.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
-  },
-};

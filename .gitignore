@@ -30,3 +30,8 @@ dist/
 # Temporary files
 *.tmp
 *.log
+
+# Frontend artifacts
+coverage/
+.vite/
+*.tsbuildinfo

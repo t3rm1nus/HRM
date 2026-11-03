@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { LightweightCharts } from 'lightweight-charts';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export interface HistogramaProps {
   titulo: string;
@@ -9,69 +8,23 @@ export interface HistogramaProps {
   theme?: 'light' | 'dark';
 }
 
-export const Histograma = ({
-  titulo,
-  rangos,
-  width = 800,
-  height = 400,
-  theme = 'dark',
-}: HistogramaProps) => {
-  const chartRef = useRef<LightweightCharts.Widget | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    if (!chartRef.current) return;
-
-    const chart = chartRef.current.renderer();
-    const themeConfig = theme === 'dark' ? {
-      background: { type: 'solid', color: '#111827' },
-      grid: { vertLine: { color: '#374151' }, horzLine: { color: '#374151' } },
-      timeScale: { borderVisible: false, timeVisible: true },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#111827' }, textColor: '#F9FAFB' },
-    } : {
-      background: { type: 'solid', color: '#FFFFFF' },
-      grid: { vertLine: { color: '#E5E7EB' }, horzLine: { color: '#E5E7EB' } },
-      timeScale: { borderVisible: true, timeVisible: true },
-      crosshair: { mode: 'hide' },
-      layout: { background: { type: 'solid', color: '#FFFFFF' }, textColor: '#111827' },
-    };
-
-    chart.applyOptions(themeConfig);
-
-    // Histograma usando barra series con agrupación
-    const series = chart.addHistogramSeries({
-      color: '#F59E0B',
-      lineWidth: 0,
-    });
-
-    const data = rangos.map(r => ({
-      time: r.rango,
-      value: r.count,
-    }));
-
-    series.setData(data);
-
-    setIsMounted(true);
-
-    return () => {
-      chartRef.current?.remove();
-    };
-  }, [rangos, theme]);
-
-  if (!isMounted) {
-    return <div className="h-[400px] w-full" />;
-  }
-
+export const Histograma = ({ titulo, rangos, height = 400, theme = 'dark' }: HistogramaProps) => {
+  const colorTexto = theme === 'dark' ? '#F9FAFB' : '#111827';
   return (
-    <div className="rounded-md p-4 border border-gray-200">
-      <h3 className="text-sm font-medium text-gray-700 mb-2">{titulo}</h3>
-      <div
-        ref={chartRef}
-        style={{ height: height }}
-        className="h-[400px] w-full"
-      />
-    </div>
+    <section className="w-full rounded-md border border-gray-200 p-4">
+      <h3 className="mb-2 text-sm font-medium" style={{ color: colorTexto }}>{titulo}</h3>
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          <BarChart data={rangos}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="rango" tick={{ fill: colorTexto, fontSize: 11 }} />
+            <YAxis tick={{ fill: colorTexto, fontSize: 11 }} />
+            <Tooltip />
+            <Bar dataKey="count" name="Frecuencia" fill="#F59E0B" isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
   );
 };
 
