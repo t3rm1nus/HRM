@@ -1,19 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useModoStore } from '../estado/storeModo';
-import { BadgeModo } from '../../componentes/ui/badgeModo';
-import { Semaforo } from '../componentes/ui/semaforo';
-import { InsigniaOrigen } from '../componentes/ui/insigniaOrigen';
-import { TarjetaKpi } from '../componentes/ui/tarjetaKpi';
+import React, { useEffect, useState } from 'react';
+import { useModoStore } from '../../estado/storeModo';
+import { InsigniaOrigen } from '../../componentes/ui/insigniaOrigen';
 import { KPIsPrincipales } from './KPIsPrincipales';
 import { CurvaEquity } from './CurvaEquity';
 import { PosicionesAbiertas } from './PosicionesAbiertas';
 import { SenalesOrdenes } from './SenalesOrdenes';
 import { SemaforoSalud } from './SemaforoSalud';
-import { usePaginas } from '../constantes/paginas';
+import { PAGINAS } from '../../constantes/paginas';
 
 export const Panel: React.FC = () => {
   const { modo } = useModoStore();
-  const paginas = usePaginas();
 
   // Simular datos WebSocket (en producción vendrían del WebSocket)
   const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null);
@@ -36,8 +32,7 @@ export const Panel: React.FC = () => {
         <p className="text-sm text-gray-500 mb-6">
           Última actualización: {ultimaActualizacion.toLocaleTimeString()}
         </p>
-      )
-}
+      )}
 
       {/* KPIs Principales */}
       <KPIsPrincipales />
@@ -86,7 +81,7 @@ export const Panel: React.FC = () => {
 
       {/* Grid de páginas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {paginas.map((pg) => (
+        {PAGINAS.map((pg) => (
           <div key={pg.ruta} className="bg-white rounded-lg p-4 shadow-sm">
             <h3 className="text-sm font-medium text-gray-600 uppercase tracking-wider mb-3">{pg.nombre}</h3>
             <p className="text-sm text-gray-500">Contenido de {pg.nombre}</p>

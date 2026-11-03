@@ -1,15 +1,11 @@
-import { http, HttpResponse, delay } from 'msw';
+import { http, HttpResponse } from 'msw';
 import {
   VERSION_RESPUESTA,
   HEALTH_RESPUESTA,
-  STATUS_RESPUESTA,
   PORTFOLIO_RESPUESTA,
-  TRADES_FIQUETAS,
   USUARIOS_FIQUETAS,
-  getPortafolioDesdeTrades,
   getTradesSinteticas,
   getTradesMock,
-  getEstadoSintetico,
 } from './fixtures';
 
 // Estado mutable para simular cambios de modo

@@ -1,8 +1,7 @@
 import React from 'react';
 import { Semaforo } from '../../componentes/ui/semaforo';
-import { InsigniaOrigen } from '../../componentes/ui/insigniaOrigen';
 
-export const SemáforoSalud: React.FC = () => {
+export const SemaforoSalud: React.FC = () => {
   return (
     <div>
       <h2 className="text-lg font-medium text-gray-600 mb-3">Salud del Sistema</h2>
@@ -25,4 +24,4 @@ export const SemáforoSalud: React.FC = () => {
   );
 };
 
-export default SemáforoSalud;
+export default SemaforoSalud;

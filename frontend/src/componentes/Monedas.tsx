@@ -1,4 +1,3 @@
-import React from 'react';
 import { TipoMoneda } from '../dominio';
 
 export const SímboloMoneda = ({ símbolo }: { símbolo: TipoMoneda }) => {

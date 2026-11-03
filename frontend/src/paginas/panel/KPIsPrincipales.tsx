@@ -1,15 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { useModoStore } from '../../estado/storeModo';
+import React from 'react';
 import { BadgeModo } from '../../componentes/ui/badgeModo';
-import { Semaforo } from '../../componentes/ui/semaforo';
 import { InsigniaOrigen } from '../../componentes/ui/insigniaOrigen';
 import { TarjetaKpi } from '../../componentes/ui/tarjetaKpi';
-import { usePaginas } from '../../constantes/paginas';
 
 export const KPIsPrincipales: React.FC = () => {
-  const { modo } = useModoStore();
-  const paginas = usePaginas();
-
   // Datos simulados para KPIs
   const navTotal = 12547.89;
   const pnlTotalDiario = 285.50;

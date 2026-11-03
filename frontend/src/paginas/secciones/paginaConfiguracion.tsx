@@ -4,7 +4,7 @@ const PESTANAS = ['General', 'Trading', 'Riesgo', 'Modelos', 'Autoaprendizaje', 
 
 export const PaginaConfiguracion: React.FC = () => {
   const [tab, setTab] = React.useState(PESTANAS[0]);
-  const [cambios, setCambios] = React.useState(0);
+  const [cambios] = React.useState(0);
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold text-gray-900">Configuración</h1>

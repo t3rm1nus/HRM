@@ -25,9 +25,6 @@ export const PaginaBacktesting: React.FC = () => {
       });
     }, 300);
   };
-  const comparar = seleccion.length === 2
-    ? INFORMES.find((i) => i.id === seleccion[0]) && INFORMES.find((i) => i.id === seleccion[1])
-    : null;
   const a = INFORMES.find((i) => i.id === seleccion[0]);
   const b = INFORMES.find((i) => i.id === seleccion[1]);
   return (

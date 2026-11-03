@@ -1,5 +1,4 @@
 import React from 'react';
-import { TarjetaKpi } from '../ui/tarjetaKpi';
 
 export interface Senal {
   id: string;

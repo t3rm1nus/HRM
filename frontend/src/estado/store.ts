@@ -1,4 +1,3 @@
-import { create } from 'zustand';
 import { TipoOperacion, EstadoOperacion } from '../dominio/tipos';
 
 export interface Usuario {
