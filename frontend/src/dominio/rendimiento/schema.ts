@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 export interface Operacion {
   id: string;
   simbolo: string;

@@ -1,5 +1,13 @@
 import React from 'react';
-import { TipoOperacion, ColorTipo, ColorEstado, TextoEstado } from '../constantes';
+import { TipoOperacion, EstadoOperacion } from '../dominio/tipos';
+import { obtenerColorEstado, obtenerColorTipo } from '../dominio/operaciones';
+
+const ColorTipo = obtenerColorTipo;
+const ColorEstado = (estado: string): string =>
+  Object.values(EstadoOperacion).includes(estado as EstadoOperacion)
+    ? obtenerColorEstado(estado as EstadoOperacion)
+    : 'bg-gray-100 text-gray-800';
+const TextoEstado = (estado: string): string => estado.replace(/_/g, ' ');
 
 export interface Operacion {
   id: string;

@@ -1,4 +1,4 @@
-import type { ModoAplicacion } from '../dominio/modo';
+import { ModoAplicacion } from '../dominio/modo';
 
 /** Constantes de configuración de los modos de operación. */
 

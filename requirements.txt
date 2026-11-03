@@ -1,0 +1,31 @@
+# Dependencias base para API, datos de mercado y ejecución paper.
+# Versiones mínimas; congelar versiones exactas tras validar el entorno objetivo.
+ccxt>=4.4
+loguru>=0.7
+pydantic>=2.7
+dataclasses-json>=0.6
+pandas>=2.2
+numpy>=1.26
+python-dotenv>=1.0
+colorama>=0.4
+aiohttp>=3.9
+requests>=2.31
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0
+
+# Dependencias de ML/RL (instalar por separado según CPU/GPU y compatibilidad):
+# scikit-learn
+# scipy
+# joblib
+# stable-baselines3
+# gymnasium
+# torch
+# transformers
+# finrl
+
+# Fuentes externas opcionales:
+# asyncpraw
+# yfinance
+# fredapi
+# newsapi-python

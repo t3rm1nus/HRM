@@ -1,212 +1,194 @@
-import { Operacion, ParametrosRendimiento, ResultadoBins, ResultadosRendimiento } from './schema';
+import type { Operacion } from './schema';
 
-/** Calcula el equity a partir de operaciones y comisiones */
+const CAPITAL_INICIAL_POR_DEFECTO = 100;
+const FACTOR_ANUALIZACION = Math.sqrt(252);
+
 export function calcularEquity(
   operaciones: Operacion[],
-  comisionPorOperacion: number = 0
+  comisionPorOperacion = 0,
 ): { equityFinal: number; equityInicial: number; comisionTotal: number } {
-  let equity = 100;
+  let equityFinal = CAPITAL_INICIAL_POR_DEFECTO;
   let comisionTotal = 0;
 
-  for (const op of operaciones) {
-    const montoNeto = op.monto - op.comision;
-    equity += montoNeto;
-    comisionTotal += op.comision;
+  for (const operacion of operaciones) {
+    const comision = operacion.comision + comisionPorOperacion;
+    const resultado = operacion.pnl ?? (
+      operacion.tipo === 'egreso' ? -operacion.monto : operacion.monto
+    );
+    equityFinal += resultado - comision;
+    comisionTotal += comision;
   }
 
-  return { equityFinal: equity, equityInicial: 100, comisionTotal };
+  return { equityFinal, equityInicial: CAPITAL_INICIAL_POR_DEFECTO, comisionTotal };
 }
 
-/** Calcula drawdown máximo (pico a valle) */
 export function calcularDrawdownSubmarino(
-  valoresEquity: number[]
+  valoresEquity: number[],
 ): { drawdownMaximo: number; drawdownActual: number; peakIndex: number } {
-  if (valoresEquity.length < 2) {
+  if (valoresEquity.length === 0) {
     return { drawdownMaximo: 0, drawdownActual: 0, peakIndex: 0 };
   }
 
-  let drawdownMaximo = 0;
-  let peak = valoresEquity[0];
+  let pico = valoresEquity[0] ?? 0;
+  let indicePico = 0;
   let peakIndex = 0;
+  let drawdownMaximo = 0;
 
-  for (let i = 1; i < valoresEquity.length; i++) {
-    if (valoresEquity[i] > peak) {
-      peak = valoresEquity[i];
-      peakIndex = i;
+  valoresEquity.forEach((valor, indice) => {
+    if (valor > pico) {
+      pico = valor;
+      indicePico = indice;
     }
-  }
-
-  const peakValue = valoresEquity[peakIndex];
-/** Calcula PnL por ciclo (agrupar cada 10 operaciones) */
-export function calcularPnLCiclo(
-  operaciones: Operacion[]
-): number[] {
-  const pnls: number[] = [];
-  let pnlActual = 0;
-
-  for (let i = 0; i < operaciones.length; i++) {
-    const op = operaciones[i];
-    pnlActual += (op.pnl ?? 0) - op.comision;
-
-    if ((i + 1) % 10 === 0) {
-      pnls.push(pnlActual);
-      pnlActual = 0;
+    const drawdown = pico > 0 ? ((pico - valor) / pico) * 100 : 0;
+    if (drawdown > drawdownMaximo) {
+      drawdownMaximo = drawdown;
+      peakIndex = indicePico;
     }
-  }
+  });
 
-  if (pnlActual !== 0 || pnls.length === 0) {
-    pnls.push(pnlActual);
+  const ultimoValor = valoresEquity[valoresEquity.length - 1] ?? 0;
+  const drawdownActual = pico > 0 ? ((pico - ultimoValor) / pico) * 100 : 0;
+  return { drawdownMaximo, drawdownActual, peakIndex };
+}
+
+export function calcularPnLCiclo(operaciones: Operacion[], tamanoCiclo = 10): number[] {
+  if (tamanoCiclo < 1) throw new Error('El tamaño del ciclo debe ser mayor que cero');
+
+  const resultados: number[] = [];
+  for (let inicio = 0; inicio < operaciones.length; inicio += tamanoCiclo) {
+    const grupo = operaciones.slice(inicio, inicio + tamanoCiclo);
+    resultados.push(
+      grupo.reduce((total, operacion) => total + (operacion.pnl ?? 0) - operacion.comision, 0),
+    );
   }
-/** Calcula histograma de retornos */
+  return resultados;
+}
+
 export function calcularHistogramaRetornos(
   retornos: number[],
-  numBins: number = 20
+  numeroIntervalos = 20,
 ): Map<number, number> {
-  const mapa = new Map<number, number>();
-
-  if (retornos.length === 0) return mapa;
-
-  const min = Math.min(...retornos);
-  const max = Math.max(...retornos);
-  const binSize = (max - min) / numBins;
-
-  for (const r of retornos) {
-    const binIndex = Math.floor((r - min) / binSize);
-    const clave = min + binIndex * binSize;
-    mapa.set(clave, (mapa.get(clave) || 0) + 1);
+  const histograma = new Map<number, number>();
+  if (retornos.length === 0) return histograma;
+  if (!Number.isInteger(numeroIntervalos) || numeroIntervalos < 1) {
+    throw new Error('El número de intervalos debe ser un entero positivo');
   }
 
-  return mapa;
-}
-/** Calcula Sortino ratio móvil */
-/** Calcula rentabilidad por símbolo */
-export function calcularRentabilidadSimbolo(
-  operaciones: Operacion[],
-  simbolo: string
-): number {
-  const simOps = operaciones.filter(op => op.simbolo === simbolo);
-  if (simOps.length === 0) return 0;
+  const minimo = Math.min(...retornos);
+  const maximo = Math.max(...retornos);
+  const amplitud = (maximo - minimo) / numeroIntervalos;
 
-  const { equityFinal } = calcularEquity(simOps);
-  return ((equityFinal - 100) / 100) * 100;
+  for (const retorno of retornos) {
+    const indice = amplitud === 0
+      ? 0
+      : Math.min(numeroIntervalos - 1, Math.floor((retorno - minimo) / amplitud));
+    const inicioIntervalo = amplitud === 0 ? minimo : minimo + indice * amplitud;
+    histograma.set(inicioIntervalo, (histograma.get(inicioIntervalo) ?? 0) + 1);
+  }
+  return histograma;
 }
 
-/** Calcula rentabilidad por régimen */
+function calcularDesviacion(valores: number[]): number {
+  if (valores.length < 2) return 0;
+  const media = valores.reduce((total, valor) => total + valor, 0) / valores.length;
+  const varianza = valores.reduce((total, valor) => total + (valor - media) ** 2, 0) / valores.length;
+  return Math.sqrt(varianza);
+}
+
+export function calcularSharpeMovil(
+  retornos: number[],
+  ventana = 30,
+  tasaLibreRiesgo = 0,
+): number[] {
+  if (ventana < 1) throw new Error('La ventana debe ser mayor que cero');
+  return retornos.map((_, indice) => {
+    if (indice + 1 < ventana) return 0;
+    const muestra = retornos.slice(indice - ventana + 1, indice + 1);
+    const media = muestra.reduce((total, valor) => total + valor, 0) / muestra.length;
+    const desviacion = calcularDesviacion(muestra);
+    return desviacion === 0 ? 0 : ((media - tasaLibreRiesgo) / desviacion) * FACTOR_ANUALIZACION;
+  });
+}
+
+export function calcularSortinoMovil(
+  retornos: number[],
+  ventana = 30,
+  tasaLibreRiesgo = 0,
+): number[] {
+  if (ventana < 1) throw new Error('La ventana debe ser mayor que cero');
+  return retornos.map((_, indice) => {
+    if (indice + 1 < ventana) return 0;
+    const muestra = retornos.slice(indice - ventana + 1, indice + 1);
+    const media = muestra.reduce((total, valor) => total + valor, 0) / muestra.length;
+    const perdidas = muestra.filter((valor) => valor < tasaLibreRiesgo);
+    if (perdidas.length === 0) return 0;
+    const desviacionBajista = Math.sqrt(
+      perdidas.reduce((total, valor) => total + (valor - tasaLibreRiesgo) ** 2, 0) / muestra.length,
+    );
+    return desviacionBajista === 0
+      ? 0
+      : ((media - tasaLibreRiesgo) / desviacionBajista) * FACTOR_ANUALIZACION;
+  });
+}
+
+function calcularRentabilidad(operaciones: Operacion[]): number {
+  if (operaciones.length === 0) return 0;
+  const { equityFinal, equityInicial } = calcularEquity(operaciones);
+  return ((equityFinal / equityInicial) - 1) * 100;
+}
+
+export function calcularRentabilidadSimbolo(operaciones: Operacion[], simbolo: string): number {
+  return calcularRentabilidad(operaciones.filter((operacion) => operacion.simbolo === simbolo));
+}
+
 export function calcularRentabilidadRegimen(
   operaciones: Operacion[],
-  regimen: 'PAPEL' | 'TESTNET' | 'LIVE'
+  regimen: Operacion['regimen'],
 ): number {
-  const simOps = operaciones.filter(op => op.regimen === regimen);
-  if (simOps.length === 0) return 0;
-  const { equityFinal } = calcularEquity(simOps);
-  return ((equityFinal - 100) / 100) * 100;
+  return calcularRentabilidad(operaciones.filter((operacion) => operacion.regimen === regimen));
 }
 
-/** Calcula rentabilidad por modelo (agrupando por clave) */
 export function calcularRentabilidadModelo(
   operaciones: Operacion[],
-  modeloKey: (op: Operacion) => string
+  obtenerModelo: (operacion: Operacion) => string,
 ): Map<string, number> {
-  const mapa = new Map<string, number>();
-
-  for (const op of operaciones) {
-    const clave = modeloKey(op);
-    const existente = mapa.get(clave) ?? 0;
-    const { equityFinal } = calcularEquity([
-      { ...op, monto: op.monto }
-    ]);
-    mapa.set(clave, existente + ((equityFinal - 100) / 100) * 100);
+  const grupos = new Map<string, Operacion[]>();
+  for (const operacion of operaciones) {
+    const modelo = obtenerModelo(operacion);
+    const grupo = grupos.get(modelo) ?? [];
+    grupo.push(operacion);
+    grupos.set(modelo, grupo);
   }
-
-  return mapa;
+  return new Map([...grupos.entries()].map(([modelo, grupo]) => [modelo, calcularRentabilidad(grupo)]));
 }
 
-/** Calcula mapa de calor día-hora */
-export function calcularMapaCalorDiaHora(
-  operaciones: Operacion[],
-  diasSemana: string[] = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
-): number[][] {
-  const mapa = Array.from({ length: 7 }, () => Array(24).fill(0));
-
-  for (const op of operaciones) {
-    const fecha = new Date(op.fecha);
-    const diaIdx = fecha.getDay();
+export function calcularMapaCalorDiaHora(operaciones: Operacion[]): number[][] {
+  const mapa = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
+  for (const operacion of operaciones) {
+    const fecha = new Date(operacion.fecha);
+    if (Number.isNaN(fecha.getTime())) continue;
+    const diaSemana = (fecha.getDay() + 6) % 7;
     const hora = fecha.getHours();
-    mapa[diaIdx][hora] += 1;
+    mapa[diaSemana]![hora] = (mapa[diaSemana]![hora] ?? 0) + 1;
   }
-
   return mapa;
 }
 
-/** Calcula comisiones acumuladas */
-export function calcularComisionesAcumuladas(
-  operaciones: Operacion[]
-): number {
-  return operaciones.reduce((sum, op) => sum + op.comision, 0);
+export function calcularComisionesAcumuladas(operaciones: Operacion[]): number {
+  return operaciones.reduce((total, operacion) => total + operacion.comision, 0);
 }
 
-/** Calcula comparación con buy and hold */
 export function calcularComparacionBuyAndHold(
   operaciones: Operacion[],
   precioInicial: number,
-  precioFinal: number
-): {
-  retornoEstrategia: number;
-  retornoBuyAndHold: number;
-  outperformance: number;
-} {
-  const { equityFinal } = calcularEquity(operaciones);
-  const retornoEstrategia = ((equityFinal - 100) / 100) * 100;
+  precioFinal: number,
+): { retornoEstrategia: number; retornoBuyAndHold: number; outperformance: number } {
+  if (precioInicial <= 0) throw new Error('El precio inicial debe ser mayor que cero');
+  const retornoEstrategia = calcularRentabilidad(operaciones);
   const retornoBuyAndHold = ((precioFinal / precioInicial) - 1) * 100;
-  const outperformance = retornoEstrategia - retornoBuyAndHold;
-
-  return { retornoEstrategia, retornoBuyAndHold, outperformance };
-}
-
-/** Funciones puras exportadas */
-export { calcularEquity, calcularDrawdownSubmarino, calcularPnLCiclo, calcularHistogramaRetornos, calcularSharpeMovil, calcularSortinoMovil, calcularRentabilidadSimbolo, calcularRentabilidadRegimen, calcularRentabilidadModelo, calcularMapaCalorDiaHora, calcularComisionesAcumuladas, calcularComparacionBuyAndHold };
-export function calcularSortinoMovil(
-  retornos: number[],
-  ventana: number = 30,
-  riskFreeRate: number = 0
-): number[] {
-  const sortino: number[] = [];
-
-  for (let i = ventana - 1; i < retornos.length; i++) {
-    const slice = retornos.slice(i - ventana + 1, i + 1);
-    const media = slice.reduce((a, b) => a + b, 0) / ventana;
-
-    // Desviación a la baja (solo retornos negativos)
-    const negativos = slice.filter((r) => r < media);
-    const downsideDeviation =
-      negativos.length > 0
-        ? Math.sqrt(
-            negativos.reduce(
-              (a, b) => a + Math.pow(b - media, 2),
-              0
-            ) / negativos.length
-          )
-        : 0;
-
-    if (downsideDeviation === 0 || isNaN(downsideDeviation)) {
-      sortino.push(0);
-    } else {
-      sortino.push((media - riskFreeRate) / downsideDeviation * Math.sqrt(252));
-    }
-  }
-
-  while (sortino.length < retornos.length) {
-    sortino.unshift(0);
-  }
-
-  return sortino;
-}
-
-  return pnls;
-}
-  const ultimoValor = valoresEquity[valoresEquity.length - 1];
-  const drawdownMaximo = peakValue > 0 ? ((peakValue - Math.min(...valoresEquity)) / peakValue) * 100 : 0;
-  const drawdownActual = peakValue > 0 ? ((peakValue - ultimoValor) / peakValue) * 100 : 0;
-
-  return { drawdownMaximo, drawdownActual, peakIndex };
+  return {
+    retornoEstrategia,
+    retornoBuyAndHold,
+    outperformance: retornoEstrategia - retornoBuyAndHold,
+  };
 }

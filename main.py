@@ -125,7 +125,14 @@ async def main():
         os.environ['PAPER_MODE'] = 'true'
         os.environ['BINANCE_MODE'] = 'paper'
     
-    if binance_mode == 'live' and paper_mode_env == 'false':
+    if binance_mode == 'live' and paper_mode_env == 'false' and os.getenv('HRM_ENABLE_LIVE_TRADING', 'false').lower() != 'true':
+        logger.critical("Trading real bloqueado: falta HRM_ENABLE_LIVE_TRADING=true. Se fuerza paper.")
+        os.environ['PAPER_MODE'] = 'true'
+        os.environ['BINANCE_MODE'] = 'paper'
+        binance_mode = 'paper'
+        paper_mode_env = 'true'
+
+    if (binance_mode == 'live' and paper_mode_env == 'false' and os.getenv('HRM_ENABLE_LIVE_TRADING', 'false').lower() == 'true'):
         # Requiere confirmación explícita — nunca arrancar live sin esto
         logger.critical("🚨 MODO LIVE CON DINERO REAL DETECTADO 🚨")
         logger.critical(f"   Capital en riesgo: {os.getenv('INITIAL_CAPITAL', 'DESCONOCIDO')} USDT")
@@ -151,39 +158,9 @@ async def main():
         # ================================================================
         setup_signal_handlers()
 
-        # ================================================================
-        # STEP 1: SYSTEM CLEANUP - USAR perform_full_cleanup()
-        # ================================================================
-        logger.info("🧹 Running system cleanup...")
-        if CLEANUP_AVAILABLE:
-            try:
-                # Usar perform_full_cleanup que resetea singletons y fuerza paper mode
-                cleanup_result = perform_full_cleanup(mode="paper")
-                
-                if cleanup_result.get("success", False):
-                    logger.info(f"✅ Cleanup completo exitoso")
-                    logger.info(f"   📁 Archivos eliminados: {cleanup_result.get('filesystem', {}).get('deleted_files', 0)}")
-                    logger.info(f"   🧠 Singletons reseteados")
-                    logger.info(f"   🎯 Modo forzado: paper")
-                else:
-                    logger.warning("⚠️ Cleanup completed with warnings")
-            except Exception as cleanup_error:
-                logger.warning(f"⚠️ Cleanup failed: {cleanup_error}")
-                # Still try to force paper mode as fallback
-                try:
-                    force_paper_mode()
-                except:
-                    pass
-        else:
-            logger.info("⚠️ SystemCleanup not available, skipping")
-
-        # Paper trades cleanup
-        try:
-            from storage.paper_trade_logger import get_paper_logger
-            get_paper_logger(clear_on_init=True)
-            logger.info("✅ Paper trades cleared")
-        except Exception as e:
-            logger.warning(f"⚠️ Paper trades cleanup failed: {e}")
+        # No ejecutar limpiezas destructivas al arrancar: los historiales y
+        # estados persistentes deben sobrevivir a reinicios normales.
+        logger.info("Se conserva el estado persistente; limpieza manual bajo demanda.")
 
         logger.info("🚀 Starting HRM system")
 
@@ -1452,7 +1429,9 @@ async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, m
 
 
 # 🚀 INTEGRACIÓN FastAPI - BEGIN
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from api.servicios.servicio_websockets import servicio_websockets
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -1465,12 +1444,24 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv(
+        "HRM_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173",
+    ).split(","),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+)
+
 
 # Modelos de respuesta con type hints
 class StatusResponse(BaseModel):
     status: str = Field(default="pending", description="Estado del sistema")
     trading_active: bool = Field(default=False, description="Modo trading activo")
     cycle_count: int = Field(default=0, description="Contador de ciclos")
+    uptime: str = Field(default="no disponible", description="Tiempo de actividad")
 
 
 class PortfolioResponse(BaseModel):
@@ -1478,13 +1469,30 @@ class PortfolioResponse(BaseModel):
     eth_balance: float = Field(default=0.0, description="Balance ETH")
     usdt_balance: float = Field(default=0.0, description="Balance USDT")
     total_nav: float = Field(default=0.0, description="NAV total")
-    initial_capital: float = Field(default=500.0, description="Capital inicial")
+    initial_capital: float = Field(default=0.0, description="Capital inicial")
 
 
 class HealthCheckResponse(BaseModel):
     status: str = Field(default="ok", description="Estado salud")
     timestamp: str = Field(default="", description="Marca de tiempo")
     version: str = Field(default="2.0.0", description="Versión API")
+
+
+@app.websocket("/ws")
+async def websocket_eventos(websocket: WebSocket) -> None:
+    """Mantiene la conexión abierta para los eventos del sistema."""
+    conectado = await servicio_websockets.conectar(websocket)
+    if not conectado:
+        return
+    try:
+        while True:
+            # El cliente puede enviar mensajes de control/heartbeat.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await servicio_websockets.desconectar(websocket)
+    except Exception:
+        await servicio_websockets.desconectar(websocket)
+        await websocket.close(code=1011)
 
 
 # Endpoint health check
@@ -1512,8 +1520,8 @@ async def health_check() -> HealthCheckResponse:
 )
 async def get_status() -> StatusResponse:
     return StatusResponse(
-        status="running" if True else "paused",
-        trading_active=True,
+        status="paused",
+        trading_active=False,
         cycle_count=0,
         uptime="sistema activo",
     )
@@ -1532,7 +1540,7 @@ async def get_portfolio() -> PortfolioResponse:
         eth_balance=0.0,
         usdt_balance=0.0,
         total_nav=0.0,
-        initial_capital=500.0,
+        initial_capital=float(os.getenv("INITIAL_CAPITAL", "0")),
     )
 
 
@@ -1543,7 +1551,12 @@ async def get_portfolio() -> PortfolioResponse:
     description="Obtiene la versión actual del sistema",
 )
 async def get_version() -> dict:
-    return {"app_version": "2.0.0", "framework": "FastAPI"}
+    import platform
+    return {
+        "app_version": "2.0.0",
+        "framework": "FastAPI",
+        "python_version": platform.python_version(),
+    }
 
 
 def run_fastapi(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:

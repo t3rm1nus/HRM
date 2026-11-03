@@ -329,6 +329,8 @@ class TestTrendFollowing:
                 print(f"✅ Successfully generated {len(signals)} signals for backtester integration")
 
             asyncio.run(test_async())
+        except Exception as error:
+            pytest.fail(f"Backtester integration failed: {error}")
 
     def test_range_regime_fallback_to_l2(self, processor, sample_market_data, state_template):
         """Test that range regime falls back to L2 technical signals instead of HOLD absolute"""
@@ -380,8 +382,6 @@ class TestTrendFollowing:
 
         asyncio.run(test_async())
 
-        except Exception as e:
-            pytest.fail(f"Range regime fallback test failed: {e}")
 
     def test_dummy_method_to_fix_syntax(self):
         """Dummy method to fix syntax issues temporarily"""

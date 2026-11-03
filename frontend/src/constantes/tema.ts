@@ -1,3 +1,4 @@
+import * as React from 'react';
 export const Tema = {
   claro: {
     FONDO: '#f8f9fa',

@@ -1416,9 +1416,18 @@ def create_heatmap_figure(
         aggfunc='mean'
     )
     
-    fig = go.Figure(data=go.Heatmap(
-        z=pivot_df.values,
-        x=[f'{x:.2f}' for x in pivot_df.columns],
-        y=[f'{y:.2f}' for y in pivot_df.index],
-        colorscale=colorscale,
-        colorbar=dict(title=z_col.replace('_', ' ').title()),
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=pivot_df.values,
+            x=[f"{valor:.2f}" for valor in pivot_df.columns],
+            y=[f"{valor:.2f}" for valor in pivot_df.index],
+            colorscale=colorscale,
+            colorbar=dict(title=z_col.replace("_", " ").title()),
+        )
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+    )
+    return fig

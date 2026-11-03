@@ -18,7 +18,7 @@ const LoginPage: React.FC = () => {
     try {
       const api = await import('../api/usuarios');
       await api.fetchHealth();
-      navigate(RUTAS.DASHBOARD);
+      navigate(RUTAS.INICIO);
     } catch (err) {
       setError('Credenciales incorrectas. Intente con admin@hrm.local / admin123');
     } finally {

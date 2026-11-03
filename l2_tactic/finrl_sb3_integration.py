@@ -1,4 +1,4 @@
-# finrl_sb3_integration.py - Integración para FinRL SB3
+# finrl_sb3_integration.py - IntegraciÃ³n para FinRL SB3
 from fix_finrl_sb3 import RobustFinRLSB3
 
 def create_finrl_predictor():

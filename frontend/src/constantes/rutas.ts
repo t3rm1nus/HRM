@@ -56,4 +56,5 @@ export const mapeoComponentes: Record<RutaKey, string> = {
   FISCAL: 'PaginaFiscal',
   SALUD: 'PaginaSalud',
   SISTEMA: 'PaginaSistema',
+  ERROR_404: 'NotFoundPage',
 }

@@ -1,3 +1,4 @@
+import * as React from 'react';
 export type BadgeModoProps = {
   modo: 'paper' | 'testnet' | 'live';
   conectado?: boolean;
@@ -55,7 +56,7 @@ export const BadgeModo: React.FC<BadgeModoProps> = ({
         <div
           className="fixed top-0 left-0 right-0 z-50 bg-red-600 text-white py-2 px-4 shadow-xl text-center invisible opacity-0 transition-opacity duration-300"
           aria-live="polite"
-          style={{ visibility: mostrarBanner ? 'visible' : 'hidden' }>
+          style={{ visibility: mostrarBanner ? 'visible' : 'hidden' }}>
             CONEXIÓN EN VIVO • Ciclo: {ciclo ?? 0} • NAV: {nav ?? 0} • Latencia: {latencia ? latencia + 'ms' : 'Desconocida'}
           </div>
         )

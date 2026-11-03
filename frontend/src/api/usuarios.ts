@@ -1,4 +1,4 @@
-import { obtenerApiClient, validarRespuesta } from './clienteApi';
+import { obtenerApiClient } from './clienteApi';
 import {
   esquemaHealthCheck,
   esquemaStatus,
@@ -10,26 +10,26 @@ export const obtenerApi = () => obtenerApiClient();
 
 export const fetchHealth = async (): Promise<HealthCheckRespuesta> => {
   const cliente = obtenerApi();
-  const respuesta = await cliente.get<HealthCheckRespuesta>('/health');
-  return validarRespuesta(respuesta, esquemaHealthCheck).data;
+  const respuesta = await cliente.get<HealthCheckRespuesta>('/health', esquemaHealthCheck);
+  return respuesta.data;
 };
 
 export const fetchStatus = async (): Promise<StatusRespuesta> => {
   const cliente = obtenerApi();
-  const respuesta = await cliente.get<StatusRespuesta>('/status');
-  return validarRespuesta(respuesta, esquemaStatus).data;
+  const respuesta = await cliente.get<StatusRespuesta>('/status', esquemaStatus);
+  return respuesta.data;
 };
 
 export const fetchPortfolio = async (): Promise<PortfolioRespuesta> => {
   const cliente = obtenerApi();
-  const respuesta = await cliente.get<PortfolioRespuesta>('/portfolio');
-  return validarRespuesta(respuesta, esquemaPortfolio).data;
+  const respuesta = await cliente.get<PortfolioRespuesta>('/portfolio', esquemaPortfolio);
+  return respuesta.data;
 };
 
 export const fetchVersion = async (): Promise<VersionRespuesta> => {
   const cliente = obtenerApi();
-  const respuesta = await cliente.get<VersionRespuesta>('/version');
-  return validarRespuesta(respuesta, esquemaVersion).data;
+  const respuesta = await cliente.get<VersionRespuesta>('/version', esquemaVersion);
+  return respuesta.data;
 };
 
 export interface HealthCheckRespuesta {

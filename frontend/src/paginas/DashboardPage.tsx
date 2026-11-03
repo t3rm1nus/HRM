@@ -18,10 +18,10 @@ const DashboardPage: React.FC = () => {
                 Esta sección mostrará las métricas principales del sistema. Los datos se cargarán desde la API del backend.
               </p>
               <div className="mt-6 flex flex-wrap gap-4">
-                <BotónPrimario tipo="secundario" children={<Link to={RUTAS.DASHBOARD}>Explorar</Link>} />
+                <BotónPrimario tipo="secundario" children={<Link to={RUTAS.INICIO}>Explorar</Link>} />
                 <BotónPrimario
                   tipo="success"
-                  onClick={() => navigate(RUTAS.DASHBOARD)}
+                  onClick={() => navigate(RUTAS.INICIO)}
                   children="Actualizar"
                 />
                 <BotónPrimario

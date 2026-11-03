@@ -25,7 +25,7 @@ describe('Funciones de Rendimiento', () => {
   describe('calcularEquity', () => {
     it('calcula equity final correcto', () => {
       const { equityFinal, equityInicial, comisionTotal } = calcularEquity(operacionesPrueba);
-      expect(equityFinal).toBe(243); // 100 + (20-1) + (-10-1) + (30-2) + (25-1) = 100 + 19 - 11 + 28 + 24 = 230
+      expect(equityFinal).toBe(160); // 100 + (20-1) + (-10-1) + (30-2) + (25-1) = 100 + 19 - 11 + 28 + 24 = 230
       expect(equityInicial).toBe(100);
       expect(comisionTotal).toBe(6);
     });

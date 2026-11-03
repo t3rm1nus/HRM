@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EstadoOperacion } from '../tipos';
 
 export interface DatosCandle {
   timestamp: string;
@@ -57,7 +58,7 @@ export interface DatosTemporalRegimenes {
 }
 
 /** Calcula el drawdown submarino máximo (pico a valle) */
-export const calcularDrawdownSubmarino = (precios: number[]): {
+export const calcularDrawdownSubmarino = (precios: readonly number[]): {
   maxDrawdown: number;
   precioAlto: number;
   precioBajo: number;
@@ -69,20 +70,21 @@ export const calcularDrawdownSubmarino = (precios: number[]): {
   }
 
   let maxDrawdown = 0;
-  let precioAlto = precios[0];
-  let precioBajo = precios[0];
+  let precioAlto = precios[0] ?? 0;
+  let precioBajo = precios[0] ?? 0;
   let indiceAlto = 0;
   let indiceBajo = 0;
 
   for (let i = 1; i < precios.length; i++) {
-    if (precios[i] > precioAlto) {
-      precioAlto = precios[i];
+    const precio = precios[i] ?? precioAlto;
+    if (precio > precioAlto) {
+      precioAlto = precio;
       indiceAlto = i;
     } else {
-      const drawdown = ((precioAlto - precios[i]) / precioAlto) * 100;
+      const drawdown = ((precioAlto - precio) / precioAlto) * 100;
       if (drawdown > maxDrawdown) {
         maxDrawdown = drawdown;
-        precioBajo = precios[i];
+        precioBajo = precio;
         indiceBajo = i;
       }
     }
@@ -92,7 +94,7 @@ export const calcularDrawdownSubmarino = (precios: number[]): {
 };
 
 /** Calcula la tasa de éxito (operaciones completadas / total) */
-export const calcularTasaExito = (estados: EstadoOperacion[]): number => {
+export const calcularTasaExito = (estados: readonly EstadoOperacion[]): number => {
   const total = estados.length;
   if (total === 0) return 0;
   const completadas = estados.filter(
@@ -139,4 +141,3 @@ export const obtenerColorTendencia = (actual: number, anterior: number): string 
   actual > anterior ? 'bg-green-500' : actual < anterior ? 'bg-red-500' : 'bg-gray-500';
 
 /** Función pura sin efectos secundarios - exportada para tests */
-export { calcularDrawdownSubmarino, calcularTasaExito, validarDatosVela, calcularMediaMovil, formatearPrecio, obtenerColorTendencia };

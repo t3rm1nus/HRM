@@ -7,7 +7,7 @@ print('🎯 TESTING STAGGERED PROFIT-TAKING IMPLEMENTATION')
 print('=' * 60)
 
 try:
-from l2_tactic.tactical_signal_processor import L2TacticProcessor
+    from l2_tactic.tactical_signal_processor import L2TacticProcessor
 
     # Create a temporary processor instance
     processor = L2TacticProcessor.__new__(L2TacticProcessor)

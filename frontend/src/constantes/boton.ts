@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 export const BOTON_PRIMARIO = 'Primary';
 export const BOTON_SECUNDARIO = 'Secondary';
@@ -32,6 +32,6 @@ export interface BotonProps {
   cargando?: boolean;
   disabled?: boolean;
   className?: string;
-  tipoRef?: React.Ref<HTMLButtonElement>;
+  tipoRef?: Ref<HTMLButtonElement>;
   icono?: ReactNode;
 }

@@ -3,8 +3,6 @@ import {
   TipoOperacion,
   EstadoOperacion,
   Rol,
-  TipoMoneda,
-  TipoFecha,
 } from './tipos';
 
 export const escalarString = z
@@ -23,7 +21,7 @@ export const escalarArray = <T>(escalar: z.ZodType<T>) =>
   z.array(escalar).max(1000, 'El array no puede exceder 1000 elementos');
 
 export const escalarOpcion = <T extends string>(opciones: T[]) =>
-  z.enum(opciones as [string, ...string[]], `Debe ser uno de: ${opciones.join(', ')}`);
+  z.enum(opciones as unknown as [string, ...string[]], `Debe ser uno de: ${opciones.join(', ')}`);
 
 export const validarCorreo = z.string().email('Debe ser un correo válido');
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { Header, BotónPrimario } from '../componentes';
-import { RUTAS, COLORES } from '../constantes';
+import { RUTAS } from '../constantes';
 
 const AppLayout: React.FC = () => {
   return (
@@ -11,14 +11,14 @@ const AppLayout: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex space-x-4">
             <NavLink
-              to={RUTAS.DASHBOARD}
+              to={RUTAS.INICIO}
               className={({ isActive }) => `px-3 py-2 rounded-md text-sm font-medium ${isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`
               }
             >
               Inicio
             </NavLink>
             <NavLink
-              to={RUTAS.DASHBOARD}
+              to={RUTAS.INICIO}
               className={({ isActive }) => `px-3 py-2 rounded-md text-sm font-medium ${isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`
               }
             >

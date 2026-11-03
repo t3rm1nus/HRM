@@ -611,7 +611,11 @@ async def main_l3_tests():
             print(f"  {'✓' if f_exists else '✗'} {f}")
 
         all_files_exist = all(s['exists'] for s in models_status.values())
-        print("✅ Test 1 PASSED: File Verification"         success_count += 1
+        if all_files_exist:
+            success_count += 1
+            print("✅ Test 1 PASSED: File Verification")
+        else:
+            print("⚠️ Test 1 INCOMPLETE: faltan artefactos de modelos")
     except Exception as e:
         print(f"❌ Test 1 ERROR: {e}")
 

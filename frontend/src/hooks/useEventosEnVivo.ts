@@ -1,5 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { TIEMPO_REFRESCO_POR_DEFECTO } from './tiempos';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface EventoEnVivo {
   tipo: string;
@@ -12,155 +11,138 @@ export interface WebSocketConfig {
   heartbeatInterval?: number;
   maxReconnects?: number;
   onConnect?: () => void;
-  onDisconnect?: (reason: string) => void;
+  onDisconnect?: (motivo: string) => void;
   onEvent?: (evento: EventoEnVivo) => void;
   onReconnect?: (intentos: number) => void;
-  validateEvent?: (data: unknown) => boolean;
+  validateEvent?: (datos: unknown) => boolean;
 }
 
-const obtenerURLWS = (): string => {
-  if (import.meta.env.VITE_USAR_MOCKS === 'true') {
-    return 'ws://localhost:3001';
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.hostname}:8000/ws`;
+type EstadoConexion = 'conectando' | 'conectado' | 'desconectado';
+
+export const obtenerURLWS = (): string => {
+  if (import.meta.env.VITE_USAR_MOCKS === 'true') return 'ws://localhost:3001';
+  const protocolo = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocolo}//${window.location.hostname}:8000/ws`;
 };
 
-const calcularDelayReconexion = (intentos: number, base: number, maximo: number): number => {
-  const delay = base * 2 ** intentos;
-  return Math.min(delay, maximo);
-};
+const calcularEsperaReconexion = (intento: number, base: number, maximo: number): number =>
+  Math.min(base * 2 ** Math.max(0, intento - 1), maximo);
 
-export const usarEventosEnVivo = (config: WebSocketConfig) => {
-  const [estado, setEstado] = useState<'conectando' | 'conectado' | 'desconectado'>('desconectado');
+export const usarEventosEnVivo = (configuracion: WebSocketConfig) => {
+  const [estado, setEstado] = useState<EstadoConexion>('desconectado');
   const [intentosReconexion, setIntentosReconexion] = useState(0);
+  const [versionConexion, setVersionConexion] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
-  const intentosRef = useRef(0);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const configuracionRef = useRef(configuracion);
+  configuracionRef.current = configuracion;
 
-  const cerrarConexion = useCallback(() => {
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
-    }
-    setEstado('desconectado');
-    config.onDisconnect?.(intentosRef.current > 0 ? 'Reconexión' : 'Desconexión');
-  }, [config]);
+  useEffect(() => {
+    let desmontado = false;
+    let temporizador: ReturnType<typeof setTimeout> | null = null;
+    let socket: WebSocket | null = null;
+    let intentos = 0;
 
-  const conectar = useCallback(() => {
-    const url = config.url;
-    try {
-      const socket = new WebSocket(url);
-      socketRef.current = socket;
+    const conectar = (): void => {
+      if (desmontado) return;
+      setEstado('conectando');
 
-      socket.onopen = () => {
-        intentosRef.current = 0;
-        setIntentosReconexion(0);
-        setEstado('conectado');
-        config.onConnect?.();
-      };
+      try {
+        socket = new WebSocket(configuracion.url);
+        socketRef.current = socket;
 
-      socket.onmessage = (evento) => {
-        try {
-          const datos = JSON.parse(evento.data);
-          if (config.validateEvent?.(datos)) {
-            config.onEvent?.({
-              tipo: datos.tipo ?? 'generico',
-              datos: datos.datos ?? datos,
+        socket.onopen = () => {
+          if (desmontado) return socket?.close();
+          intentos = 0;
+          setIntentosReconexion(0);
+          setEstado('conectado');
+          configuracionRef.current.onConnect?.();
+        };
+
+        socket.onmessage = (mensaje) => {
+          try {
+            const datos: unknown = JSON.parse(String(mensaje.data));
+            if (configuracionRef.current.validateEvent &&
+                !configuracionRef.current.validateEvent(datos)) return;
+
+            const evento = typeof datos === 'object' && datos !== null
+              ? datos as Record<string, unknown>
+              : {};
+            configuracionRef.current.onEvent?.({
+              tipo: typeof evento.tipo === 'string' ? evento.tipo : 'generico',
+              datos: evento.datos ?? datos,
               timestamp: new Date().toISOString(),
             });
+          } catch {
+            configuracionRef.current.onDisconnect?.('Se recibió un mensaje WebSocket no válido');
           }
-        } catch (error) {
-          console.error('Error al parsear evento:', error);
-        }
-      };
+        };
 
-      socket.onclose = () => {
-        socketRef.current = null;
-        if (estadoRef.current === 'conectado') {
-          setEstado('conectando');
-          intentosRef.current += 1;
-          config.onReconnect?.(intentosRef.current);
-          if (intentosRef.current <= config.maxReconnects ?? 5) {
-            const delay = calcularDelayReconexion(
-              intentosRef.current,
-              config.heartbeatInterval ?? 1000,
-              config.heartbeatInterval ?? 30000
-            );
-            reconnectTimeoutRef.current = setTimeout(conectar, delay);
-          } else {
+        socket.onerror = () => {
+          if (socket?.readyState === WebSocket.CONNECTING) socket.close();
+        };
+
+        socket.onclose = () => {
+          if (socketRef.current === socket) socketRef.current = null;
+          if (desmontado) return;
+
+          const maximo = configuracionRef.current.maxReconnects ?? 5;
+          if (intentos >= maximo) {
             setEstado('desconectado');
-            config.onDisconnect?.('Máximo de reintentos alcanzado');
+            configuracionRef.current.onDisconnect?.('Máximo de reconexiones alcanzado');
+            return;
           }
-        }
-      };
 
-      socket.onerror = () => {
-        if (socket.readyState === WebSocket.CONNECTING) {
-          socket.close();
-        }
-      };
-    } catch (error) {
-      console.error('Error al conectar WebSocket:', error);
-      setEstado('desconectado');
-      config.onDisconnect?.(error instanceof Error ? error.message : 'Error de conexión');
-    }
-  }, [config]);
+          intentos += 1;
+          setIntentosReconexion(intentos);
+          setEstado('conectando');
+          configuracionRef.current.onReconnect?.(intentos);
 
-  const estadoRef = useRef(estado);
-  useEffect(() => {
-    estadoRef.current = estado;
-  });
+          const esperaBase = configuracionRef.current.heartbeatInterval ?? 1000;
+          temporizador = setTimeout(
+            conectar,
+            calcularEsperaReconexion(intentos, esperaBase, 30_000),
+          );
+        };
+      } catch (error) {
+        setEstado('desconectado');
+        configuracionRef.current.onDisconnect?.(
+          error instanceof Error ? error.message : 'No se pudo abrir WebSocket',
+        );
+      }
+    };
 
-  useEffect(() => {
     conectar();
     return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      cerrarConexion();
+      desmontado = true;
+      if (temporizador) clearTimeout(temporizador);
+      socket?.close(1000, 'Componente desmontado');
+      socketRef.current = null;
     };
-  }, [conectar, cerrarConexion, estado]);
+  }, [configuracion.url, configuracion.maxReconnects, configuracion.heartbeatInterval, versionConexion]);
 
-  const enviar = useCallback(
-    (datos: unknown) => {
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify(datos));
-      } else {
-        const mensaje = { tipo: 'modo_sincrono', datos };
-        config.onEvent?.({
-          tipo: 'modo_sincrono',
-          datos: mensaje,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    },
-    [config]
-  );
+  const enviar = useCallback((datos: unknown): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(datos));
+    return true;
+  }, []);
 
   const forzarReconexion = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
-    cerrarConexion();
-    conectar();
-  }, [conectar, cerrarConexion]);
+    socketRef.current?.close(4000, 'Reconexión solicitada');
+    setVersionConexion((version) => version + 1);
+  }, []);
+
+  const cerrarConexion = useCallback(() => {
+    socketRef.current?.close(1000, 'Cierre solicitado');
+    socketRef.current = null;
+    setEstado('desconectado');
+  }, []);
 
   return {
     estado,
     enviar,
     forzarReconexion,
-    intentosReconexion: intentosRef.current,
+    intentosReconexion,
     onDisconnect: cerrarConexion,
   };
-};
-
-export const obtenerURLWS = (): string => {
-  const storage = localStorage;
-  const usarMocks = storage.getItem('VITE_USAR_MOCKS') === 'true';
-  if (usarMocks) {
-    return 'ws://localhost:3001';
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.hostname}:8000/ws`;
 };

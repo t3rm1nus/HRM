@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { RUTAS, COLORES } from '../constantes';
+import { RUTAS } from '../constantes';
 
 interface HeaderProps {
   titulo: string;
@@ -13,7 +13,7 @@ export const Header: React.FC<HeaderProps> = ({ titulo, subtitulo }) => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center space-x-4">
-            <Link to={RUTAS.DASHBOARD} className="flex items-center space-x-2">
+            <Link to={RUTAS.INICIO} className="flex items-center space-x-2">
               <span className="text-2xl font-bold text-gray-800">HRM</span>
               <span className="text-sm text-gray-500">Trading</span>
             </Link>
@@ -45,7 +45,7 @@ export const BotónPrimario: React.FC<{
   tipo?: 'primary' | 'secundario' | 'success' | 'warning' | 'error';
   onClick?: () => void;
 }> = ({ children, tipo = 'primary', onClick }) => {
-  const estilos = {
+  const estilos: Record<'primary' | 'secundario' | 'success' | 'warning' | 'error', string> = {
     primary: `bg-blue-600 text-white hover:bg-blue-700`,
     secundario: `bg-gray-200 text-gray-800 hover:bg-gray-300`,
     success: `bg-green-600 text-white hover:bg-green-700`,

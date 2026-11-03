@@ -26,11 +26,12 @@ export interface PaginaConfig {
 
 export const PAGINAS: PaginaConfig[] = [
   { ruta: '/', nombre: 'Panel', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },
+  { ruta: '/mercado', nombre: 'Mercado', icono: '📈', seccion: 'principal' },
   { ruta: '/operaciones', nombre: 'Operaciones', icono: ICONO_PAGINAS.OPERACIONES, seccion: 'operaciones' },
   { ruta: '/cartera', nombre: 'Cartera', icono: ICONO_PAGINAS.PORTAFOLIO, seccion: 'principal' },
   { ruta: '/rendimiento', nombre: 'Rendimiento', icono: ICONO_PAGINAS.REPORTES, seccion: 'informes' },
   { ruta: '/configuracion', nombre: 'Configuración', icono: ICONO_PAGINAS.CONFIG, seccion: 'configuracion' },
-  { ruta: '/señales', nombre: 'Senales', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },
+  { ruta: '/senales', nombre: 'Senales', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },
   { ruta: '/estrategia', nombre: 'Estrategia', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },
   { ruta: '/riesgo', nombre: 'Riesgo', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },
   { ruta: '/autoaprendizaje', nombre: 'Autoaprendizaje', icono: ICONO_PAGINAS.HOME, seccion: 'principal' },

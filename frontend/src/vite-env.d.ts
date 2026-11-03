@@ -1,9 +1,8 @@
-/// <reference types="vite/client" />
-
-declare module '*.vue' {
-  const component: import('vue').DefineComponent;
-  export default component;
+interface ImportMetaEnv {
+  readonly VITE_API_BASE_URL?: string;
+  readonly VITE_USAR_MOCKS?: string;
 }
 
-declare module 'lightweight-charts';
-declare module 'msw';
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}

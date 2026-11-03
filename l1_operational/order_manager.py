@@ -1,4 +1,4 @@
-﻿from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List
 import pandas as pd
 from datetime import datetime
 import time
