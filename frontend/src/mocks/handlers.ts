@@ -7,6 +7,7 @@ import {
   getTradesSinteticas,
   getTradesMock,
 } from './fixtures';
+import { crearLoteOrdenesMock, leerParametrosOrdenes } from './ordenesMock';
 
 // Estado mutable para simular cambios de modo
 let estadoModoActual: 'papel' | 'testnet' | 'live' = 'papel';
@@ -49,6 +50,11 @@ export const handlers = [
 
   http.get('http://localhost:8000/version', () => {
     return HttpResponse.json(VERSION_RESPUESTA, { status: 200 });
+  }),
+
+  http.get('http://localhost:8000/operaciones', ({ request }) => {
+    const parametros = leerParametrosOrdenes(new URL(request.url));
+    return HttpResponse.json(crearLoteOrdenesMock(parametros), { status: 200 });
   }),
 
   http.get('http://localhost:8000/api/trades', () => {
