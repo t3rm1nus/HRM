@@ -60,3 +60,11 @@ class LoteOperaciones(BaseModel):
     has_more: bool = False
     pagina: int = 1
     pagina_total: int = 1
+
+class LoteOrdenes(BaseModel):
+    """Lote paginado de órdenes ejecutadas (OrderRecord)."""
+    total: int
+    ordenes: List[OrderRecord]
+    has_more: bool = False
+    pagina: int = 1
+    pagina_total: int = 1

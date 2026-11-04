@@ -1439,6 +1439,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from api.servicios.servicio_websockets import servicio_websockets
 from api.servicios.servicio_estado_vivo import servicio_estado_vivo
+from api.rutas.rutas_operaciones import router_operaciones
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -1461,6 +1462,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+
+
+app.include_router(router_operaciones)
 
 
 # Modelos de respuesta con type hints
