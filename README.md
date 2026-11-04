@@ -554,7 +554,8 @@ No sería correcto afirmar que “las nueve IAs” o todos los modelos de provee
 
 ```text
 HRM-master/
-├── main.py                      # Punto de entrada principal
+├── main.py                      # Punto de entrada principal del backend
+├── frontend/                    # Aplicación web (React + TypeScript + Vite, versión corregida)
 ├── bootstrap.py                 # Inicialización y apagado
 ├── runtime_loop.py              # Bucle de ejecución alternativo
 ├── execution_gateway.py         # Gateway de ejecución y riesgo
@@ -599,3 +600,52 @@ Los documentos internos pueden describir objetivos, estados anteriores o funcion
 ---
 
 **Aviso de riesgo:** HRM es software experimental de trading. Las criptomonedas son volátiles y se puede perder todo el capital invertido. No utilices este repositorio con fondos reales sin una auditoría técnica y financiera independiente.
+
+
+## 14. Interfaz web y control de arranque en Windows
+
+La versión corregida del proyecto incorpora una interfaz web en la carpeta de frontend, basada en React, TypeScript y Vite. El backend Python conserva `main.py` como punto de entrada.
+
+> **Nota sobre nombres de carpeta:** los scripts de Windows buscan automáticamente una carpeta llamada `frontend`, `front end` o `front-end` en la raíz del repositorio. La carpeta válida debe contener `package.json`.
+
+### 14.1. Requisitos
+
+- Windows 10/11.
+- Python instalado y dependencias del backend preparadas.
+- Node.js y npm instalados.
+- Dependencias del frontend instaladas previamente desde su carpeta (`npm install`).
+
+Los scripts de control no instalan paquetes, no crean ni reinician entornos virtuales y no modifican configuraciones.
+
+### 14.2. Archivos de control
+
+Copia estos cuatro archivos en la raíz del repositorio, junto a `main.py`:
+
+- `HRM_INICIAR.bat`: inicia backend y frontend en dos ventanas de consola independientes.
+- `HRM_DETENER.bat`: detiene únicamente los procesos que haya iniciado el controlador de HRM.
+- `HRM_REINICIAR.bat`: ejecuta la parada y después vuelve a iniciar ambos servicios.
+- `hrm_control.ps1`: implementación común utilizada por los tres archivos `.bat`.
+
+El backend se inicia con `python main.py`. El frontend se inicia mediante el script `dev` declarado en el `package.json` (habitualmente `npm run dev`, propio de Vite). Si no existe el script `dev`, el controlador prueba `start`.
+
+### 14.3. Uso
+
+Haz doble clic en el archivo correspondiente o ejecútalo desde una terminal:
+
+```bat
+HRM_INICIAR.bat
+HRM_DETENER.bat
+HRM_REINICIAR.bat
+```
+
+El controlador guarda los PID de las ventanas que abre en `.hrm_runtime/`. La parada utiliza esos PID y termina sus procesos descendientes; no busca ni mata indiscriminadamente todos los procesos Python o Node del equipo.
+
+Si una ventana se cierra manualmente, su PID puede dejar de estar activo. En ese caso, vuelve a ejecutar `HRM_INICIAR.bat`.
+
+### 14.4. Comprobaciones y límites
+
+- El arranque comprueba que `main.py`, la carpeta del frontend, `package.json`, Python, Node.js y npm estén disponibles.
+- El controlador no borra `initial_state.json`, historiales, operaciones, modelos, logs ni otros datos persistentes.
+- El controlador no cambia `PAPER_MODE`, `BINANCE_MODE` ni las claves de API. Mantén HRM en paper mientras no se haya validado de forma independiente.
+- Los scripts abren los servicios, pero no certifican que el backend complete su inicialización ni que el frontend compile correctamente. Comprueba los mensajes de ambas ventanas y los tests del proyecto.
+- La URL local concreta del frontend depende de la configuración de Vite. Normalmente Vite muestra la dirección en la propia consola.
