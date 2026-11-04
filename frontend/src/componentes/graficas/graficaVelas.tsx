@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { CandlestickSeries, ColorType, createChart, HistogramSeries, type UTCTimestamp } from 'lightweight-charts';
+import { CandlestickSeries, ColorType, createChart, HistogramSeries, TickMarkType, type Time, type UTCTimestamp } from 'lightweight-charts';
+import { ZONA_LOCAL, formatearFechaHora, formatearMarcaEje, type PreferenciaZona, type TipoMarca } from '../../dominio/zonaHoraria';
 
 export interface GraficaVelasProps {
   simbolo: string;
@@ -10,7 +11,18 @@ export interface GraficaVelasProps {
   showVolume?: boolean;
   crosshairSource?: string;
   onPriceChange?: (price: number, timestamp: string) => void;
+  zonaHoraria?: PreferenciaZona;
 }
+
+const TIPO_MARCA: Record<TickMarkType, TipoMarca> = {
+  [TickMarkType.Year]: 'anio',
+  [TickMarkType.Month]: 'mes',
+  [TickMarkType.DayOfMonth]: 'dia',
+  [TickMarkType.Time]: 'hora',
+  [TickMarkType.TimeWithSeconds]: 'hora',
+};
+
+const segundosDe = (tiempo: Time): number => (typeof tiempo === 'number' ? tiempo : 0);
 
 function convertirTiempo(timestamp: string): UTCTimestamp {
   const milisegundos = new Date(timestamp).getTime();
@@ -18,7 +30,7 @@ function convertirTiempo(timestamp: string): UTCTimestamp {
   return Math.floor(milisegundos / 1000) as UTCTimestamp;
 }
 
-export const GraficaVelas = ({ simbolo, candles, width, height = 400, theme = 'dark', showVolume = true, onPriceChange }: GraficaVelasProps) => {
+export const GraficaVelas = ({ simbolo, candles, width, height = 400, theme = 'dark', showVolume = true, onPriceChange, zonaHoraria = ZONA_LOCAL }: GraficaVelasProps) => {
   const contenedorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -38,7 +50,12 @@ export const GraficaVelas = ({ simbolo, candles, width, height = 400, theme = 'd
         horzLines: { color: oscuro ? '#374151' : '#E5E7EB' },
       },
       rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+      localization: { timeFormatter: (tiempo: Time) => formatearFechaHora(segundosDe(tiempo), zonaHoraria) },
+      timeScale: {
+        borderVisible: false, timeVisible: true, secondsVisible: false,
+        tickMarkFormatter: (tiempo: Time, tipo: TickMarkType) =>
+          formatearMarcaEje(segundosDe(tiempo), TIPO_MARCA[tipo], zonaHoraria),
+      },
     });
 
     const velas = grafica.addSeries(CandlestickSeries, {
@@ -81,7 +98,7 @@ export const GraficaVelas = ({ simbolo, candles, width, height = 400, theme = 'd
       observador.disconnect();
       grafica.remove();
     };
-  }, [candles, height, theme, showVolume, onPriceChange]);
+  }, [candles, height, theme, showVolume, onPriceChange, zonaHoraria]);
 
   return (
     <section className="w-full rounded-md border border-gray-200 p-4">

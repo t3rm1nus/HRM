@@ -61,11 +61,16 @@ def construir_metadata(registro_crudo: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def normalizar_identificador(identificador: Any) -> Optional[str]:
+    """El logger escribe order_id como número; la API lo expone siempre como texto."""
+    return None if identificador is None else str(identificador)
+
+
 def convertir_a_orden(registro_crudo: Dict[str, Any]) -> OrderRecord:
     """Traduce un trade del logger a OrderRecord. Lanza ValidationError si es inválido."""
     precio = registro_crudo.get("filled_price") or registro_crudo.get("price")
     return OrderRecord(
-        order_id=registro_crudo.get("order_id"),
+        order_id=normalizar_identificador(registro_crudo.get("order_id")),
         simbolo=registro_crudo.get("symbol"),
         lado=str(registro_crudo.get("side", "")).lower(),
         cantidad=registro_crudo.get("quantity"),

@@ -123,3 +123,15 @@ def test_pagina_y_calcula_has_more(tmp_path):
 def test_calcula_total_paginas_con_minimo_uno():
     assert calcular_total_paginas(0, 50) == 1
     assert calcular_total_paginas(101, 50) == 3
+
+
+def test_acepta_order_id_numerico_como_lo_escribe_el_logger():
+    from api.servicios.servicio_operaciones import convertir_a_orden
+
+    registro_logger = {
+        "timestamp": "2026-02-23T17:13:20.907146", "symbol": "BTCUSDT", "side": "buy",
+        "quantity": 0.001, "price": 65261.5, "filled_price": 65261.5, "commission": 0.07,
+        "status": "filled", "order_id": 1, "strategy": "order_executor",
+        "reason": "Executed BUY order", "market_conditions": {},
+    }
+    assert convertir_a_orden(registro_logger).order_id == "1"

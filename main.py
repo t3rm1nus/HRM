@@ -265,6 +265,7 @@ async def main():
 
         # 🔧 REGISTRAR MarketDataManager para shutdown global
         register_component_for_shutdown('market_data_manager', market_data_manager)
+        servicio_mercado.registrar_gestor(market_data_manager)
 
         # ================================================================
         # STEP 4.5: INITIALIZE ORDER FLOW CAPTURE (L1 Perfecto)
@@ -746,6 +747,7 @@ async def main():
         
         # Update state con datos válidos
         state["market_data"] = market_data_after_warmup
+        await servicio_mercado.notificar_datos(market_data_after_warmup)
         logger.info(f"✅ Market data verificado: {len(market_data_after_warmup)} símbolos")
         
         # ================================================================
@@ -970,6 +972,7 @@ async def main():
                     
                     # Update state with fresh data
                     state["market_data"] = market_data
+                    await servicio_mercado.notificar_datos(market_data)
                     
                 except Exception as data_error:
                     logger.error(f"❌ Cycle {cycle_id}: Market data error: {data_error}")
@@ -1440,6 +1443,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.servicios.servicio_websockets import servicio_websockets
 from api.servicios.servicio_estado_vivo import servicio_estado_vivo
 from api.rutas.rutas_operaciones import router_operaciones
+from api.rutas.rutas_mercado import router_mercado
+from api.servicios.servicio_mercado import servicio_mercado
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -1465,6 +1470,7 @@ app.add_middleware(
 
 
 app.include_router(router_operaciones)
+app.include_router(router_mercado)
 
 
 # Modelos de respuesta con type hints

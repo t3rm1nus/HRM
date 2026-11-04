@@ -1,4 +1,5 @@
 import React from 'react';
+import { SelectorZonaHoraria } from '../../componentes/configuracion/SelectorZonaHoraria';
 
 const PESTANAS = ['General', 'Trading', 'Riesgo', 'Modelos', 'Autoaprendizaje', 'Cartera', 'Señales', 'Notificaciones', 'Seguridad', 'Avanzado'];
 
@@ -17,6 +18,7 @@ export const PaginaConfiguracion: React.FC = () => {
       </div>
       <div className="mt-6 bg-white border rounded-xl p-4">
         <p>Pestaña activa: {tab}</p>
+        {tab === 'General' && <div className="mt-4"><SelectorZonaHoraria /></div>}
         <p className="text-sm text-gray-600">Formularios generados desde esquema (mock). Credenciales: solo escritura.</p>
       </div>
       <div className="fixed bottom-4 right-4 bg-white border shadow rounded-lg px-4 py-2 text-sm">
