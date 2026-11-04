@@ -33,6 +33,7 @@ export const esquemaStatus = z.object({
   trading_active: z.boolean(),
   cycle_count: z.number().int().nonnegative(),
   uptime: z.string(),
+  mode: z.enum(['paper', 'live', 'unknown']),
 });
 export const esquemaPortfolio = z.object({
   btc_balance: z.number().nonnegative(),

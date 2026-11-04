@@ -20,7 +20,7 @@ export const getModoMock = (): 'papel' | 'testnet' | 'live' => {
 };
 
 // Respuestas dinámicas según el modo
-const getStatusRespuesta = (): { status: 'paused' | 'running'; trading_active: boolean; cycle_count: number; uptime: string } => {
+const getStatusRespuesta = (): { status: 'paused' | 'running'; trading_active: boolean; cycle_count: number; uptime: string; mode: 'paper' | 'live' | 'unknown' } => {
   const esLive = estadoModoActual === 'live';
   const esTestnet = estadoModoActual === 'testnet';
   const esPapel = estadoModoActual === 'papel';
@@ -30,6 +30,7 @@ const getStatusRespuesta = (): { status: 'paused' | 'running'; trading_active: b
     trading_active: !esPapel,
     cycle_count: esLive ? 1000000 : esTestnet ? 42 : 0,
     uptime: esLive ? 'sistema en producción' : esTestnet ? 'entorno de pruebas' : 'modo simulación',
+    mode: esLive ? 'live' : 'paper',
   };
 };
 

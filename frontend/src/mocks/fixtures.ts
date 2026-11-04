@@ -11,6 +11,7 @@ export interface StatusRespuesta {
   trading_active: boolean;
   cycle_count: number;
   uptime: string;
+  mode: 'paper' | 'live' | 'unknown';
 }
 
 export interface PortfolioRespuesta {
@@ -58,6 +59,7 @@ export const STATUS_RESPUESTA: StatusRespuesta = {
   trading_active: true,
   cycle_count: 42,
   uptime: 'sistema activo',
+  mode: 'paper',
 };
 
 export const PORTFOLIO_RESPUESTA: PortfolioRespuesta = {

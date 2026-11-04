@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Sidebar } from '../componentes/sidebar';
 import { Navbar } from '../componentes/navbar';
 import { RUTAS } from '../constantes/constantes';
+import { usarSincronizacionBackend } from '../hooks/useSincronizacionBackend';
 
 const Inicio = lazy(() =>
   import('../paginas/secciones/paginaInicio').then((modulo) => ({ default: modulo.PaginaInicial })),
@@ -53,7 +54,9 @@ const NotFound = lazy(() =>
   import('../paginas/notFound').then((modulo) => ({ default: modulo.NotFoundPage })),
 );
 
-export const AppRouter: React.FC = () => (
+export const AppRouter: React.FC = () => {
+  usarSincronizacionBackend();
+  return (
   <BrowserRouter>
     <div className="flex min-h-screen bg-gray-100">
       <Sidebar />
@@ -85,4 +88,5 @@ export const AppRouter: React.FC = () => (
       </div>
     </div>
   </BrowserRouter>
-);
+  );
+};

@@ -1,16 +1,16 @@
 import React from 'react';
-import { useModoStore } from '../../estado/storeModo';
+import { usarEtiquetaModo } from '../../hooks/useEtiquetaModo';
 import { PAGINAS } from '../../constantes/paginas';
 
 export const PaginaInicial: React.FC = () => {
-  const { modo } = useModoStore();
+  const etiquetaModo = usarEtiquetaModo();
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="bg-white rounded-xl shadow p-6">
         <h1 className="text-2xl font-bold text-gray-900">Panel de Control</h1>
         <p className="mt-2 text-gray-600">
-          Bienvenido al sistema HRM. Modo actual: <span className="font-semibold">{modo.toUpperCase()}</span>
+          Bienvenido al sistema HRM. Modo actual: <span className="font-semibold">{etiquetaModo}</span>
         </p>
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {PAGINAS.slice(0, 4).map((pg) => (

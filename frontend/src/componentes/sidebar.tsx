@@ -1,10 +1,12 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useModoStore } from '../estado/storeModo';
+import { usarEtiquetaModo } from '../hooks/useEtiquetaModo';
 import { PAGINAS } from '../constantes/paginas';
 
 export const Sidebar: React.FC = () => {
-  const { modo } = useModoStore();
+  const { modo, modoConfirmado } = useModoStore();
+  const etiquetaModo = usarEtiquetaModo();
 
   return (
     <aside className="flex h-full flex-col border-r border-gray-200 bg-white">
@@ -29,8 +31,8 @@ export const Sidebar: React.FC = () => {
       <div className="border-t border-gray-200 p-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-gray-500">Modo:</span>
-          <span className={`text-xs font-semibold ${modo === 'live' ? 'text-red-600' : modo === 'testnet' ? 'text-amber-600' : 'text-green-600'}`}>
-            {modo.toUpperCase()}
+          <span className={`text-xs font-semibold ${!modoConfirmado ? 'text-gray-500' : modo === 'live' ? 'text-red-600' : modo === 'testnet' ? 'text-amber-600' : 'text-green-600'}`}>
+            {etiquetaModo}
           </span>
         </div>
       </div>

@@ -175,6 +175,7 @@ async def main():
         else:
             mode = "simulated"
             logger.info("🟡 MODO SIMULADO detectado (PAPER_MODE!=false)")
+        servicio_estado_vivo.registrar_modo(mode)
 
         # ================================================================
         # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
@@ -764,6 +765,9 @@ async def main():
         logger.info("🔄 Starting main trading loop...")
         logger.info("="*80)
         
+        servicio_estado_vivo.registrar_cartera(portfolio_manager)
+        servicio_estado_vivo.registrar_inicio_bucle()
+
         cycle_id = 0
         total_signals_all_cycles = 0
         total_orders_all_cycles = 0
@@ -1127,6 +1131,7 @@ async def main():
                     cycle_id=cycle_id,
                     market_data=market_data
                 )
+                await servicio_estado_vivo.notificar_ciclo(cycle_id)
 
             except Exception as cycle_error:
                 logger.error(f"❌ Cycle {cycle_id} error: {cycle_error}")
@@ -1176,6 +1181,7 @@ async def main():
         logger.critical(traceback.format_exc())
             
     finally:
+        servicio_estado_vivo.registrar_parada()
         # 🔧 SHUTDOWN LIMPIO GLOBAL desde bootstrap
         logger.info("🧹 Ejecutando shutdown limpio global desde bootstrap...")
         try:
@@ -1432,6 +1438,7 @@ async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, m
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from api.servicios.servicio_websockets import servicio_websockets
+from api.servicios.servicio_estado_vivo import servicio_estado_vivo
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -1462,6 +1469,7 @@ class StatusResponse(BaseModel):
     trading_active: bool = Field(default=False, description="Modo trading activo")
     cycle_count: int = Field(default=0, description="Contador de ciclos")
     uptime: str = Field(default="no disponible", description="Tiempo de actividad")
+    mode: str = Field(default="unknown", description="Modo real del backend: paper, live o unknown")
 
 
 class PortfolioResponse(BaseModel):
@@ -1519,12 +1527,7 @@ async def health_check() -> HealthCheckResponse:
     description="Obtiene el estado operativo del bot de trading",
 )
 async def get_status() -> StatusResponse:
-    return StatusResponse(
-        status="paused",
-        trading_active=False,
-        cycle_count=0,
-        uptime="sistema activo",
-    )
+    return StatusResponse(**servicio_estado_vivo.obtener_estado_sistema())
 
 
 # Endpoint portfolio
@@ -1535,13 +1538,10 @@ async def get_status() -> StatusResponse:
     description="Obtiene el estado actual de balances y NAV de la cartera",
 )
 async def get_portfolio() -> PortfolioResponse:
-    return PortfolioResponse(
-        btc_balance=0.0,
-        eth_balance=0.0,
-        usdt_balance=0.0,
-        total_nav=0.0,
-        initial_capital=float(os.getenv("INITIAL_CAPITAL", "0")),
-    )
+    resumen = servicio_estado_vivo.obtener_resumen_cartera()
+    if resumen is None:
+        raise HTTPException(status_code=503, detail="La cartera aún no está inicializada")
+    return PortfolioResponse(**resumen)
 
 
 # Endpoint version
@@ -1559,7 +1559,7 @@ async def get_version() -> dict:
     }
 
 
-def run_fastapi(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:
+def run_fastapi(host: str = os.getenv("HRM_API_HOST", "127.0.0.1"), port: int = 8000, reload: bool = False) -> None:
     """Inicia el servidor FastAPI con uvicorn."""
     uvicorn.run(app, host=host, port=port, reload=reload)
 
@@ -1581,7 +1581,7 @@ if __name__ == "__main__":
         import uvicorn
         config = uvicorn.Config(
             app=app,
-            host="0.0.0.0",
+            host=os.getenv("HRM_API_HOST", "127.0.0.1"),
             port=8000,
             log_level="info",
         )

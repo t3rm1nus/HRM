@@ -13,6 +13,7 @@ export const Navbar: React.FC = () => {
     deteniendo,
     alarmeActivado,
     cicloCount,
+    modoConfirmado,
     confirmarDetencionEmergencia,
     cancelarDetencionEmergencia,
   } = useModoStore();
@@ -47,7 +48,16 @@ export const Navbar: React.FC = () => {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-4">
-            <BadgeModo modo={modo === ModoAplicacion.PAPERA ? 'paper' : modo} />
+            {modoConfirmado ? (
+              <BadgeModo modo={modo === ModoAplicacion.PAPERA ? 'paper' : modo} />
+            ) : (
+              <span
+                className="px-3 py-2 rounded-lg text-sm font-semibold bg-gray-200 text-gray-600"
+                title="El backend no ha confirmado el modo de operación"
+              >
+                MODO SIN CONFIRMAR
+              </span>
+            )}
             <div className="flex items-center gap-4 text-sm text-gray-600">
               <span className={`flex items-center gap-1.5 ${estadoConexion === 'conectado' ? 'text-green-600' : estadoConexion === 'desconectado' ? 'text-red-600' : 'text-amber-600'}`}>
                 <span className={`w-2 h-2 rounded-full ${estadoConexion === 'conectado' ? 'bg-green-500' : estadoConexion === 'desconectado' ? 'bg-red-500' : 'bg-amber-500'}`} />
@@ -75,8 +85,10 @@ export const Navbar: React.FC = () => {
 
             <button
               type="button"
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition ${deteniendo ? 'bg-red-100 text-red-700' : 'bg-red-600 text-white hover:bg-red-700'}`}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-gray-200 text-gray-500 cursor-not-allowed"
               onClick={handleEmergencia}
+              disabled
+              title="No disponible: el backend aún no expone un endpoint de parada"
             >
               🛑
               <span className="hidden sm:inline">{deteniendo ? 'Detenido' : 'Detener'}</span>

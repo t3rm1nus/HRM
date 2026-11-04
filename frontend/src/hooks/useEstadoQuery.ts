@@ -28,4 +28,5 @@ export interface StatusRespuesta {
   trading_active: boolean;
   cycle_count: number;
   uptime: string;
+  mode: 'paper' | 'live' | 'unknown';
 }
