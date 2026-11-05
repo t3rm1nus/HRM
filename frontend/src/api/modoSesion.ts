@@ -18,3 +18,16 @@ export const cambiarModoSesion = async (modo: 'persistente' | 'limpia'): Promise
   );
   return respuesta.data;
 };
+
+export interface RespuestaReinicioDatosPaper {
+  estado: 'pendiente';
+  mensaje: string;
+}
+
+export const reiniciarDatosPaper = async (confirmacion: string): Promise<RespuestaReinicioDatosPaper> => {
+  const respuesta = await obtenerApiClient().post<RespuestaReinicioDatosPaper>(
+    APIS.REINICIAR_DATOS_PAPER,
+    { confirmacion },
+  );
+  return respuesta.data;
+};

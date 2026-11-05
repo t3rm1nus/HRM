@@ -23,6 +23,7 @@ describe('SwitchModoSesion', () => {
 
     // Verificar aria-checked=true cuando modo es persistente
     expect(label).toHaveAttribute('aria-checked', 'true');
+    expect(label).toHaveAttribute('title', expect.stringContaining('nunca toca Persistente'));
   });
 
   it('renderiza con modo limpia activo', () => {

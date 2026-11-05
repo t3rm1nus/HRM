@@ -12,11 +12,11 @@ const MODOS: readonly ModoSesion[] = ['persistente', 'limpia'];
 
 const ETIQUETAS: Record<ModoSesion, string> = {
   persistente: 'Persistente',
-  limpia: 'Limpia (reset)',
+  limpia: 'Limpia (aislada)',
 };
 
 const DESCRIPCION =
-  'Persistente conserva cartera e historial. Limpia los borra en el próximo arranque.';
+  'Persistente conserva su cartera e historial. Limpia usa otro almacenamiento y solo vacía ese perfil al arrancar; nunca toca Persistente.';
 
 const alternarModo = (modo: ModoSesion | null): ModoSesion =>
   modo === 'persistente' ? 'limpia' : 'persistente';

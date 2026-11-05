@@ -32,7 +32,10 @@ export const useCambioModoSesion = () => {
 
   return {
     modoConfigurado: modoActual?.modo_configurado ?? null,
+    modoActivo: modoActual?.modo_activo ?? null,
+    modoOperativo: modoActual?.modo_operativo ?? 'unknown',
     reinicioPendiente: modoActual?.reinicio_pendiente ?? false,
+    reinicioDatosPendiente: modoActual?.reinicio_datos_pendiente ?? false,
     cargando,
     confirmacionPendiente,
     solicitarCambio,

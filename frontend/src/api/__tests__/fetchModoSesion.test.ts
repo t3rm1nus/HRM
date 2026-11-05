@@ -6,15 +6,15 @@ describe('fetchModoSesion', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('pide GET /sesion/modo', async () => {
-    const funcion = simularFetch({ modo_activo: 'persistente', modo_configurado: 'persistente', reinicio_pendiente: false }, 200);
+    const funcion = simularFetch({ modo_activo: 'persistente', modo_configurado: 'persistente', reinicio_pendiente: false, modo_operativo: 'paper', reinicio_datos_pendiente: false }, 200);
     await fetchModoSesion();
     expect(String(funcion.mock.calls[0]?.[0])).toMatch(/\/sesion\/modo$/);
   });
 
   it('devuelve el modo de sesión validado', async () => {
-    simularFetch({ modo_activo: 'limpia', modo_configurado: 'persistente', reinicio_pendiente: true }, 200);
+    simularFetch({ modo_activo: 'limpia', modo_configurado: 'persistente', reinicio_pendiente: true, modo_operativo: 'paper', reinicio_datos_pendiente: false }, 200);
     const modo = await fetchModoSesion();
-    expect(modo).toEqual({ modo_activo: 'limpia', modo_configurado: 'persistente', reinicio_pendiente: true });
+    expect(modo).toEqual({ modo_activo: 'limpia', modo_configurado: 'persistente', reinicio_pendiente: true, modo_operativo: 'paper', reinicio_datos_pendiente: false });
   });
 
   it('propaga el error del backend', async () => {

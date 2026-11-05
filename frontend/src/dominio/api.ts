@@ -76,6 +76,8 @@ export const esquemaEstadoModoSesion = z.object({
   modo_activo: z.enum(['persistente', 'limpia']).nullable(),
   modo_configurado: z.enum(['persistente', 'limpia']),
   reinicio_pendiente: z.boolean(),
+  modo_operativo: z.enum(['paper', 'live', 'unknown']),
+  reinicio_datos_pendiente: z.boolean(),
 });
 
 export type EsModoSesion = z.infer<typeof esquemaEstadoModoSesion>;
@@ -105,4 +107,5 @@ export const APIS = {
   OPERACIONES: '/operaciones',
   REPORTES: '/reportes',
   MODO_SESION: '/sesion/modo',
+  REINICIAR_DATOS_PAPER: '/sesion/reiniciar-datos',
 } as const;
