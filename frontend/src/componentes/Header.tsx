@@ -8,6 +8,57 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ titulo, subtitulo }) => {
+  const { modo, modoConfirmado } = usarModoStore();
+  const {
+    modoActual,
+    cargando,
+    error,
+    cambiarModo,
+    refetch,
+  } = useModoSesion();
+
+  const [mostrandoConfirmacion, setMostrandoConfirmacion] = React.useState(false);
+  const [modoSeleccionadoAnterior, setModoSeleccionadoAnterior] =
+    React.useState<'persistente' | 'limpia' | null>(null);
+
+  const manejarCambiarModo = async (modo: 'persistente' | 'limpia') => {
+    if (modo === 'limpia') {
+      // Pedir confirmación antes de cambiar a sesión limpia
+      setModoSeleccionadoAnterior(modo);
+      setMostrandoConfirmacion(true);
+    } else {
+      // Cambiar a persistente sin confirmación
+      try {
+        await cambiarModo(modo);
+        await refetch();
+      } catch (err: any) {
+        // En caso de error, mostrar y dejar en estado anterior
+        error && console.error('Error al cambiar modo:', err);
+      }
+    }
+  };
+
+  const confirmarCambio = async () => {
+    setMostrandoConfirmacion(false);
+    try {
+      await cambiarModo('limpia');
+      await refetch();
+    } catch (err: any) {
+      error && console.error('Error al confirmar cambio de modo:', err);
+      // Volver al estado anterior en caso de error
+      if (modoSeleccionadoAnterior) {
+        await cambiarModo(modoSeleccionadoAnterior);
+        await refetch();
+      }
+    }
+    setModoSeleccionadoAnterior(null);
+  };
+
+  const cancelarCambio = () => {
+    setMostrandoConfirmacion(false);
+    setModoSeleccionadoAnterior(null);
+  };
+
   return (
     <header className="bg-white shadow-sm border-b border-gray-100">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -33,6 +84,22 @@ export const Header: React.FC<HeaderProps> = ({ titulo, subtitulo }) => {
               </svg>
               <span className="ml-2">Activar</span>
             </button>
+
+            <SwitchModoSesion
+              modoActual={modoActual}
+              reinicioPendiente={false}
+              onCambiarModo={manejarCambiarModo}
+            />
+
+            {/* Modal de confirmación para sesión limpia */}
+            <ModalConfirmacionFuerte
+              activo={mostrandoConfirmacion}
+              titulo="Cambiar modo de sesión"
+              textoPrimario="En el próximo arranque se borrarán la cartera y el historial de operaciones."
+              palabraEsperada="CONFIRMAR"
+              onConfirmar={confirmarCambio}
+              onCancelar={cancelarCambio}
+            />
           </div>
         </div>
       </div>
