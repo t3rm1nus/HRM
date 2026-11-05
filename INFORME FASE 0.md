@@ -728,3 +728,221 @@ Garantías de esta auditoría
 - No se han modificado estrategias, señales, indicadores ni parámetros de riesgo.
 - No se han declarado pruebas que no se hayan ejecutado.
 La siguiente decisión debe ser completar la auditoría de las áreas pendientes y, después, solicitar autorización para iniciar la Fase 1.
+
+
+
+INFORME DE AUDITORÍA — HRM
+Revisión estática del flujo principal completada
+Alcance: código fuente del repositorio, sin arrancar HRM ni modificar archivos.
+1. Resumen ejecutivo
+HRM tiene una base funcional considerable: gestión de cartera, exchange simulado, generación de señales, dimensionamiento de órdenes, persistencia por perfiles PAPER y API.
+
+Sin embargo, he encontrado problemas de integración que impiden considerar el sistema validado.
+
+Los más importantes son:
+1. El verificador de señales puede rechazar una señal, pero el pipeline la sigue aceptando.
+2. Los controles de riesgo y stop-loss de la ruta táctica principal contienen implementaciones incompletas.
+3. El supuesto override de OrderFlow no llega al pipeline de ejecución.
+4. La comprobación de balances de main.py utiliza un atributo que no corresponde al PortfolioManager actual.
+5. El gestor de datos puede considerar válida una reparación que devuelve un DataFrame vacío.
+6. Hay componentes de ejecución y comunicación que existen en el repositorio, pero no están conectados al arranque real.
+No son problemas cosméticos. Afectan a la integridad de los datos, a la generación de órdenes y a la capacidad de confiar en las protecciones del sistema.
+2. Hallazgos prioritarios
+Prioridad	Componente	Hallazgo
+Crítica	SignalVerifier	Se ignora el resultado de la validación de señales.
+Crítica	L2 / RiskOverlay	Los controles de riesgo y stop-loss no están implementados en la ruta activa.
+Alta	OrderFlow	El override se calcula, pero no se consume.
+Alta	PortfolioManager	La detección de balances cero no está conectada correctamente.
+Alta	MarketDataManager	Puede aceptar datos vacíos como reparados.
+Alta	Persistencia	La sincronización puede fallar sin detener adecuadamente el flujo.
+Alta	Configuración	La propagación del modo entre componentes es inconsistente.
+Media	ExecutionGateway	Tiene errores de importación y construcción.
+Media	MessageBus	No está integrado en el flujo principal de main.py.
+
+F0-01. El verificador de señales no bloquea señales rechazadas
+Crítico
+En system/trading_pipeline_manager.py, el método _validate_signals hace lo siguiente:
+- Envía la señal al verificador.
+- Espera el resultado.
+- Añade la señal a la lista de válidas sin comprobar result.is_valid.
+El problema está confirmado al contrastarlo con core/incremental_signal_verifier.py, donde submit_signal_for_verification() devuelve un objeto SignalVerificationResult con el campo is_valid.
+
+Consecuencia: una señal rechazada por el verificador puede llegar igualmente a la generación de órdenes.
+F0-02. Las protecciones de riesgo L2 están incompletas
+Crítico
+En l2_tactic/tactical_signal_processor.py he comprobado que:
+- _apply_risk_adjustment() devuelve la señal sin modificar.
+- _apply_stop_loss_calculation() devuelve la señal sin modificar.
+- _create_l1_composite_signal() devuelve None.
+- RiskOverlay se instancia, pero no he encontrado su aplicación en el camino principal de procesamiento táctico.
+Además, RiskControlManager aparece en componentes alternativos, pero no he encontrado su integración efectiva en el flujo principal de main.py.
+
+Consecuencia: no podemos considerar implementados ni verificados los controles de riesgo que describe la arquitectura.
+F0-03. OrderFlow no está conectado a la ejecución
+Crítico
+En main.py se generan señales OrderFlow y se establece:
+state["orderflow_signals"] = ...state["orderflow_override"] = True
+
+
+
+Pero TradingPipelineManager no consume esos campos para construir las señales que llegan al OrderManager.
+
+Consecuencia: el mensaje de log indica que OrderFlow puede hacer un override, pero el código inspeccionado no demuestra que realmente lo haga.
+F0-04. Comprobación incorrecta de balances
+Alta
+En main.py se comprueba:
+hasattr(portfolio_manager, "client")
+
+
+
+Sin embargo, el core.portfolio_manager.PortfolioManager actual almacena el cliente mediante exchange_client.
+
+No he encontrado una asignación que proporcione el atributo client a esa instancia.
+
+Por tanto, la comprobación de balances del bucle principal puede quedar completamente omitida.
+
+Hay otro problema dentro de ese bloque: si se activara su recuperación de último recurso, utiliza balances fijos de BTC, ETH y USDT.
+
+Eso no es una recuperación válida del estado: podría introducir capital ficticio en la simulación. Ante una pérdida de estado, HRM debe detenerse y exigir una recuperación verificable, nunca inventar balances.
+F0-05. Validación de datos de mercado
+Alta
+En system/market_data_manager.py, _repair_symbol_data() puede devolver un DataFrame vacío.
+
+Después, _validate_data() acepta cualquier resultado distinto de None como reparación válida, sin volver a validarlo.
+
+También puede incrementar el contador de éxitos aunque el DataFrame esté vacío.
+
+Consecuencia: el gestor puede considerar que ha conseguido datos válidos cuando realmente no dispone de velas utilizables.
+F0-06. Sincronización de cartera
+Alta
+En core/portfolio_manager.py, sync_from_exchange_async() devuelve False cuando BTC, ETH y USDT están todos a cero.
+
+Es una protección comprensible frente a la pérdida de estado, pero he comprobado que algunos llamadores no comprueban adecuadamente el resultado.
+
+Riesgo: el sistema puede continuar con información anterior de cartera cuando la sincronización ha fallado.
+F0-07. Configuración y modos
+He encontrado una inconsistencia entre el modo calculado por main.py, el BinanceClient que se construye sin pasar explícitamente ese modo y el exchange simulado que se inicializa desde bootstrap_simulated_exchange().
+
+Además, OrderExecutors rechaza la ejecución cuando no está en modo PAPER: el camino de ejecución real no está implementado en esa clase.
+
+Por tanto, no se puede considerar que la arquitectura de modos esté validada ni que todos los componentes compartan un estado operativo coherente.
+
+La configuración debe permanecer cerrada en PAPER mientras esto no esté resuelto.
+F0-08. ExecutionGateway
+En execution_gateway.py:
+- Importa OrderValidator, pero el módulo l1_operational/order_validators.py define OrderValidators.
+- Construye RiskGuard pasándole portfolio_manager, aunque el constructor inspeccionado no acepta ese argumento.
+El componente tampoco aparece integrado en el camino activo de main.py.
+
+Es una implementación alternativa que no puede considerarse operativa.
+F0-09. Arquitectura de comunicación
+El proyecto contiene MessageBus, L2BusAdapter y otros adaptadores.
+
+Sin embargo, el flujo principal se ejecuta mediante llamadas directas desde TradingPipelineManager.
+
+También he comprobado que SystemBootstrap.initialize_system() devuelve un contexto vacío: no inicializa los componentes que anuncia su documentación. main.py termina construyendo buena parte de ellos manualmente.
+
+Esto no significa que el sistema no pueda funcionar, pero sí que la arquitectura documentada y el arranque efectivo no coinciden.
+3. Persistencia PAPER: avances confirmados
+Esta parte ha mejorado respecto a la revisión anterior.
+Mejoras verificadas en código
+He comprobado que:
+- storage/perfil_datos.py separa los directorios persistente y limpia.
+- PaperTradeLogger mantiene instancias independientes por directorio.
+- PortfolioManager.initialize_async() intenta restaurar primero la cartera PAPER.
+- El exchange simulado dispone ahora de un force_reset() que actualiza tanto balances como initial_balances.
+- system/system_cleanup.py ya llama a PortfolioManager.reset_instance().
+- El endpoint de reinicio diferido exige confirmación exacta y comprueba que el modo y perfil sean los adecuados.
+- servicio_estado_vivo.normalizar_modo() traduce correctamente simulated a paper.
+También existen pruebas focalizadas para perfiles, migración, persistencia y API.
+
+Corrijo expresamente dos observaciones del informe anterior: el método force_reset() sí actualiza los balances en la versión actual y el reinicio del singleton PortfolioManager sí está implementado.
+Riesgo pendiente de migración
+La migración legacy crea el marcador de migración incluso cuando alguna copia falla.
+
+Si ocurre un error de escritura, el marcador puede impedir que se vuelva a intentar automáticamente la migración.
+
+Esto necesita una política de migración transaccional o, como mínimo, un registro fiable de migraciones parciales.
+4. API y frontend
+También hay avances que no aparecían en el informe anterior.
+
+He comprobado que existen:
+- /health
+- /status
+- /portfolio
+- /version
+- /mercado/estado
+- /mercado/simbolos
+- /mercado/velas/{simbolo}
+- /sesion/modo
+- /sesion/reiniciar-datos
+- WebSocket /ws
+La API de mercado está conectada a MarketDataManager mediante ServicioMercado, y existen pruebas para sus rutas y servicios.
+
+El servicio de estado también registra la cartera y publica eventos de estado y cartera.
+
+Lo que sigue incompleto: no he encontrado publicación efectiva de eventos de órdenes y señales al WebSocket. La conexión existe, pero no equivale a disponer de un flujo completo de eventos de trading.
+
+Respecto al frontend, el informe de estabilización incluido en el repositorio, fechado el 3 de noviembre, indica que:
+- Se revisaron sintácticamente 348 archivos Python sin errores.
+- Se intentó ejecutar TypeScript.
+- La instalación con npm ci no pudo completarse por timeout.
+- Persistían errores de tipado y compatibilidad en componentes gráficos y módulos heredados.
+No he repetido esas pruebas en este entorno, así que no las presento como resultados propios ni como validación del commit actual.
+5. Pruebas y validación
+Comprobación	Estado
+Inspección estática de arranque	Revisada
+Separación de perfiles PAPER	Revisada
+Restauración de cartera	Revisada
+Exchange simulado	Revisado
+Gestores de órdenes	Revisados
+Pipeline L1-L2-L3	Revisado
+Validación de señales	Revisada
+Controles de riesgo	Revisados
+Datos de mercado	Revisados
+API y WebSocket	Revisados
+Pruebas unitarias	Existen, no ejecutadas
+Pruebas de integración	No ejecutadas
+Build de frontend	No certificado
+Backtesting completo	No certificado
+Ciclo completo de trading PAPER	No ejecutado
+
+El estado combinado de comprobaciones del commit consultado no muestra resultados de CI.
+6. Correcciones respecto al informe anterior
+Estas son las principales actualizaciones:
+Elemento	Estado actual
+force_reset() no actualizaba balances	Corregido en el código actual
+memory_reset() no reiniciaba PortfolioManager	Corregido
+API de mercado inexistente	Ya existen rutas y servicio
+Estado de runtime desconectado	Ahora existe registro de estado y ciclo
+Cartera desconectada de la API	Ahora existe registro compartido
+Eventos WebSocket inexistentes	Hay eventos de mercado, estado y cartera; faltan otros
+
+El informe de estabilización del 3 de noviembre y el README todavía contienen afirmaciones que deben actualizarse para reflejar el código actual.
+
+7. Estado de las fases
+Fase 0 — Auditoría
+Revisión estática completada
+Camino crítico
+
+Se ha revisado el flujo principal y documentado sus problemas. No equivale a certificar todos los módulos heredados ni el funcionamiento en ejecución.
+
+Fase 1 — Estabilización
+Parcial
+Pendiente de completar
+
+Ya existe trabajo previo de estabilización incorporado al repositorio, pero siguen pendientes las correcciones funcionales, el build y las pruebas de integración.
+
+8. Orden recomendado para continuar
+No empezaría por el frontend ni por añadir más funcionalidades. Primero hay que garantizar la integridad del núcleo.
+1. Corregir la validación de señales y hacer que los rechazos bloqueen realmente las órdenes.
+2. Completar los controles de riesgo y las protecciones de ejecución.
+3. Corregir la sincronización de cartera y la detección de pérdida de estado.
+4. Eliminar las recuperaciones mediante balances inventados.
+5. Corregir la validación y reparación de datos de mercado.
+6. Conectar correctamente OrderFlow al pipeline o retirar el falso override.
+7. Unificar la inicialización y propagación del modo PAPER.
+8. Resolver los errores de los componentes alternativos y legacy.
+9. Completar el frontend y su compilación.
+10. Ejecutar pruebas unitarias y de integración aisladas en PAPER.
+Conclusión: la Fase 0 queda cerrada como revisión estática del camino crítico, con las limitaciones indicadas. HRM todavía no está validado funcionalmente y la Fase 1 no está terminada. No he modificado ningún archivo ni arrancado el sistema.
