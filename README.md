@@ -1,661 +1,125 @@
-# HRM — Sistema jerárquico de trading de criptomonedas
-
-> **Estado de esta documentación:** revisión estática del ZIP `HRM-master.zip` recibido el 2 de noviembre de 2026.  
-> **Importante:** este README describe lo que aparece en el código y diferencia las funciones documentadas de las que están realmente verificadas. No constituye una auditoría financiera ni una garantía de funcionamiento.
-
-## 1. ¿Qué es HRM?
-
-HRM es un proyecto Python orientado al trading algorítmico de criptomonedas, principalmente BTC/USDT y ETH/USDT. Su diseño pretende combinar:
-
-- Datos de mercado en tiempo real.
-- Análisis técnico y generación de señales.
-- Modelos de aprendizaje automático y aprendizaje por refuerzo.
-- Clasificación del régimen de mercado y análisis de sentimiento.
-- Gestión de cartera, dimensionamiento de posiciones y controles de riesgo.
-- Ejecución de órdenes mediante Binance o un exchange simulado.
-- Registro de operaciones, métricas y un sistema de autoaprendizaje/reentrenamiento.
-
-La arquitectura se organiza conceptualmente en tres niveles:
-
-| Nivel | Nombre | Responsabilidad prevista |
-|---|---|---|
-| L1 | Operacional | Convierte señales en intenciones y órdenes, valida y gestiona su ejecución. |
-| L2 | Táctico | Analiza el mercado a corto plazo y genera señales tácticas. |
-| L3 | Estratégico | Evalúa el contexto general: régimen, sentimiento, volatilidad y asignación de cartera. |
-
-El proyecto también contiene servicios transversales: configuración, estado, comunicación entre módulos, logging, persistencia, backtesting y autoaprendizaje.
-
-**No debe confundirse “existe código para una función” con “la función está integrada y probada de extremo a extremo”.** En el estado recibido hay piezas incompletas, artefactos ausentes y errores de sintaxis.
-
-## 2. Arquitectura y flujo de funcionamiento
-
-### 2.1. Flujo lógico esperado
-
-El flujo de alto nivel que persigue el sistema es:
-
-```text
-Fuentes de mercado
-       |
-       v
-MarketDataManager / DataFeed / RealTimeDataLoader
-       |
-       v
-L3 — Contexto estratégico
-     - Régimen de mercado
-     - Sentimiento
-     - Volatilidad
-     - Optimización de cartera
-       |
-       v
-L2 — Análisis táctico
-     - Indicadores y características
-     - Modelos / ensemble
-     - Señal y confianza
-     - Controles de riesgo tácticos
-       |
-       v
-L1 — Capa operacional
-     - Construcción de intención
-     - Validación de orden
-     - Dimensionamiento
-     - Risk Guard
-       |
-       v
-ExecutionGateway / OrderManager
-       |
-       +------> Exchange simulado (paper)
-       |
-       +------> Binance (solo si se configura y habilita expresamente)
-       |
-       v
-PortfolioManager / métricas / logs / almacenamiento
-       |
-       v
-Auto-learning y evaluación de modelos
-```
-
-El diseño incluye un `MessageBus` para intercambiar mensajes entre componentes y un `StateCoordinator`/gestor de estado para compartir el estado del sistema.
-
-### 2.2. L1 — Capa operacional
-
-Carpeta: `l1_operational/`
-
-Componentes principales:
-
-- `binance_client.py`: cliente basado en `ccxt.async_support`; contempla modo paper, testnet y endpoints públicos de Binance.
-- `data_feed.py`: descarga datos OHLCV y gestiona el acceso al exchange.
-- `realtime_loader.py`: carga de datos en tiempo real.
-- `order_manager.py`: coordina órdenes.
-- `order_intent_builder.py`: construye intenciones de orden a partir de señales.
-- `order_validators.py`: validaciones previas.
-- `risk_guard.py`: controles de riesgo antes de ejecutar.
-- `executor.py`, `order_executors.py`: piezas relacionadas con la ejecución.
-- `simulated_exchange_client.py`: exchange simulado para paper trading.
-- `portfolio.py`, `position_manager.py`: gestión de posiciones y cartera.
-- `ai_pipeline.py`, `trend_ai.py`, `signal_processor.py`: análisis y procesamiento auxiliar.
-
-La intención arquitectónica es que las señales no lleguen directamente al exchange: antes deben convertirse en órdenes, superar validaciones y pasar los controles de riesgo.
-
-### 2.3. L2 — Capa táctica
-
-Carpeta: `l2_tactic/`
-
-Se ocupa de convertir los datos y características del mercado en señales tácticas.
-
-Incluye:
-
-- `tactical_signal_processor.py`: procesador táctico principal.
-- `signal_generators.py`, `signal_generator_refactored.py`: generadores de señales.
-- `generators/`: análisis técnico y reversión a la media.
-- `indicators/` y `technical/`: indicadores, patrones, análisis multitemporal y soportes/resistencias.
-- `ensemble/`: combinación y votación de modelos.
-- `feature_extractors.py` y `observation_builders.py`: preparación de observaciones/características.
-- `finrl_processor.py`, `finrl_wrapper.py` y módulos `finrl_*`: integración con componentes de FinRL y Stable-Baselines3.
-- `model_loaders.py`: carga de modelos serializados.
-- `risk_controls/`, `risk_overlay.py`, `position_sizer.py`: controles tácticos y dimensionamiento.
-
-La carpeta contiene una mezcla de implementaciones, wrappers, módulos alternativos y pruebas. La existencia de esos ficheros no acredita que todos estén conectados al camino de ejecución de `main.py`.
-
-### 2.4. L3 — Capa estratégica
-
-Carpeta: `l3_strategy/`
-
-Pretende aportar una visión de contexto más amplia:
-
-- `regime_classifier.py` y `regime_features.py`: clasificación del régimen del mercado.
-- `sentiment_inference.py`: análisis de sentimiento con Transformers/BERT y fuentes externas.
-- `volatility_inference_pipeline.py`: componentes de previsión de volatilidad.
-- `hrm_bl.py`: componentes relacionados con Black-Litterman.
-- `exposure_manager.py`, `risk_manager.py`, `universe_filter.py`: exposición, riesgo y selección del universo.
-- `l3_aggregator.py` y `l3_inference_pipeline.py`: agregación e inferencia.
-- `data_provider.py`: proveedor de datos con fuentes locales y opciones online.
-
-La configuración de L3 contempla regímenes alcistas, bajistas, laterales, volátiles y de transición. También se describen modelos especializados por régimen.
-
-**Advertencia:** `runtime_loop.py` importa `l3_strategy.decision_maker`, pero ese módulo no aparece en el ZIP. Es una de las señales de que el runtime necesita reparación antes de poder considerarse ejecutable.
-
-### 2.5. Servicios comunes
-
-| Carpeta / archivo | Función |
-|---|---|
-| `core/` | Estado, cartera, validación, indicadores, métricas, configuración, errores y utilidades. |
-| `system/` | Bootstrap, coordinación de estado, pipeline, datos de mercado, limpieza y recuperación. |
-| `comms/` | Configuración común, bus de mensajes, esquemas y validación de mensajes. |
-| `storage/` | Registro de operaciones paper y escritura de datos. |
-| `sentiment/` | Gestión auxiliar de textos de sentimiento. |
-| `backtesting/` | Descarga de datos, ejecución de pruebas y generación/análisis de informes. |
-| `ml_training/` | Scripts de entrenamiento offline para modelos L1, L2 y L3. |
-| `hacienda/` | Seguimiento fiscal y cálculo FIFO; no forma parte del ciclo activo de trading según la documentación del propio proyecto. |
-| `scripts/` | Arranque, comprobaciones, diagnóstico y utilidades. |
-| `tests/` | Pruebas unitarias, de integración y scripts de comprobación. |
-| `archived/` | Configuraciones y estados antiguos archivados. |
-
-## 3. ¿Qué IAs y modelos utiliza?
-
-Es importante separar tres cosas: modelos ML entrenados localmente, modelos de aprendizaje por refuerzo y servicios de IA externos. En el código inspeccionado no son equivalentes.
-
-### 3.1. Modelos L1
-
-La documentación interna menciona estos modelos:
-
-- Logistic Regression.
-- Random Forest.
-- LightGBM.
-- Combinación/ensemble de modelos.
-
-Los artefactos que se citan en la documentación son `modelo1_lr.pkl`, `modelo2_rf.pkl` y `modelo3_lgbm.pkl`, entre otros.
-
-**Estado del ZIP:** no contiene la carpeta `models/` ni esos ficheros serializados. Por tanto, no se puede verificar la carga ni la inferencia de esos modelos con el paquete recibido.
-
-### 3.2. Modelos L2 y nombres de proveedores
-
-La documentación `docs/LISTADO_9_IAS_Y_MODELOS.md` enumera:
-
-- Claude — Anthropic.
-- DeepSeek.
-- GPT — OpenAI.
-- Grok — xAI.
-- Kimi — Moonshot.
-- Gemini — Google.
-- DeepSeek en una segunda variante.
-- Modelos PPO de Stable-Baselines3/FinRL.
-
-El código de `l2_tactic/model_loaders.py` contiene funciones con nombres como `load_claude_model`, `load_deepseek_model`, `load_kimi_model` y `load_gpt_model`. Esas funciones intentan cargar archivos ZIP mediante Stable-Baselines3/PPO y PyTorch.
-
-Esto **no demuestra que el sistema esté llamando a Claude, GPT, Gemini, Grok, Kimi o DeepSeek como servicios conversacionales remotos**. En el código inspeccionado no aparecen integraciones directas identificables con los SDK habituales de OpenAI, Anthropic o Google Generative AI. Los nombres parecen identificar artefactos/modelos entrenados o empaquetados para el sistema, no necesariamente los modelos comerciales originales.
-
-Además:
-
-- La carpeta `models/L2/` no está incluida en el ZIP.
-- No aparecen `claude.zip`, `deepseek.zip`, `gemini.zip`, `gpt.zip`, `grok.zip` ni `kimi.zip`.
-- `l2_tactic/config.py` contiene rutas absolutas de Windows del tipo `C:/proyectos/HRM/models/L2/...`, que no son portables.
-- `model_loaders.py` puede cargar modelos PPO, pero no se puede probar sin los artefactos y dependencias correspondientes.
-
-**Conclusión:** el repositorio contiene una capa de carga y referencias a modelos con esos nombres, pero el ZIP no permite confirmar que los siete modelos estén disponibles ni operativos.
-
-### 3.3. Modelos L3
-
-La documentación y el código hacen referencia a:
-
-- BERT para sentimiento, mediante Hugging Face Transformers y PyTorch.
-- GARCH para volatilidad.
-- LSTM para volatilidad.
-- Modelos de clasificación de régimen, incluidos ensembles.
-- Optimización de cartera Black-Litterman.
-
-Los artefactos esperados (por ejemplo, pesos `.pkl`, `.h5`, `.safetensors` y archivos de tokenizer) tampoco están incluidos en el ZIP.
-
-### 3.4. Las “9 IAs” del autoaprendizaje
-
-El documento `docs/LISTADO_9_IAS_Y_MODELOS.md` denomina “9 IAs” a nueve mecanismos de protección del reentrenamiento. No son nueve modelos generativos ni nueve proveedores de IA.
-
-| Nº | Mecanismo | Objetivo descrito |
-|---:|---|---|
-| 1 | `AntiOverfitValidator` | Validación en ventanas temporales para limitar el sobreajuste. |
-| 2 | `AdaptiveRegularizer` | Ajuste adaptativo de regularización. |
-| 3 | `DiverseEnsembleBuilder` | Promover diversidad en el ensemble. |
-| 4 | `ConceptDriftDetector` | Detectar cambios en la distribución de los datos. |
-| 5 | `SmartEarlyStopper` | Detener entrenamientos cuando dejan de mejorar. |
-| 6 | `TimeBasedTrigger` | Activar revisión/reentrenamiento por tiempo. |
-| 7 | `PerformanceBasedTrigger` | Activarlo por deterioro de métricas. |
-| 8 | `RegimeChangeTrigger` | Activarlo ante cambios de régimen. |
-| 9 | `DataVolumeTrigger` | Activarlo al acumular suficientes operaciones/datos. |
-
-En el documento se citan parámetros como cinco ventanas de validación, score mínimo de 0,55, máximo de diez modelos y un umbral de similitud de 0,85. Son valores documentados en el proyecto; no deben interpretarse como resultados de rendimiento demostrados.
-
-## 4. Integraciones y servicios externos
-
-### Binance
-
-La integración más clara del proyecto es Binance, a través de `ccxt.async_support` y llamadas a endpoints HTTP públicos.
-
-Se contemplan:
-
-- Datos públicos de mercado.
-- Velas OHLCV y precios.
-- Modo testnet.
-- Modo paper con cartera simulada.
-- Cliente de exchange para operaciones.
-
-El código lee estas variables de entorno:
-
-- `BINANCE_API_KEY`
-- `BINANCE_API_SECRET`
-- `BINANCE_MODE`
-- `PAPER_MODE`
-
-En paper trading, el diseño pretende utilizar datos reales de mercado y simular las operaciones localmente. La disponibilidad de datos públicos no requiere claves privadas; las operaciones autenticadas sí.
-
-### Reddit
-
-`l3_strategy/sentiment_inference.py` utiliza `asyncpraw` y contempla:
-
-- `REDDIT_CLIENT_ID`
-- `REDDIT_CLIENT_SECRET`
-- `REDDIT_USER_AGENT`
-
-Si no están configuradas las credenciales, el código contempla datos sintéticos de respaldo. Eso permite que ciertas rutas de sentimiento no dependan siempre de Reddit, pero **los datos sintéticos no son sentimiento real del mercado**.
-
-### NewsAPI
-
-El mismo módulo contempla NewsAPI y la variable:
-
-- `NEWS_API_KEY`
-
-Si no hay clave o falla la consulta, el código contempla caché y datos sintéticos. De nuevo, un resultado sintético no equivale a noticias reales.
-
-### Yahoo Finance, FRED y fuentes locales
-
-`l3_strategy/data_provider.py` describe:
-
-- CSV locales.
-- Yahoo Finance mediante `yfinance`, si se habilitan fuentes online.
-- FRED mediante `fredapi` y `FRED_API_KEY`, de forma opcional.
-- Datos on-chain locales o puntos de integración.
-- Datos sintéticos de respaldo en determinados casos.
-
-La variable `USE_ONLINE_SOURCES` controla la activación de fuentes online en ese proveedor.
-
-### FinRL, Stable-Baselines3, PyTorch y Hugging Face
-
-El proyecto contiene integración con:
-
-- FinRL.
-- Stable-Baselines3.
-- PyTorch.
-- Gymnasium.
-- Transformers/Hugging Face.
-
-Son bibliotecas/frameworks de ML y aprendizaje por refuerzo, no proveedores de señales financieras garantizadas.
-
-### Resumen de integraciones
-
-| Servicio / tecnología | Uso previsto | Qué se puede afirmar del ZIP |
-|---|---|---|
-| Binance / CCXT | Mercado y ejecución | Código presente; operación real no verificada. |
-| Reddit / Async PRAW | Textos para sentimiento | Código presente; requiere credenciales para datos reales. |
-| NewsAPI | Noticias | Código presente; requiere `NEWS_API_KEY`. |
-| Yahoo Finance | Datos históricos/auxiliares | Integración opcional descrita. |
-| FRED | Datos macroeconómicos | Integración opcional descrita. |
-| FinRL / SB3 / PyTorch | Modelos RL | Código presente; artefactos ausentes. |
-| Hugging Face Transformers | BERT/sentimiento | Código presente; pesos/modelos ausentes. |
-| OpenAI / Anthropic / Google / xAI / Moonshot APIs | LLM comerciales | No se ha podido verificar una integración API directa en el código inspeccionado. |
-
-## 5. Instalación: preparación del entorno
-
-### 5.1. Requisitos generales
-
-El proyecto es Python y contiene código asíncrono. La documentación no fija una versión única de Python ni proporciona un manifiesto completo de dependencias.
-
-Hay bytecode `.pyc` de Python 3.10 en el ZIP, lo que sugiere que se utilizó Python 3.10 en algún entorno, pero no demuestra que sea la única versión compatible.
-
-Recomendación para empezar:
-
-- Windows 10/11 o Linux.
-- Python 3.10 en un entorno virtual independiente.
-- Git (opcional, si se clona el repositorio).
-- Acceso a Internet para las fuentes externas.
-- No configurar claves privadas durante la primera prueba.
-
-### 5.2. Crear y activar un entorno virtual
-
-Windows PowerShell:
-
-```powershell
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip setuptools wheel
-```
-
-Linux/macOS:
-
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-```
-
-### 5.3. Instalar dependencias
-
-**El repositorio no trae un `requirements.txt` raíz.** Solo aparecen manifiestos parciales:
-
-- `l1_operational/requirements.txt`
-- `l2_tactic/requeriments.txt` (el nombre está escrito con un error: `requeriments`).
-
-El primero enumera `ccxt`, `loguru`, `pydantic` y `dataclasses-json`. El segundo incluye librerías científicas y de ML, como NumPy, pandas, SciPy, scikit-learn, joblib, Stable-Baselines3 y PyTorch, además de dependencias opcionales comentadas.
-
-Para instalar esos manifiestos:
-
-```bash
-pip install -r l1_operational/requirements.txt
-pip install -r l2_tactic/requeriments.txt
-```
-
-No debe asumirse que esto instala todo lo necesario. El código también importa, entre otras, bibliotecas como `python-dotenv`, `colorama`, `aiohttp`, `requests`, `asyncpraw`, `transformers`, `torch`, `gymnasium` y, en rutas concretas, TensorFlow, `yfinance` o `fredapi`.
-
-La instalación de PyTorch/TensorFlow depende del sistema operativo y del hardware. Conviene instalarlos siguiendo las instrucciones oficiales de cada proyecto y no forzar una combinación de versiones al azar.
-
-**No se proporciona un comando de instalación que garantice un entorno completo y reproducible.** Antes de desplegarlo habría que consolidar dependencias y fijar versiones.
-
-## 6. Configuración
-
-### 6.1. Variables de entorno
-
-Crea un archivo `.env` en la raíz solo si vas a utilizar las integraciones que lo necesitan. No subas ese archivo al repositorio.
-
-Plantilla orientativa, sin credenciales:
-
-```dotenv
-# Binance: dejar vacío durante las primeras pruebas
-BINANCE_API_KEY=
-BINANCE_API_SECRET=
-
-# Seguridad: empezar siempre en paper
-PAPER_MODE=true
-BINANCE_MODE=paper
-
-# Sentimiento: opcional
-NEWS_API_KEY=
-REDDIT_CLIENT_ID=
-REDDIT_CLIENT_SECRET=
-REDDIT_USER_AGENT=
-
-# Datos macro / proveedor L3 opcionales
-USE_ONLINE_SOURCES=false
-FRED_API_KEY=
-```
-
-La aplicación carga `python-dotenv` en varios módulos. Las variables exactas que se utilizan dependen del componente y de la ruta de ejecución.
-
-No pongas claves reales en el código, en archivos JSON versionados, en capturas de pantalla ni en logs.
-
-### 6.2. Configuraciones YAML
-
-Hay dos configuraciones principales:
-
-- `configs/config_backtest.yaml`
-- `configs/config_live.yaml`
-
-La primera está orientada a backtesting y desactiva la sincronización con el exchange. La segunda contiene parámetros etiquetados como producción/live y `binance_testnet: false`.
-
-**No uses `config_live.yaml` para experimentar.** Sus valores no convierten el sistema en seguro ni demuestran que la ruta live esté correctamente probada.
-
-### 6.3. Estado inicial y capital simulado
-
-`config_loader.py` define valores por defecto para `initial_state.json`, entre ellos:
-
-- Capital simulado: 3000 USDT.
-- BTC inicial: 0.
-- ETH inicial: 0.
-- Modo: paper.
-- Auto-learning: `fix`.
-
-El archivo puede generarse al cargar la configuración si no existe. Revisa siempre el capital y los balances simulados antes de iniciar el sistema.
-
-Hay referencias a otros valores de capital en distintos módulos y documentos. La configuración de capital no está completamente unificada en el repositorio recibido.
-
-## 7. Cómo intentar arrancarlo
-
-### 7.1. Arranque manual
-
-Desde la raíz del proyecto, con el entorno virtual activado y dependencias instaladas:
-
-```bash
-python main.py
-```
-
-El archivo principal es `main.py`. Su función `main()` configura manejadores de apagado, intenta limpiar el estado, inicializa el coordinador, el gestor de datos, la cartera, el gestor de órdenes y los procesadores.
-
-Sin embargo, **este comando es una referencia al punto de entrada, no una garantía de que el proyecto arranque**. La revisión estática ha encontrado errores que deben corregirse primero (ver sección 10).
-
-### 7.2. Script PowerShell incluido
-
-Existe:
-
-```powershell
-.\scripts\start.ps1
-```
-
-Este script:
-
-1. Escribe un `initial_state.json` con 3000 USDT simulados.
-2. Elimina archivos de estado y operaciones anteriores en varias rutas.
-3. Crea `.venv` si no existe.
-4. Instala un pequeño conjunto de dependencias.
-5. Ejecuta `python main.py`.
-
-**Precaución importante:** el script borra datos persistentes anteriores y reemplaza la configuración inicial. No lo ejecutes sobre una instalación que contenga operaciones, balances o estados que quieras conservar. Además, su instalación de dependencias es parcial.
-
-Para una primera revisión, es preferible preparar el entorno manualmente y hacer una copia de seguridad de cualquier archivo de estado.
-
-## 8. Paper trading, testnet y trading real
-
-Estos modos no son lo mismo:
-
-- **Paper trading:** el sistema simula cartera y ejecuciones; puede consumir precios reales, pero no debería enviar órdenes reales.
-- **Testnet:** entorno de pruebas del exchange, separado de la cuenta real.
-- **Live:** órdenes reales con fondos reales.
-
-El código de `main.py` comprueba `BINANCE_MODE` y `PAPER_MODE`. Si se solicita `BINANCE_MODE=live` sin establecer explícitamente `PAPER_MODE=false`, fuerza el modo paper. Si ambos valores permiten live, muestra una advertencia y espera diez segundos antes de continuar.
-
-Esto es una protección parcial, no una garantía de seguridad. Hay varias configuraciones y módulos que contienen valores distintos, y el ZIP no permite certificar todas las rutas de ejecución.
-
-**No habilites live ni introduzcas claves con permisos de retirada.** Antes de cualquier operación real harían falta pruebas completas, revisión de órdenes, límites, stop-loss, persistencia, recuperación y validación independiente.
-
-## 9. Backtesting, entrenamiento y fiscalidad
-
-### Backtesting
-
-La carpeta `backtesting/` contiene herramientas de descarga, preparación de datos, ejecución de pruebas y análisis de rendimiento. También hay configuraciones YAML para backtest.
-
-No se ha podido certificar un resultado de backtest reproducible a partir del ZIP: no se han ejecutado las pruebas y faltan dependencias y potenciales artefactos/datasets.
-
-### Entrenamiento
-
-`ml_training/` contiene scripts para entrenar modelos L1, L2 y L3. Son herramientas de entrenamiento offline, no necesariamente procesos que se ejecuten automáticamente al iniciar el bot.
-
-### Autoaprendizaje
-
-`auto_learning_system.py` define componentes de evaluación, regularización, diversidad, detección de drift y triggers de reentrenamiento. `integration_auto_learning.py` intenta conectar el sistema con componentes del runtime.
-
-La presencia de estas clases no demuestra que el reentrenamiento esté completándose, que los nuevos modelos se desplieguen correctamente o que mejoren el rendimiento. Para certificarlo hacen falta datos, artefactos, ejecución controlada y pruebas.
-
-### Hacienda
-
-`hacienda/` incluye un módulo de seguimiento fiscal y cálculo FIFO. La documentación del proyecto indica que es auxiliar y no está integrado en el ciclo de trading activo.
-
-## 10. Estado real del repositorio recibido
-
-Esta sección es especialmente importante. Resume lo que se ha podido comprobar directamente en el ZIP.
-
-### 10.1. Hallazgos bloqueantes o relevantes
-
-| Hallazgo | Evidencia | Impacto |
-|---|---|---|
-| No hay README raíz | No existe `README.md` en la raíz del ZIP. | Falta documentación de entrada. |
-| No hay dependencias completas | No hay `requirements.txt` raíz ni `pyproject.toml`; solo dos manifiestos parciales. | Instalación no reproducible. |
-| No hay artefactos de modelos | El ZIP no contiene carpeta `models/`. | No se pueden cargar los modelos citados en la documentación. |
-| Rutas absolutas de Windows | `l2_tactic/config.py` apunta a `C:/proyectos/HRM/models/L2/...`. | No es portable y depende de una estructura local concreta. |
-| Error de sintaxis | `backtesting/performance_analyzer.py`, `backtesting/probador_estrategia2.py`, `l1_operational/signal_processor.py`, `tests/test_profit_taking.py`, `tests/test_trend_following.py` y `tests/test_l3_unified.py`. | Esos módulos no pueden importarse/ejecutarse tal como están. |
-| Importación a módulo ausente | `runtime_loop.py` importa `l3_strategy.decision_maker`, que no aparece en el ZIP. | Puede impedir el arranque de esa ruta del runtime. |
-| Sin plantilla de entorno | No hay `.env.example`. | Configuración externa poco clara. |
-| Configuración inconsistente | Existen valores de capital y modos distintos en diferentes módulos/configuraciones. | Riesgo de comportamiento inesperado. |
-
-La comprobación de sintaxis se realizó con `compileall` sobre el código Python del ZIP. Detectó los errores enumerados; por tanto, no se puede afirmar que todos los módulos compilen.
-
-### 10.2. Qué parece implementado en código
-
-- Estructura modular L1/L2/L3.
-- Cliente Binance basado en CCXT.
-- Cliente simulado y lógica paper.
-- Gestores de órdenes, cartera y riesgo.
-- Procesamiento de datos y señales.
-- Módulos de clasificación de régimen y sentimiento.
-- Integración con frameworks de ML/RL.
-- Componentes de autoaprendizaje.
-- Scripts de entrenamiento y backtesting.
-- Logging, estado y utilidades de limpieza.
-
-### 10.3. Qué no se puede dar por funcional
-
-- Arranque completo de `main.py` en un entorno limpio.
-- Ejecución de todos los ciclos L1-L2-L3 de extremo a extremo.
-- Carga de los modelos citados en los documentos.
-- Conexión API directa con los proveedores LLM comerciales.
-- Reentrenamiento automático completo y despliegue seguro de modelos.
-- Backtests reproducibles y con resultados verificados.
-- Trading real seguro en Binance.
-- Funcionamiento de todas las pruebas.
-
-### 10.4. Veredicto
-
-**Estado: prototipo avanzado / código en desarrollo, no validado para producción.**
-
-El repositorio tiene una cantidad considerable de código y una arquitectura ambiciosa, pero el ZIP recibido no representa una distribución lista para instalar y operar. Los errores de sintaxis, los módulos ausentes, las dependencias incompletas y la ausencia de modelos impiden certificar su funcionamiento integral.
-
-No sería correcto afirmar que “las nueve IAs” o todos los modelos de proveedores externos están funcionando. Tampoco sería correcto afirmar que el bot puede operar de forma rentable o segura.
-
-## 11. Orden recomendado para poner el proyecto en condiciones
-
-1. **Congelar el modo paper.** No introducir claves de trading real.
-2. **Consolidar dependencias.** Crear un `requirements.txt` raíz con versiones compatibles y separar extras opcionales (ML, sentimiento, entrenamiento).
-3. **Corregir sintaxis.** Resolver los errores detectados por `compileall`.
-4. **Resolver imports ausentes.** En particular, revisar `l3_strategy.decision_maker` y todas las dependencias internas.
-5. **Eliminar rutas absolutas.** Usar rutas relativas a la raíz del proyecto y configuración externa.
-6. **Aportar los artefactos.** Incorporar o documentar cómo obtener los modelos y datasets requeridos, con hashes/versiones.
-7. **Unificar configuración.** Definir una única fuente de verdad para modo, capital, símbolos y límites de riesgo.
-8. **Añadir `.env.example`.** Documentar variables y marcar cuáles son opcionales.
-9. **Ejecutar pruebas por capas.** Primero validadores y datos; después L1; luego L2; luego L3; por último integración completa.
-10. **Probar paper trading prolongado.** Verificar órdenes, fills, balances, PnL, reinicios y recuperación.
-11. **Auditar el backtesting.** Evitar look-ahead bias, leakage, costes omitidos y sobreajuste.
-12. **Solo después evaluar live.** Revisión de seguridad independiente, límites de API, claves sin permisos de retirada y capital mínimo de prueba.
-
-## 12. Mapa rápido de archivos
-
-```text
-HRM-master/
-├── main.py                      # Punto de entrada principal del backend
-├── frontend/                    # Aplicación web (React + TypeScript + Vite, versión corregida)
-├── bootstrap.py                 # Inicialización y apagado
-├── runtime_loop.py              # Bucle de ejecución alternativo
-├── execution_gateway.py         # Gateway de ejecución y riesgo
-├── auto_learning_system.py      # Componentes de autoaprendizaje
-├── integration_auto_learning.py # Integración del autoaprendizaje
-├── fix_l3_dominance.py          # Reglas de dominancia L3
-├── config_loader.py             # Estado/configuración inicial
-├── comms/                       # Bus de mensajes y esquemas
-├── core/                        # Estado, cartera, validación y métricas
-├── system/                      # Bootstrap, pipeline y coordinación
-├── l1_operational/              # Órdenes, exchange y ejecución
-├── l2_tactic/                   # Señales tácticas y modelos
-├── l3_strategy/                 # Régimen, sentimiento y estrategia
-├── configs/                     # YAML de backtest y live
-├── backtesting/                 # Pruebas históricas
-├── ml_training/                 # Entrenamiento offline
-├── sentiment/                   # Gestión de sentimiento
-├── storage/                     # Persistencia y logs de paper
-├── hacienda/                    # Herramientas fiscales FIFO
-├── scripts/                     # Arranque y diagnóstico
-├── tests/                       # Pruebas
-├── docs/                        # Documentación técnica existente
-└── archived/                    # Configuración/estado archivado
-```
-
-## 13. Documentación interna consultada
-
-Esta documentación se ha elaborado contrastando el código y los documentos incluidos en el ZIP, entre ellos:
-
-- `ESTADO_ACTUAL.md`
-- `DIRECTORY STRUCTURE.md`
-- `CONTENT FILES.md`
-- `docs/LISTADO_9_IAS_Y_MODELOS.md`
-- `docs/AUTOLEARNING_ANALYSIS_AND_PLAN.md`
-- `docs/Sistema_Normalizado.md`
-- `docs/PATCH_README.md`
-- `configs/config_live.yaml`
-- `configs/config_backtest.yaml`
-
-Los documentos internos pueden describir objetivos, estados anteriores o funcionalidades previstas. Cuando no coinciden con el código disponible, este README prioriza lo comprobable en el ZIP.
+# HRM — Sistema jerárquico de trading algorítmico
+
+> **Estado de esta documentación:** actualización basada en la inspección estática del código y de las salidas de consola compartidas durante la auditoría de noviembre de 2026.
+>
+> **Estado del proyecto:** en auditoría técnica. La Fase 0 no está cerrada y la Fase 1 no se ha ejecutado ni validado.
+>
+> **Importante:** este documento distingue entre código encontrado, código conectado al punto de entrada y comportamiento probado. La presencia de una clase o función no demuestra que el sistema funcione de extremo a extremo.
 
 ---
 
-**Aviso de riesgo:** HRM es software experimental de trading. Las criptomonedas son volátiles y se puede perder todo el capital invertido. No utilices este repositorio con fondos reales sin una auditoría técnica y financiera independiente.
+## 1. Qué es HRM
 
+HRM es un proyecto Python con una interfaz web React/TypeScript, orientado al análisis y a la simulación de estrategias de trading de criptomonedas.
 
-## 14. Interfaz web y control de arranque en Windows
+El diseño del proyecto contempla:
 
-La versión corregida del proyecto incorpora una interfaz web en la carpeta de frontend, basada en React, TypeScript y Vite. El backend Python conserva `main.py` como punto de entrada.
+- Obtención y procesamiento de datos de mercado.
+- Generación y agregación de señales.
+- Análisis táctico y estratégico.
+- Gestión de cartera, posiciones y riesgo.
+- Gestión de órdenes y ejecución simulada.
+- Persistencia de carteras y operaciones PAPER.
+- API REST y comunicación con la interfaz web.
+- Backtesting, entrenamiento y evaluación de modelos.
 
-> **Nota sobre nombres de carpeta:** los scripts de Windows buscan automáticamente una carpeta llamada `frontend`, `front end` o `front-end` en la raíz del repositorio. La carpeta válida debe contener `package.json`.
+Estas capacidades describen el alcance del código. **No constituyen una certificación de que todos los componentes estén integrados, operativos o validados.**
 
-### 14.1. Requisitos
+HRM debe mantenerse en modo PAPER durante el desarrollo y las pruebas. Este README no documenta cómo habilitar operaciones con fondos reales.
 
-- Windows 10/11.
-- Python instalado y dependencias del backend preparadas.
-- Node.js y npm instalados.
-- Dependencias del frontend instaladas previamente desde su carpeta (`npm install`).
+## 2. Estado de validación
 
-Los scripts de control no instalan paquetes, no crean ni reinician entornos virtuales y no modifican configuraciones.
+| Área | Estado conocido | Qué falta |
+|---|---|---|
+| Auditoría de arquitectura | Parcial | Completar el inventario y el flujo de todos los componentes. |
+| Aislamiento PAPER PERSISTENTE/LIMPIA | Implementación presente; con riesgos detectados | Corregir y probar la restauración de balances, migración y aislamiento de extremo a extremo. |
+| Arranque del backend | No certificado | Validar en entorno reproducible, sin alterar datos existentes. |
+| Frontend | No certificado en esta auditoría | `npm ci`, typecheck, tests y build. |
+| Tests Python | Hay tests identificados | Ejecutar la suite y documentar resultados reales. |
+| Dependencias | No consolidadas de forma demostrada | Auditar imports y fijar versiones compatibles. |
+| Backtesting | Código presente | Validar datos, costes, sesgos y reproducibilidad. |
+| Integración completa L1-L2-L3 | No certificada | Trazar y probar el flujo real. |
+| Trading real | Fuera del alcance de esta fase | No habilitar. |
 
-### 14.2. Archivos de control
+### 2.1. Fases del proyecto
 
-Copia estos cuatro archivos en la raíz del repositorio, junto a `main.py`:
+**Fase 0 — Auditoría y congelación:** en curso. Se han inspeccionado partes relevantes del arranque, configuración, perfiles PAPER, persistencia, exchange simulado, cartera, gestores de órdenes y limpieza. Todavía falta completar la revisión de todas las áreas y emitir el informe definitivo `INFORME_FASE_0.md`.
 
-- `HRM_INICIAR.bat`: inicia backend y frontend en dos ventanas de consola independientes.
-- `HRM_DETENER.bat`: detiene únicamente los procesos que haya iniciado el controlador de HRM.
-- `HRM_REINICIAR.bat`: ejecuta la parada y después vuelve a iniciar ambos servicios.
-- `hrm_control.ps1`: implementación común utilizada por los tres archivos `.bat`.
+**Fase 1 — Estabilización técnica:** pendiente. No se ha realizado una validación completa de instalación, compilación, tests, arranque y apagado. Tampoco se debe afirmar que el backend o el frontend compilan correctamente.
 
-El backend se inicia con `python main.py`. El frontend se inicia mediante el script `dev` declarado en el `package.json` (habitualmente `npm run dev`, propio de Vite). Si no existe el script `dev`, el controlador prueba `start`.
+Hasta cerrar la Fase 0 y autorizar expresamente los cambios, no se deben modificar código, estrategias, señales, indicadores, parámetros de riesgo, configuración PAPER/LIVE ni datos persistentes.
 
-### 14.3. Uso
+## 3. Arquitectura del proyecto
 
-Haz doble clic en el archivo correspondiente o ejecútalo desde una terminal:
+La arquitectura se organiza conceptualmente en tres niveles:
 
-```bat
-HRM_INICIAR.bat
-HRM_DETENER.bat
-HRM_REINICIAR.bat
-```
+| Nivel | Responsabilidad prevista |
+|---|---|
+| L1 — Operacional | Gestionar órdenes, validaciones, ejecución y sincronización de cartera. |
+| L2 — Táctico | Analizar el mercado y producir señales tácticas. |
+| L3 — Estratégico | Evaluar el contexto general y aportar decisiones estratégicas. |
 
-El controlador guarda los PID de las ventanas que abre en `.hrm_runtime/`. La parada utiliza esos PID y termina sus procesos descendientes; no busca ni mata indiscriminadamente todos los procesos Python o Node del equipo.
+Esta división es la arquitectura prevista. No debe asumirse que cada módulo participa en todos los ciclos del punto de entrada real.
 
-Si una ventana se cierra manualmente, su PID puede dejar de estar activo. En ese caso, vuelve a ejecutar `HRM_INICIAR.bat`.
+### 3.1. Carpetas principales
 
-### 14.4. Comprobaciones y límites
+| Ruta | Contenido identificado |
+|---|---|
+| `main.py` | Punto de entrada utilizado en el flujo principal inspeccionado. |
+| `core/` | Cartera, estado, configuración, validación y utilidades. |
+| `system/` | Preparación de sesión, bootstrap, coordinación y limpieza. |
+| `comms/` | Configuración común, bus y esquemas de mensajes. |
+| `l1_operational/` | Cliente de exchange, órdenes y ejecución operacional. |
+| `l2_tactic/` | Señales, indicadores, características y modelos tácticos. |
+| `l3_strategy/` | Régimen, sentimiento y análisis estratégico. |
+| `storage/` | Rutas de datos y registro de operaciones PAPER. |
+| `api/` | Servicios y rutas de API. |
+| `frontend/` | Aplicación web; tecnología declarada React, TypeScript y Vite. |
+| `backtesting/` | Herramientas de backtesting. |
+| `ml_training/` | Scripts de entrenamiento offline. |
+| `tests/` | Pruebas automatizadas. |
+| `hacienda/` | Herramientas auxiliares de seguimiento fiscal. |
+| `scripts/` | Scripts de soporte y control. |
+| `persistent_state/` | Configuración y determinados estados persistentes. |
+| `data/paper/` | Datos separados por perfil PAPER. |
 
-- El arranque comprueba que `main.py`, la carpeta del frontend, `package.json`, Python, Node.js y npm estén disponibles.
-- El controlador no borra `initial_state.json`, historiales, operaciones, modelos, logs ni otros datos persistentes.
-- El controlador no cambia `PAPER_MODE`, `BINANCE_MODE` ni las claves de API. Mantén HRM en paper mientras no se haya validado de forma independiente.
-- Los scripts abren los servicios, pero no certifican que el backend complete su inicialización ni que el frontend compile correctamente. Comprueba los mensajes de ambas ventanas y los tests del proyecto.
-- La URL local concreta del frontend depende de la configuración de Vite. Normalmente Vite muestra la dirección en la propia consola.
+La existencia de una carpeta no demuestra que sus módulos estén conectados al runtime.
 
+## 4. Punto de entrada y flujo de arranque inspeccionado
 
-## 15. Almacenamiento PAPER separado por perfil
+El flujo principal inspeccionado parte de `main.py`.
 
-HRM mantiene dos perfiles PAPER físicamente independientes. El modo configurado se aplica en el siguiente arranque y `system.preparar_sesion` selecciona el perfil antes de inicializar la cartera, el logger de operaciones y la API.
+A nivel general, el código:
 
-### 15.1. Estructura de datos
+1. Lee variables de entorno y determina el modo solicitado.
+2. Registra el modo de sesión.
+3. Llama a `preparar_sesion(...)` para seleccionar el perfil de datos.
+4. Inicializa el contexto del sistema.
+5. Inicializa manualmente componentes que no llegan creados por el contexto inicial.
+6. Crea el cliente de exchange y el gestor de cartera.
+7. Prepara el exchange simulado y el gestor de órdenes.
+8. Sincroniza la cartera con el cliente simulado.
+
+### 4.1. Observaciones sobre el bootstrap
+
+En el camino inspeccionado, `main.py` importa `SystemBootstrap` desde `system/bootstrap.py`. Su método `initialize_system()` devuelve un contexto con un diccionario de componentes inicialmente vacío; después `main.py` realiza inicializaciones manuales.
+
+También existe un `bootstrap.py` en la raíz con otra clase y otra ruta de inicialización. No deben confundirse ambas implementaciones.
+
+En el flujo manual observado:
+
+- `BinanceClient()` se instancia sin pasar explícitamente el modo.
+- `PortfolioManager` se inicializa antes de llamar a `bootstrap_simulated_exchange(config)`.
+- Posteriormente se obtiene el cliente simulado y se inyecta en `OrderManager`.
+- Se realiza una sincronización de la cartera con el cliente simulado.
+
+Este orden requiere una prueba de integración específica. La inspección estática no demuestra que todos los objetos compartan siempre la misma instancia ni que la restauración de estado sea correcta.
+
+## 5. PAPER: perfiles PERSISTENTE y LIMPIA
+
+### 5.1. Rutas previstas
+
+El módulo `storage/perfil_datos.py` define dos perfiles PAPER:
 
 ```text
 data/
@@ -676,44 +140,255 @@ data/
             └── summary.json
 ```
 
-`persistent_state/modo_sesion.json` sigue guardando únicamente el modo seleccionado. No contiene balances ni historial. El estado LIVE mantiene su ruta independiente `persistent_state/portfolio_state_live.json`; el perfil PAPER no escribe en ella.
+La estructura física observada en la instalación inspeccionada contiene ambos directorios y sus archivos principales. Esto confirma la existencia de los directorios, no la integridad de los datos ni el aislamiento completo en ejecución.
 
-### 15.2. Comportamiento de los perfiles
+### 5.2. Componentes implicados
 
-- **PERSISTENTE:** conserva cartera, operaciones, estadísticas y evolución de cartera entre reinicios.
-- **LIMPIA:** utiliza otro directorio. Ese directorio se vacía al arrancar en modo limpia, pero nunca borra ni modifica el perfil persistente.
-- **Cambio de modo:** se guarda la selección y se aplica al reiniciar HRM. Al volver de limpia a persistente se recupera el historial persistente anterior, sin mezclar operaciones.
-- **LIVE:** no aplica la limpieza PAPER ni utiliza los archivos de los perfiles PAPER.
-- **Botón «Reiniciar datos PAPER»:** es una acción distinta de cambiar a LIMPIA. Solo aparece en PAPER persistente, exige escribir `CONFIRMAR` y programa un reinicio diferido del perfil persistente. No borra nada al pulsarlo; el borrado ocurre en el siguiente arranque PAPER persistente. No elimina el perfil LIMPIA ni configuración, credenciales, modelos o logs técnicos.
+- `storage/perfil_datos.py`: selección del perfil y construcción de rutas.
+- `storage/paper_trade_logger.py`: logger de operaciones PAPER, con caché de instancias diferenciada por directorio resuelto.
+- `system/preparar_sesion.py`: migración, selección del perfil y limpieza al preparar la sesión.
+- `core/portfolio_manager.py`: restauración y persistencia de la cartera.
+- `api/servicios/servicio_operaciones.py`: acceso a operaciones del perfil activo.
+- `system/system_cleanup.py`: limpieza técnica general.
 
-### 15.3. Migración de instalaciones anteriores
+### 5.3. Comportamiento del código inspeccionado
 
-En el primer arranque con esta versión, HRM copia al perfil persistente los datos heredados que encuentre:
+`preparar_sesion.py` lee el modo configurado y, cuando no está en LIVE, ejecuta la migración legacy y selecciona el perfil PAPER. Si el perfil seleccionado es LIMPIA, limpia el directorio de ese perfil. Si es PERSISTENTE y hay un marcador de reinicio pendiente, solicita la limpieza de ese perfil y después consume el marcador.
 
-- `persistent_state/portfolio_state_live.json`, solo si el contenido identifica explícitamente una cartera `simulated` o `paper`. Si no contiene el modo, no se migra automáticamente para evitar importar por error un estado LIVE.
-- Los archivos JSON/CSV de `data/paper_trades/`.
-- `data/portfolios/portfolio_log.csv`.
+El módulo `storage/perfil_datos.py` valida los nombres de perfil admitidos y construye rutas distintas para `persistente` y `limpia`.
 
-La migración **copia** los archivos y no elimina ni sobrescribe el origen. Si el archivo de destino ya existe, se respeta el destino y no se reemplaza. Se registra una única marca `persistent_state/migracion_paper_perfiles_v1.json`: así, un reinicio explícito del perfil persistente no vuelve a importar los archivos legacy conservados como copia de seguridad. Los originales antiguos permanecen intactos; a partir de la migración, HRM utiliza exclusivamente las rutas del perfil activo.
+La limpieza técnica de `system/system_cleanup.py` no elimina directamente los historiales PAPER normales. Sí elimina determinados archivos temporales encontrados recursivamente bajo `data/`; esa regla debe mantenerse bajo revisión para evitar borrar temporales que pertenezcan a otros procesos.
 
-### 15.4. Componentes que respetan el perfil
+### 5.4. Riesgos detectados que impiden dar el aislamiento por certificado
 
-- `storage/perfil_datos.py`: fuente común de rutas y selección de perfil.
-- `storage/paper_trade_logger.py`: instancia un logger independiente por directorio de perfil. No crea un logger global al importar el módulo.
-- `core/portfolio_manager.py`: guarda y restaura la cartera en el perfil activo. Al restaurar PAPER, hidrata los balances del exchange simulado antes de sincronizar la cartera.
-- `api/servicios/servicio_operaciones.py`: consulta el JSON de operaciones del perfil activo. La variable `HRM_RUTA_OPERACIONES`, si está definida, sigue teniendo prioridad como ruta explícita.
-- `system/preparar_sesion.py`: realiza la migración y, en modo limpia, borra exclusivamente el directorio de ese perfil. También consume el marcador de reinicio persistente solo después de completar su limpieza.
-- `POST /sesion/reiniciar-datos`: valida modo operativo PAPER, perfil persistente activo/configurado y confirmación exacta antes de crear el marcador diferido.
-- `bootstrap.py` y `system/system_cleanup.py`: la limpieza técnica ya no borra operaciones PAPER en cada arranque.
+**A. Restauración de balances del exchange simulado**
 
-### 15.5. Verificación
+En `l1_operational/simulated_exchange_client.py`, el método `force_reset()` inspeccionado actualiza `initial_balances`, limpia el historial en memoria y reinicia el contador de operaciones, pero no actualiza `self.balances`.
 
-Desde la raíz del repositorio, ejecuta las pruebas focalizadas:
+Por tanto, no se puede afirmar que ese método restaure los balances efectivos del exchange simulado. Es especialmente relevante porque `core/portfolio_manager.py` y `main.py` llaman a `force_reset()` durante la sincronización/restauración.
 
-```bash
-pytest -q tests/test_preparar_sesion.py tests/test_perfil_datos.py tests/api/test_rutas_operaciones.py
-```
+**B. Migración legacy marcada como completada aunque pueda ser parcial**
 
-Después de actualizar, arranca primero en PAPER persistente y comprueba que aparecen las operaciones antiguas. Cambia a limpia, reinicia y verifica que empieza sin operaciones. Vuelve a persistente, reinicia y comprueba que reaparecen exactamente la cartera y el historial anteriores. No utilices LIVE para validar esta funcionalidad.
+En `storage/perfil_datos.py`, la migración registra el marcador `persistent_state/migracion_paper_perfiles_v1.json`. Las funciones auxiliares de copia capturan errores de E/S y pueden devolver cero; el proceso puede terminar escribiendo el marcador aunque una o varias copias no se hayan realizado correctamente.
 
-**Importante:** cambiar a LIMPIA y pulsar «Reiniciar datos PAPER» son operaciones distintas. LIMPIA solo vacía `data/paper/limpia`; el botón programa el borrado de `data/paper/persistente` para el siguiente arranque PAPER persistente.
+Esto puede impedir que una migración incompleta se reintente automáticamente. El marcador existente en una instalación concreta acredita que se registró una migración, pero no que todos los archivos se copiaran correctamente.
+
+**C. Dos implementaciones de exchange simulado**
+
+Se han identificado:
+
+- `l1_operational/simulated_exchange_client.py`: implementación síncrona, con `get_instance()`, `get_balances()` y `execute_order()` síncrono. Es la que utiliza el flujo operacional inspeccionado.
+- `core/simulated_exchange_client.py`: implementación distinta, con métodos asíncronos y una interfaz diferente.
+
+No deben intercambiarse ni tratarse como si fueran la misma clase. La duplicidad aumenta el riesgo de imports equivocados y contratos incompatibles.
+
+**D. Limpieza y reinicio de estado**
+
+En `system/system_cleanup.py`, `memory_reset()` elimina entradas de `sys.modules`, pero no llama al método `PortfolioManager.reset_instance()` que existe en la clase. Eliminar el módulo de la caché de imports no garantiza que una instancia singleton ya creada desaparezca.
+
+Además, `perform_full_cleanup(mode="paper")` no utiliza el argumento `mode` en el fragmento inspeccionado y no propaga necesariamente los resultados `success=False` de sus suboperaciones al resultado global.
+
+**Conclusión PAPER:** existe una separación física de rutas y una implementación de selección de perfiles, pero hay defectos/riesgos en la restauración de balances y en la migración. El aislamiento PAPER PERSISTENTE/LIMPIA todavía no puede considerarse validado de extremo a extremo.
+
+## 6. Exchange simulado y ejecución de órdenes
+
+La implementación operacional identificada está en `l1_operational/simulated_exchange_client.py`.
+
+La interfaz inspeccionada incluye:
+
+- `get_instance(...)` para obtener la instancia singleton.
+- `get_balances()` para consultar balances.
+- `execute_order(...)` síncrono para simular una operación.
+- `force_reset(...)` para reinicializar determinados datos de la instancia.
+
+`l1_operational/order_executors.py` llama a `execute_order()` sin `await`, lo que coincide con la firma síncrona de la implementación L1 inspeccionada. Después consulta balances y llama a `PortfolioManager.sync_from_exchange_async(...)`.
+
+Hay otra clase con el mismo nombre en `core/simulated_exchange_client.py`, cuya ejecución es asíncrona. Cualquier integración debe importar explícitamente la implementación adecuada.
+
+**Pendiente:** comprobar con tests de integración que una orden PAPER actualiza de forma coherente balances, cartera, historial, identificadores, valoración y persistencia, incluyendo reinicios. No se ha certificado ese flujo completo.
+
+## 7. Configuración y modos
+
+Se han encontrado varias fuentes de configuración:
+
+- `core/config.py`.
+- `comms/config.py`.
+- Variables de entorno.
+- Configuraciones YAML.
+- Parámetros pasados al bootstrap y a los gestores.
+
+`core/config.py` reconoce los modos `live`, `testnet`, `backtest` y `simulated` en `EnvironmentConfig`; el modo literal `paper` no aparece entre los modos aceptados por ese cargador. También mantiene una variable global de modo forzado.
+
+`comms/config.py` crea una instancia global `config` al importar el módulo y lee `PAPER_MODE` en ese momento. Si el entorno cambia después de la importación, esa instancia puede conservar el valor anterior.
+
+En el flujo manual inspeccionado, `main.py` instancia `BinanceClient()` sin pasar `mode`; el constructor usa `paper` como valor predeterminado. Otros componentes consultan variables distintas para decidir el modo. Esto requiere una fuente única de verdad y pruebas específicas.
+
+**Regla del proyecto durante esta auditoría:** PAPER debe seguir siendo el modo predeterminado. No habilitar LIVE ni introducir credenciales de trading real.
+
+## 8. Cliente Binance
+
+`l1_operational/binance_client.py` contempla el uso de CCXT, datos públicos y un cliente simulado para PAPER.
+
+En el constructor inspeccionado, si se solicita `mode="live"` y faltan las claves, `paper_mode` puede pasar a `True` mientras `self.mode` conserva el valor `live` y se prepara el cliente CCXT con endpoints de mainnet. Esto es una configuración contradictoria y debe tratarse como un riesgo de diseño; no demuestra por sí solo que se envíen órdenes.
+
+La respuesta correcta de seguridad debe ser fallar de forma explícita y segura ante una configuración incoherente, no depender de un fallback silencioso. Su corrección pertenece a una fase posterior y requiere autorización.
+
+## 9. API y frontend
+
+El proyecto contiene una carpeta `api/` y una aplicación en `frontend/`. La documentación previa identifica React, TypeScript y Vite para el frontend.
+
+Se han localizado rutas relacionadas con sesión y operaciones, incluyendo `POST /sesion/reiniciar-datos`, y servicios que consultan el perfil activo.
+
+No se ha completado en esta auditoría la revisión de todos los endpoints, contratos, autenticación, autorización, WebSockets, reconexión, validación de entradas ni integración frontend-backend.
+
+Tampoco se han ejecutado `npm ci`, typecheck, tests ni build. Por tanto, no se afirma que el frontend instale o compile correctamente.
+
+## 10. L2, L3, modelos y sentimiento
+
+El repositorio contiene carpetas y módulos para análisis táctico y estratégico, indicadores, clasificación de régimen, sentimiento, modelos ML/RL y preparación de características.
+
+La existencia de estos módulos no demuestra que estén conectados al flujo principal ni que dispongan de los artefactos necesarios.
+
+En una inspección anterior del ZIP se documentaron referencias a modelos y rutas de artefactos que no estaban incluidos en ese paquete. Esos resultados deben volver a contrastarse con el árbol de trabajo actual antes de tratarlos como estado definitivo del repositorio local.
+
+No se debe afirmar que proveedores comerciales de LLM estén integrados mediante API solo porque existan funciones o nombres de modelos que los mencionen.
+
+## 11. Backtesting y entrenamiento
+
+Las carpetas `backtesting/` y `ml_training/` contienen herramientas para pruebas históricas y entrenamiento offline.
+
+No se ha ejecutado un backtest reproducible durante esta auditoría. Antes de considerar válidos sus resultados habrá que revisar, como mínimo:
+
+- Procedencia y calidad de los datos.
+- Separación temporal entre entrenamiento y evaluación.
+- Look-ahead bias y leakage.
+- Comisiones, spread, slippage y restricciones de ejecución.
+- Tratamiento de órdenes no ejecutadas y liquidez.
+- Reproducibilidad de semillas, parámetros y versiones.
+- Comparación con benchmarks apropiados.
+
+La presencia de scripts de entrenamiento tampoco demuestra que el autoaprendizaje esté conectado al runtime ni que los modelos resultantes se validen antes de usarse.
+
+## 12. Tests y validación
+
+Se han identificado tests relacionados con perfiles PAPER, preparación de sesión y limpieza. Entre los nombres inspeccionados se encuentran:
+
+- `tests/test_preparar_sesion.py`
+- `tests/test_perfil_datos.py`
+- `tests/api/test_rutas_operaciones.py`
+
+También se han inspeccionado fragmentos de tests para comprobar la conservación del historial PAPER durante la limpieza técnica.
+
+**No se ha ejecutado la suite completa en esta fase de auditoría.** La existencia de un test no demuestra que pase en el entorno actual.
+
+La validación pendiente debe registrar el comando exacto, versión de Python, resultado, duración y fallos. Los mocks deben identificarse y no sustituir integraciones reales cuando se esté validando una integración.
+
+## 13. Dependencias y entorno
+
+Se han encontrado manifiestos parciales en el proyecto y dependencias de distintos ámbitos: cliente de exchange, datos, API, frontend, ML/RL y sentimiento.
+
+No se ha certificado todavía una instalación limpia y reproducible. La Fase 1 deberá:
+
+1. Inventariar imports reales y dependencias directas.
+2. Separar dependencias obligatorias y extras opcionales.
+3. Resolver manifiestos duplicados o incompletos.
+4. Fijar versiones compatibles y documentar la versión de Python.
+5. Evitar rutas absolutas de Windows.
+6. Crear o completar `.env.example` sin secretos.
+7. Validar instalación y pruebas en un entorno aislado.
+
+No se deben instalar paquetes indiscriminadamente ni actualizar versiones sin comprobar compatibilidad.
+
+## 14. Instalación y ejecución
+
+**No se ofrece aquí un procedimiento de arranque certificado**, porque la Fase 1 aún no se ha realizado y la Fase 0 sigue abierta.
+
+No ejecutes scripts de inicio, reinicio o limpieza como método de diagnóstico mientras no se haya revisado su efecto sobre los datos. En particular, se ha identificado un script de Windows que puede reemplazar el estado inicial y borrar datos de estado/operaciones; debe auditarse antes de recomendar su uso.
+
+Cuando la Fase 1 esté autorizada y completada, esta sección deberá incluir un procedimiento reproducible que cubra:
+
+- Creación del entorno virtual.
+- Instalación exacta del backend.
+- Instalación del frontend mediante `npm ci`.
+- Configuración PAPER sin credenciales privadas.
+- Comprobaciones previas al arranque.
+- Arranque y apagado controlados.
+- Recuperación y conservación de los datos.
+- Comandos de tests y validación.
+
+## 15. Riesgos y bloqueantes conocidos
+
+| Prioridad | Hallazgo | Archivo / área | Estado |
+|---|---|---|---|
+| Crítica para restauración PAPER | `force_reset()` no actualiza `self.balances`. | `l1_operational/simulated_exchange_client.py` | Defecto confirmado por inspección estática. |
+| Alta | La migración puede escribir el marcador aunque alguna copia falle. | `storage/perfil_datos.py` | Riesgo confirmado por flujo de código. |
+| Alta | Dos implementaciones distintas de `SimulatedExchangeClient`. | `l1_operational/` y `core/` | Duplicidad confirmada. |
+| Alta | El reinicio de memoria no llama a `PortfolioManager.reset_instance()`. | `system/system_cleanup.py` | Defecto confirmado por inspección. |
+| Alta | `perform_full_cleanup()` puede informar éxito global aunque una suboperación devuelva `success=False`. | `system/system_cleanup.py` | Riesgo confirmado por flujo de código. |
+| Alta | Configuración de modo repartida entre módulos y variables. | `main.py`, `core/config.py`, `comms/config.py`, clientes | Riesgo confirmado; falta prueba integral. |
+| Alta | Cliente Binance puede quedar con `mode=live` y `paper_mode=True` al faltar claves. | `l1_operational/binance_client.py` | Configuración contradictoria confirmada; no prueba envío de órdenes. |
+| Media | `comms.config.config` se crea al importar el módulo. | `comms/config.py` | Riesgo de configuración desactualizada si cambia el entorno después. |
+| Media | Limpieza recursiva de ciertos temporales dentro de `data/`. | `system/system_cleanup.py` | Comportamiento confirmado; alcance debe revisarse. |
+| Pendiente | Integración real de WebSockets, contratos API y frontend. | `api/`, `frontend/` | No auditado por completo. |
+| Pendiente | Compilación, suite de tests y arranque completo. | Todo el repositorio | No ejecutado/validado. |
+
+Los hallazgos anteriores son resultados de inspección estática de los fragmentos y archivos revisados. No equivalen a una reproducción dinámica de todos los fallos.
+
+## 16. Orden recomendado de trabajo
+
+### Fase 0 — Completar auditoría y congelación
+
+1. Inventariar todos los puntos de entrada y distinguir rutas activas de rutas legacy.
+2. Completar el mapa de dependencias L1-L2-L3.
+3. Trazar fuentes de mercado, bus, coordinación y estado.
+4. Auditar validadores, controles de riesgo, `ExecutionGateway` y gestores de órdenes.
+5. Completar el mapa de API, WebSockets y frontend.
+6. Revisar backtesting, tests y dependencias.
+7. Completar auditoría de persistencia, perfiles PAPER y protección de datos.
+8. Registrar defectos confirmados, riesgos y puntos no comprobados.
+9. Generar `INFORME_FASE_0.md`.
+10. Presentar el resumen y esperar autorización.
+
+### Fase 1 — Estabilización técnica, solo tras autorización
+
+1. Consolidar dependencias y entorno reproducible.
+2. Corregir imports y errores de sintaxis sin cambiar estrategias.
+3. Unificar la lectura de configuración y documentar variables.
+4. Crear `.env.example` sin secretos.
+5. Resolver rutas absolutas.
+6. Corregir los defectos técnicos aprobados, con tests de regresión.
+7. Ejecutar tests Python y comprobaciones estáticas.
+8. Ejecutar `npm ci`, typecheck, tests y build del frontend.
+9. Validar arranque y apagado controlados en PAPER.
+10. Generar `INFORME_FASE_1.md` con comandos, versiones, resultados y fallos pendientes.
+
+No se avanzará a otra fase sin cerrar y documentar la anterior.
+
+## 17. Convenciones de desarrollo
+
+- Aplicar Clean Code y responsabilidad única.
+- Mantener funciones pequeñas y con una sola responsabilidad.
+- En código nuevo, usar nombres de funciones en español cuando no exista una convención pública o interfaz previa que deba preservarse.
+- Mantener compatibilidad con contratos existentes, salvo cambio aprobado y documentado.
+- No modificar estrategias, señales, indicadores ni parámetros de riesgo durante la estabilización técnica.
+- No ocultar errores con datos ficticios.
+- Usar mocks solo cuando corresponda y marcarlos claramente.
+- No sustituir integraciones reales por implementaciones simuladas para hacer pasar tests.
+- No registrar secretos, claves ni datos sensibles en logs.
+
+## 18. Seguridad operativa
+
+HRM es software experimental. La simulación PAPER debe permanecer aislada y ser el único ámbito de validación de esta etapa.
+
+- No introducir claves privadas de trading.
+- No habilitar operaciones con fondos reales.
+- No conceder permisos de retirada a claves de API.
+- No asumir que un indicador de modo o una variable de entorno constituye por sí sola una barrera de seguridad.
+- No ejecutar limpiezas o migraciones sin comprender previamente qué rutas afectan.
+- Mantener copias de seguridad verificadas antes de cualquier cambio autorizado sobre persistencia.
+
+## 19. Resumen
+
+HRM contiene una base de código amplia y una arquitectura modular, pero todavía no se ha certificado su funcionamiento integral. Se han identificado defectos relevantes en la restauración de balances PAPER, la migración de datos y el reinicio de singletons, además de duplicidad entre implementaciones del exchange simulado y configuración de modos repartida.
+
+**La Fase 0 está parcialmente realizada y debe completarse con un informe formal. La Fase 1 está pendiente.** El siguiente paso correcto es terminar la auditoría sin modificar el repositorio y presentar `INFORME_FASE_0.md` para revisión y autorización.
