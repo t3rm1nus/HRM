@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from core.logging import logger
+from storage.perfil_datos import obtener_directorio_operaciones
 
 class PaperTradeLogger:
     """
@@ -18,7 +19,7 @@ class PaperTradeLogger:
     Separa completamente los trades de prueba de los reales.
     """
 
-    def __init__(self, base_dir: str = "data/paper_trades", clear_on_init: bool = False):
+    def __init__(self, base_dir: Optional[str] = None, clear_on_init: bool = False):
         """
         Inicializa el logger de paper trades
 
@@ -26,7 +27,7 @@ class PaperTradeLogger:
             base_dir: Directorio base para guardar los trades
             clear_on_init: Si True, limpia todos los trades existentes al inicializar
         """
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(base_dir) if base_dir is not None else obtener_directorio_operaciones()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         # Archivos de salida
@@ -436,19 +437,26 @@ Session Info:
 
 
 # Función de conveniencia para logging rápido
-_paper_logger = None
+_paper_loggers: Dict[str, PaperTradeLogger] = {}
 
-def get_paper_logger(clear_on_init: bool = False) -> PaperTradeLogger:
-    """
-    Retorna instancia singleton del logger
+def get_paper_logger(clear_on_init: bool = False, base_dir: Optional[str] = None) -> PaperTradeLogger:
+    """Obtiene el logger del perfil activo o de un directorio explícito."""
+    directorio = Path(base_dir) if base_dir is not None else obtener_directorio_operaciones()
+    clave = str(directorio.resolve())
+    if clave not in _paper_loggers:
+        _paper_loggers[clave] = PaperTradeLogger(
+            base_dir=str(directorio),
+            clear_on_init=clear_on_init,
+        )
+    elif clear_on_init:
+        _paper_loggers[clave]._clear_existing_files()
+        _paper_loggers[clave].trades = []
+        _paper_loggers[clave]._logged_trade_ids.clear()
+    return _paper_loggers[clave]
 
-    Args:
-        clear_on_init: Si True, limpia trades existentes al inicializar (solo primera vez)
-    """
-    global _paper_logger
-    if _paper_logger is None:
-        _paper_logger = PaperTradeLogger(clear_on_init=clear_on_init)
-    return _paper_logger
+def reiniciar_loggers_paper() -> None:
+    """Vacía la caché de instancias para aislar pruebas o cambios de perfil."""
+    _paper_loggers.clear()
 
 def log_paper_trade(order: Dict[str, Any], **kwargs):
     """Función de conveniencia para loggear trades paper"""
@@ -476,7 +484,6 @@ order = {
 log_paper_trade(order, cycle_id=42, strategy='test_strategy')
 
 # Obtener estadísticas
-logger = get_paper_logger()
 stats = logger.get_session_summary()
 print(f"Total trades: {stats['total_trades']}")
 

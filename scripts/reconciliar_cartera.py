@@ -8,12 +8,19 @@ No modifica ningún archivo.
 from __future__ import annotations
 
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-RUTA_OPERACIONES = Path("data/paper_trades/paper_trades.json")
-RUTA_ESTADO_CARTERA = Path("persistent_state/portfolio_state_live.json")
+RAIZ_PROYECTO = Path(__file__).resolve().parents[1]
+if str(RAIZ_PROYECTO) not in sys.path:
+    sys.path.insert(0, str(RAIZ_PROYECTO))
+
+from storage.perfil_datos import obtener_directorio_operaciones, obtener_ruta_cartera
+
+RUTA_OPERACIONES = obtener_directorio_operaciones() / "paper_trades.json"
+RUTA_ESTADO_CARTERA = obtener_ruta_cartera(modo="simulated")
 RUTA_ESTADO_INICIAL = Path("initial_state.json")
 TOLERANCIA = 1e-9
 

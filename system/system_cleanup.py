@@ -99,7 +99,8 @@ class SystemCleanup:
         """Asegura que los directorios necesarios existan."""
         directories = [
             self.data_dir,
-            self.data_dir / "paper_trades",
+            self.data_dir / "paper" / "persistente" / "paper_trades",
+            self.data_dir / "paper" / "limpia" / "paper_trades",
             self.data_dir / "models",
             self.data_dir / "backtest",
             self.logs_dir,
@@ -170,14 +171,9 @@ def filesystem_cleanup() -> Dict[str, any]:
         cleanup = SystemCleanup()
         success = cleanup.run_cleanup()
         
-        # Limpiar paper trades
-        try:
-            from storage.paper_trade_logger import get_paper_logger
-            get_paper_logger(clear_on_init=True)
-            logger.info("✅ Paper trades cleared")
-        except Exception as e:
-            logger.warning(f"⚠️ Paper trades cleanup failed: {e}")
-        
+        # Los historiales PAPER no pertenecen a la limpieza técnica del sistema.
+        # Su ciclo de vida lo controla system.preparar_sesion por perfil.
+
         return {
             "success": success,
             "deleted_files": 0,  # Could be counted if needed

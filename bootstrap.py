@@ -45,7 +45,6 @@ from comms.message_bus import MessageBus
 from sentiment.sentiment_manager import update_sentiment_texts
 
 from system.system_cleanup import perform_full_cleanup
-from storage.paper_trade_logger import get_paper_logger
 from config_loader import get_initial_balances, get_capital_usd
 
 
@@ -151,13 +150,8 @@ class HRMBootstrap:
         else:
             logger.info(f"✅ Cleanup completed: {cleanup_result.get('deleted_files', 0)} files, {cleanup_result.get('deleted_dirs', 0)} directories removed")
         
-        # Clean paper trades for independent testing
-        try:
-            logger.info("🧹 Cleaning paper trades history...")
-            get_paper_logger(clear_on_init=True)
-            logger.info("✅ Paper trades history cleaned")
-        except Exception as e:
-            logger.warning(f"⚠️ Error cleaning paper trades: {e}")
+        # El historial PAPER se gestiona por perfil en preparar_sesion.
+        # El bootstrap nunca debe borrar operaciones durante un arranque normal.
     
     async def _load_configuration(self, mode: str) -> Dict[str, Any]:
         """Load system configuration."""
@@ -333,7 +327,7 @@ class HRMBootstrap:
         portfolio_manager = PortfolioManager(
             mode=portfolio_mode,
             initial_balance=initial_balance,
-            client=self.components['simulated_client'] if portfolio_mode == "simulated" else self.components['binance_client'],
+            exchange_client=self.components['simulated_client'] if portfolio_mode == "simulated" else self.components['binance_client'],
             symbols=env_config.get("SYMBOLS", ["BTCUSDT", "ETHUSDT"]),
             enable_commissions=env_config.get("ENABLE_COMMISSIONS", True),
             enable_slippage=env_config.get("ENABLE_SLIPPAGE", True)

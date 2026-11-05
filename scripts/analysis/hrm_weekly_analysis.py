@@ -22,10 +22,15 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta
+import sys
 import json
 import re
 from collections import defaultdict
 import warnings
+ROOT_DEL_PROYECTO = Path(__file__).resolve().parents[2]
+if str(ROOT_DEL_PROYECTO) not in sys.path:
+    sys.path.insert(0, str(ROOT_DEL_PROYECTO))
+from storage.perfil_datos import obtener_directorio_operaciones
 warnings.filterwarnings('ignore')
 
 class HRMWeeklyAnalyzer:
@@ -89,7 +94,7 @@ class HRMWeeklyAnalyzer:
 
         # Try multiple possible log locations including paper trades
         log_files = [
-            self.base_path / "data/paper_trades/paper_trades.csv",  # Paper/simulated trades
+            obtener_directorio_operaciones(raiz=self.base_path) / "paper_trades.csv",  # Perfil PAPER activo
             self.base_path / "data/logs/trades.csv",
             self.base_path / "logs/trades.csv",
             self.base_path / "data/trades_history.csv"

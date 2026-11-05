@@ -14,19 +14,25 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sys
+
+RAIZ_PROYECTO = Path(__file__).resolve().parents[2]
+if str(RAIZ_PROYECTO) not in sys.path:
+    sys.path.insert(0, str(RAIZ_PROYECTO))
+from storage.perfil_datos import obtener_ruta_cartera, obtener_ruta_log_cartera
 
 def load_portfolio_history():
     """Load portfolio history from CSV files"""
     portfolio_files = [
-        "data/portfolios/portfolio_log.csv",
-        "portfolio_state_live.json",
-        "portfolio_state.json"
+        obtener_ruta_log_cartera(),
+        obtener_ruta_cartera(modo="live"),
+        obtener_ruta_cartera(modo="simulated"),
     ]
 
     history = []
 
     # Load CSV history
-    csv_file = "data/portfolios/portfolio_log.csv"
+    csv_file = obtener_ruta_log_cartera()
     if os.path.exists(csv_file):
         try:
             df = pd.read_csv(csv_file)
@@ -36,7 +42,7 @@ def load_portfolio_history():
             print(f"❌ Error loading CSV: {e}")
 
     # Load JSON states
-    for json_file in ["portfolio_state_live.json", "portfolio_state.json"]:
+    for json_file in [obtener_ruta_cartera(modo="live"), obtener_ruta_cartera(modo="simulated")]:
         if os.path.exists(json_file):
             try:
                 with open(json_file, 'r') as f:

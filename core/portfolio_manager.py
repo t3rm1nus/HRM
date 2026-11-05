@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 import pandas as pd
 
 from core.logging import logger
+from storage.perfil_datos import obtener_ruta_cartera, obtener_ruta_log_cartera
 from l2_tactic.l2_utils import safe_float
 from core.async_balance_helper import (
     AsyncContextDetector, 
@@ -54,9 +55,8 @@ async def save_portfolio_to_csv(state: Dict[str, Any]):
     try:
         portfolio = state.get("portfolio", {})
 
-        output_dir = "data/portfolios"
-        os.makedirs(output_dir, exist_ok=True)
-        csv_path = os.path.join(output_dir, "portfolio_log.csv")
+        csv_path = obtener_ruta_log_cartera()
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
 
         headers = [
             "timestamp", "cycle_id", "total_value",
@@ -171,6 +171,7 @@ class PortfolioManager:
                 logger.error(f"❌ Error inicializando TaxTracker: {e}")
 
         self.paper_logger = None
+        self._estado_paper_restaurado = False
         if PAPER_LOGGER_AVAILABLE:
             try:
                 self.paper_logger = get_paper_logger()
@@ -188,17 +189,33 @@ class PortfolioManager:
         logger.info(f"✅ PortfolioManager created (await initialize_async() to complete initialization) | mode={self.mode} | initial_balance={initial_balance}")
     
     async def initialize_async(self):
-        """Initialize portfolio manager asynchronously - use this instead of relying on __init__"""
-        if self.exchange_client:
+        """Restaura primero el perfil PAPER y solo después consulta el exchange."""
+        estado_paper_restaurado = self.mode == "simulated" and self.load_from_json()
+        self._estado_paper_restaurado = bool(estado_paper_restaurado)
+        if estado_paper_restaurado:
+            self._sincronizar_cartera_con_exchange_simulado()
+            logger.info("📂 Cartera PAPER restaurada desde el perfil activo")
+        elif self.exchange_client:
             if self.mode == "simulated" or (hasattr(self.exchange_client, 'paper_mode') and self.exchange_client.paper_mode):
                 await self._init_portfolio_from_simulated_client_async()
-            else:
-                if not await self._sync_from_client_async():
-                    self._init_portfolio()
+            elif not await self._sync_from_client_async():
+                self._init_portfolio()
         else:
             self._init_portfolio()
-            
+
         logger.info(f"✅ PortfolioManager fully initialized | mode={self.mode} | balance={self.portfolio.get('total', self.initial_balance):.2f} USDT")
+
+    def _sincronizar_cartera_con_exchange_simulado(self) -> None:
+        """Aplica los balances restaurados al exchange simulado antes de operar."""
+        if not self.exchange_client or not hasattr(self.exchange_client, "force_reset"):
+            return
+        balances = {
+            "BTC": self.portfolio.get("BTCUSDT", {}).get("position", 0.0),
+            "ETH": self.portfolio.get("ETHUSDT", {}).get("position", 0.0),
+            "USDT": self.portfolio.get("USDT", {}).get("free", 0.0),
+        }
+        self.exchange_client.force_reset(balances)
+        logger.info("🔄 Exchange PAPER hidratado desde cartera persistida: %s", balances)
 
     # =========================
     # SYNC FROM EXCHANGE (CRITICAL FIX)
@@ -1512,8 +1529,7 @@ class PortfolioManager:
             import json
             
             if filepath is None:
-                # Default path for live mode state
-                filepath = "persistent_state/portfolio_state_live.json"
+                filepath = str(obtener_ruta_cartera(modo=self.mode))
             
             # Ensure directory exists
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -1568,8 +1584,7 @@ class PortfolioManager:
             import json
             
             if filepath is None:
-                # Default path for live mode state
-                filepath = "persistent_state/portfolio_state_live.json"
+                filepath = str(obtener_ruta_cartera(modo=self.mode))
             
             # Check if file exists
             if not os.path.exists(filepath):

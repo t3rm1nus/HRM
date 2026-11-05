@@ -388,6 +388,18 @@ async def main():
             
             # Bootstrap simulated exchange client if in paper mode
             simulated_client = bootstrap_simulated_exchange(config)
+            if (
+                simulated_client
+                and portfolio_manager
+                and getattr(portfolio_manager, "_estado_paper_restaurado", False)
+            ):
+                balances_restaurados = {
+                    "BTC": portfolio_manager.portfolio.get("BTCUSDT", {}).get("position", 0.0),
+                    "ETH": portfolio_manager.portfolio.get("ETHUSDT", {}).get("position", 0.0),
+                    "USDT": portfolio_manager.portfolio.get("USDT", {}).get("free", 0.0),
+                }
+                simulated_client.force_reset(balances_restaurados)
+                logger.info("✅ Exchange simulado restaurado desde el perfil PAPER: %s", balances_restaurados)
             
             order_manager = OrderManager(state_coordinator, portfolio_manager, mode=mode, simulated_client=simulated_client)
             components['order_manager'] = order_manager
@@ -760,7 +772,8 @@ async def main():
         
         # Save initial state to persistent storage
         portfolio_manager.save_to_json()
-        logger.info("✅ Initial portfolio state saved to persistent_state/portfolio_state_live.json")
+        from storage.perfil_datos import obtener_ruta_cartera
+        logger.info("✅ Initial portfolio state saved to %s", obtener_ruta_cartera(modo=portfolio_manager.mode))
         
         # ================================================================
         # STEP 18: MAIN TRADING LOOP
@@ -855,13 +868,14 @@ async def main():
                             recovery_success = False
                             recovery_source = None
                             
-                            # STEP 1: Try to load from persistent_state/portfolio_state_live.json
+                            # STEP 1: Try to load from the active PAPER profile
                             try:
                                 if hasattr(portfolio_manager, 'load_from_json'):
                                     loaded = portfolio_manager.load_from_json()
                                     if loaded:
                                         # Successfully loaded from persistent storage
-                                        recovery_source = "persistent_state/portfolio_state_live.json"
+                                        from storage.perfil_datos import obtener_ruta_cartera
+                                        recovery_source = str(obtener_ruta_cartera(modo=portfolio_manager.mode))
                                         recovery_success = True
                                         logger.info(f"✅ State recovered from persistent storage: {recovery_source}")
                                         logger.info(f"   BTC: {portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0):.6f}")

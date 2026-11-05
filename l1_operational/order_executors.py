@@ -241,7 +241,7 @@ class OrderExecutors:
                         'filled_quantity': quantity,  # CRITICAL FIX: Campo 'filled_quantity' requerido
                         'timestamp': datetime.now().isoformat(),
                         'execution_type': 'SIMULATED_TRADE',
-                        'order_id': trade_result['trade_id'],
+                        'order_id': trade_result['order_id'],
                         'order_type': 'MARKET',  # CRITICAL FIX: Campo 'order_type' requerido
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,

@@ -649,3 +649,71 @@ Si una ventana se cierra manualmente, su PID puede dejar de estar activo. En ese
 - El controlador no cambia `PAPER_MODE`, `BINANCE_MODE` ni las claves de API. Mantén HRM en paper mientras no se haya validado de forma independiente.
 - Los scripts abren los servicios, pero no certifican que el backend complete su inicialización ni que el frontend compile correctamente. Comprueba los mensajes de ambas ventanas y los tests del proyecto.
 - La URL local concreta del frontend depende de la configuración de Vite. Normalmente Vite muestra la dirección en la propia consola.
+
+
+## 15. Almacenamiento PAPER separado por perfil
+
+HRM mantiene dos perfiles PAPER físicamente independientes. El modo configurado se aplica en el siguiente arranque y `system.preparar_sesion` selecciona el perfil antes de inicializar la cartera, el logger de operaciones y la API.
+
+### 15.1. Estructura de datos
+
+```text
+data/
+└── paper/
+    ├── persistente/
+    │   ├── portfolio_state.json
+    │   ├── portfolio_log.csv
+    │   └── paper_trades/
+    │       ├── paper_trades.json
+    │       ├── paper_trades.csv
+    │       └── summary.json
+    └── limpia/
+        ├── portfolio_state.json
+        ├── portfolio_log.csv
+        └── paper_trades/
+            ├── paper_trades.json
+            ├── paper_trades.csv
+            └── summary.json
+```
+
+`persistent_state/modo_sesion.json` sigue guardando únicamente el modo seleccionado. No contiene balances ni historial. El estado LIVE mantiene su ruta independiente `persistent_state/portfolio_state_live.json`; el perfil PAPER no escribe en ella.
+
+### 15.2. Comportamiento de los perfiles
+
+- **PERSISTENTE:** conserva cartera, operaciones, estadísticas y evolución de cartera entre reinicios.
+- **LIMPIA:** utiliza otro directorio. Ese directorio se vacía al arrancar en modo limpia, pero nunca borra ni modifica el perfil persistente.
+- **Cambio de modo:** se guarda la selección y se aplica al reiniciar HRM. Al volver de limpia a persistente se recupera el historial persistente anterior, sin mezclar operaciones.
+- **LIVE:** no aplica la limpieza PAPER ni utiliza los archivos de los perfiles PAPER.
+- **Botón «Reiniciar datos PAPER»:** es una acción distinta de cambiar a LIMPIA. Solo aparece en PAPER persistente, exige escribir `CONFIRMAR` y programa un reinicio diferido del perfil persistente. No borra nada al pulsarlo; el borrado ocurre en el siguiente arranque PAPER persistente. No elimina el perfil LIMPIA ni configuración, credenciales, modelos o logs técnicos.
+
+### 15.3. Migración de instalaciones anteriores
+
+En el primer arranque con esta versión, HRM copia al perfil persistente los datos heredados que encuentre:
+
+- `persistent_state/portfolio_state_live.json`, solo si el contenido identifica explícitamente una cartera `simulated` o `paper`. Si no contiene el modo, no se migra automáticamente para evitar importar por error un estado LIVE.
+- Los archivos JSON/CSV de `data/paper_trades/`.
+- `data/portfolios/portfolio_log.csv`.
+
+La migración **copia** los archivos y no elimina ni sobrescribe el origen. Si el archivo de destino ya existe, se respeta el destino y no se reemplaza. Se registra una única marca `persistent_state/migracion_paper_perfiles_v1.json`: así, un reinicio explícito del perfil persistente no vuelve a importar los archivos legacy conservados como copia de seguridad. Los originales antiguos permanecen intactos; a partir de la migración, HRM utiliza exclusivamente las rutas del perfil activo.
+
+### 15.4. Componentes que respetan el perfil
+
+- `storage/perfil_datos.py`: fuente común de rutas y selección de perfil.
+- `storage/paper_trade_logger.py`: instancia un logger independiente por directorio de perfil. No crea un logger global al importar el módulo.
+- `core/portfolio_manager.py`: guarda y restaura la cartera en el perfil activo. Al restaurar PAPER, hidrata los balances del exchange simulado antes de sincronizar la cartera.
+- `api/servicios/servicio_operaciones.py`: consulta el JSON de operaciones del perfil activo. La variable `HRM_RUTA_OPERACIONES`, si está definida, sigue teniendo prioridad como ruta explícita.
+- `system/preparar_sesion.py`: realiza la migración y, en modo limpia, borra exclusivamente el directorio de ese perfil. También consume el marcador de reinicio persistente solo después de completar su limpieza.
+- `POST /sesion/reiniciar-datos`: valida modo operativo PAPER, perfil persistente activo/configurado y confirmación exacta antes de crear el marcador diferido.
+- `bootstrap.py` y `system/system_cleanup.py`: la limpieza técnica ya no borra operaciones PAPER en cada arranque.
+
+### 15.5. Verificación
+
+Desde la raíz del repositorio, ejecuta las pruebas focalizadas:
+
+```bash
+pytest -q tests/test_preparar_sesion.py tests/test_perfil_datos.py tests/api/test_rutas_operaciones.py
+```
+
+Después de actualizar, arranca primero en PAPER persistente y comprueba que aparecen las operaciones antiguas. Cambia a limpia, reinicia y verifica que empieza sin operaciones. Vuelve a persistente, reinicia y comprueba que reaparecen exactamente la cartera y el historial anteriores. No utilices LIVE para validar esta funcionalidad.
+
+**Importante:** cambiar a LIMPIA y pulsar «Reiniciar datos PAPER» son operaciones distintas. LIMPIA solo vacía `data/paper/limpia`; el botón programa el borrado de `data/paper/persistente` para el siguiente arranque PAPER persistente.

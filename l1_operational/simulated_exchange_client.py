@@ -1,4 +1,5 @@
 import time
+import uuid
 from typing import Dict, List, Any, Optional
 from core.logging import logger
 
@@ -241,8 +242,10 @@ class SimulatedExchangeClient:
             self.balances[base_asset] -= qty
             self.balances[quote_asset] += (cost - fee)
 
+        order_id = f"simulated_{uuid.uuid4().hex}"
         trade = {
             "trade_id": trade_id,
+            "order_id": order_id,
             "timestamp": time.time(),
             "symbol": symbol,
             "side": side,
@@ -257,7 +260,7 @@ class SimulatedExchangeClient:
         self.trades.append(trade)
 
         self.order_history.append({
-            "order_id": f"simulated_{trade_id}",
+            "order_id": order_id,
             "symbol": symbol,
             "side": side,
             "qty": qty,

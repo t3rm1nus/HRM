@@ -14,12 +14,13 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import ValidationError
 
 from api.esquemas.operaciones import LoteOrdenes, OrderRecord
+from storage.perfil_datos import obtener_directorio_operaciones
 
 registro = logging.getLogger(__name__)
 
 # Constantes
 VARIABLE_ENTORNO_RUTA = "HRM_RUTA_OPERACIONES"
-RUTA_OPERACIONES_POR_DEFECTO = "data/paper_trades/paper_trades.json"
+RUTA_OPERACIONES_POR_DEFECTO = "paper_trades.json"
 TAMANO_POR_DEFECTO = 50
 TAMANO_MAXIMO = 200
 
@@ -31,7 +32,11 @@ class ErrorLecturaOperaciones(Exception):
 
 
 def obtener_ruta_operaciones() -> Path:
-    return Path(os.getenv(VARIABLE_ENTORNO_RUTA, RUTA_OPERACIONES_POR_DEFECTO))
+    """Resuelve la ruta del historial del perfil PAPER activo."""
+    ruta_configurada = os.getenv(VARIABLE_ENTORNO_RUTA)
+    if ruta_configurada:
+        return Path(ruta_configurada)
+    return obtener_directorio_operaciones() / RUTA_OPERACIONES_POR_DEFECTO
 
 
 def leer_contenido_json(ruta: Path) -> Optional[Any]:

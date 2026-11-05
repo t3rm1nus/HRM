@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 
 from api.esquemas.modo_sesion import EstadoModoSesion, ModoSesion
+from api.servicios.servicio_estado_vivo import servicio_estado_vivo
+from storage.perfil_datos import hay_reset_persistente_pendiente
 
 registro = logging.getLogger(__name__)
 
@@ -75,8 +77,11 @@ registro_modo_activo = RegistroModoActivo()
 def obtener_estado_modo() -> EstadoModoSesion:
     activo = registro_modo_activo.obtener()
     configurado = leer_modo_configurado()
+    modo_operativo = servicio_estado_vivo.obtener_estado_sistema().get("mode", "unknown")
     return EstadoModoSesion(
         modo_activo=activo,
         modo_configurado=configurado,
         reinicio_pendiente=activo is not None and activo != configurado,
+        modo_operativo=modo_operativo,
+        reinicio_datos_pendiente=hay_reset_persistente_pendiente(),
     )
