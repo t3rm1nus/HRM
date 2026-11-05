@@ -176,6 +176,7 @@ async def main():
             mode = "simulated"
             logger.info("🟡 MODO SIMULADO detectado (PAPER_MODE!=false)")
         servicio_estado_vivo.registrar_modo(mode)
+        preparar_sesion(es_modo_live=(mode == "live"))
 
         # ================================================================
         # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
@@ -1443,6 +1444,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.servicios.servicio_websockets import servicio_websockets
 from api.servicios.servicio_estado_vivo import servicio_estado_vivo
 from api.rutas.rutas_operaciones import router_operaciones
+from api.rutas.rutas_modo_sesion import router_modo_sesion
+from system.preparar_sesion import preparar_sesion
 from api.rutas.rutas_mercado import router_mercado
 from api.servicios.servicio_mercado import servicio_mercado
 from fastapi.responses import JSONResponse
@@ -1470,6 +1473,7 @@ app.add_middleware(
 
 
 app.include_router(router_operaciones)
+app.include_router(router_modo_sesion)
 app.include_router(router_mercado)
 
 

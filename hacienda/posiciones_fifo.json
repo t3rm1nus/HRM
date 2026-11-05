@@ -999,6 +999,38 @@
       "timestamp": "2026-11-04T20:27:00.257625",
       "operation_id": "BTCUSDT_2026-11-04T20:27:00.257625_2158463083392",
       "remaining_quantity": 0.001557209090682425
+    },
+    {
+      "symbol": "BTCUSDT",
+      "quantity": 0.000941922325317365,
+      "price": 79664.2122,
+      "timestamp": "2026-11-05T13:07:55.462576",
+      "operation_id": "BTCUSDT_2026-11-05T13:07:55.462576_1853600460928",
+      "remaining_quantity": 0.000941922325317365
+    },
+    {
+      "symbol": "BTCUSDT",
+      "quantity": 0.0015668849607389694,
+      "price": 79730.10513,
+      "timestamp": "2026-11-05T13:15:35.939243",
+      "operation_id": "BTCUSDT_2026-11-05T13:15:35.939243_1853685915776",
+      "remaining_quantity": 0.0015668849607389694
+    },
+    {
+      "symbol": "BTCUSDT",
+      "quantity": 0.0009408163777315035,
+      "price": 79757.859,
+      "timestamp": "2026-11-05T13:36:08.831376",
+      "operation_id": "BTCUSDT_2026-11-05T13:36:08.831376_2222280882752",
+      "remaining_quantity": 0.0009408163777315035
+    },
+    {
+      "symbol": "BTCUSDT",
+      "quantity": 0.001566850712872358,
+      "price": 79757.859,
+      "timestamp": "2026-11-05T13:36:18.232808",
+      "operation_id": "BTCUSDT_2026-11-05T13:36:18.232808_2222360738496",
+      "remaining_quantity": 0.001566850712872358
     }
   ],
   "ETHUSDT": [
@@ -1849,6 +1881,38 @@
       "timestamp": "2026-11-04T20:27:00.269623",
       "operation_id": "ETHUSDT_2026-11-04T20:27:00.269623_2158463078656",
       "remaining_quantity": 0.031000214094226285
+    },
+    {
+      "symbol": "ETHUSDT",
+      "quantity": 0.031375370752297724,
+      "price": 2391.605205,
+      "timestamp": "2026-11-05T13:07:55.474577",
+      "operation_id": "ETHUSDT_2026-11-05T13:07:55.474577_1853595844800",
+      "remaining_quantity": 0.031375370752297724
+    },
+    {
+      "symbol": "ETHUSDT",
+      "quantity": 0.03136784892725804,
+      "price": 2391.024915,
+      "timestamp": "2026-11-05T13:15:35.951241",
+      "operation_id": "ETHUSDT_2026-11-05T13:15:35.951241_1853686073856",
+      "remaining_quantity": 0.03136784892725804
+    },
+    {
+      "symbol": "ETHUSDT",
+      "quantity": 0.0313739270116962,
+      "price": 2391.71526,
+      "timestamp": "2026-11-05T13:36:08.842376",
+      "operation_id": "ETHUSDT_2026-11-05T13:36:08.842376_2222329167296",
+      "remaining_quantity": 0.0313739270116962
+    },
+    {
+      "symbol": "ETHUSDT",
+      "quantity": 0.031352371758529535,
+      "price": 2391.4151099999995,
+      "timestamp": "2026-11-05T13:36:18.243808",
+      "operation_id": "ETHUSDT_2026-11-05T13:36:18.243808_2222329564032",
+      "remaining_quantity": 0.031352371758529535
     }
   ]
 }
