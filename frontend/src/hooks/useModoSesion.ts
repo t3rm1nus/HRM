@@ -12,11 +12,14 @@ export interface UseModoSesionResult {
 
 export const useModoSesion = (): UseModoSesionResult => {
   const queryClient = useQueryClient();
+  const INTERVALO_REINTENTO_MS = 3_000;
 
   const { data, isLoading, error, refetch } = useQuery<EsModoSesion, Error>({
     queryKey: ['modo-sesion'],
     queryFn: fetchModoSesion,
     staleTime: 60_000,
+    retry: true,
+    retryDelay: INTERVALO_REINTENTO_MS,
   });
 
   const { mutateAsync: cambiarModo, isPending: mutacionEnCurso } = useMutation<

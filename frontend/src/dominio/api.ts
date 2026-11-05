@@ -89,11 +89,13 @@ export const CODIGOS_ESTADO_API = {
   SERVER_ERROR: 500,
 } as const;
 
+const URL_BACKEND_POR_DEFECTO = 'http://127.0.0.1:8000';
+
+const quitarBarraFinal = (url: string): string => url.replace(/\/$/, '');
+
 const obtenerBaseApi = (): string => {
   const baseConfigurada = import.meta.env.VITE_API_BASE_URL;
-  if (baseConfigurada) return baseConfigurada.replace(/\/$/, '');
-  if (typeof window !== 'undefined') return window.location.origin;
-  return 'http://127.0.0.1:8000';
+  return quitarBarraFinal(baseConfigurada || URL_BACKEND_POR_DEFECTO);
 };
 
 export const APIS = {
