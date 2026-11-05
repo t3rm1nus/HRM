@@ -66,49 +66,20 @@ export type ApiError = {
   details?: Record<string, string[]>;
 };
 
-export const esquemaVersion = z.object({
-  app_version: z.string(),
-  framework: z.string(),
-  python_version: z.string(),
-});
-export const esquemaError = z.object({
-  detail: z.string(),
-  code: z.string().optional(),
-  path: z.string().optional(),
-  details: z.record(z.string(), z.array(z.string())).optional(),
-});
-
-export type HealthCheckResponse = z.infer<typeof esquemaHealthCheck>;
-export type StatusResponse = z.infer<typeof esquemaStatus>;
-export type PortfolioResponse = z.infer<typeof esquemaPortfolio>;
-export type VersionResponse = z.infer<typeof esquemaVersion>;
-export type ApiError = {
-  message: string;
-  statusCode: number;
-  code?: string;
-  path?: string;
-  details?: Record<string, string[]>;
-};
-
 export interface HeadersRespuesta {
   'content-type': string;
   'x-request-id': string;
   'x-response-time': string;
 }
 
-export interface EsModoSesion {
-  modo_activo: 'persistente' | 'limpia' | null;
-  modo_configurado: 'persistente' | 'limpia';
-  reinicio_pendiente: boolean;
-}
-
 export const esquemaEstadoModoSesion = z.object({
-  modo_activo: z.enum(['persistente', 'limpia', null]),
+  modo_activo: z.enum(['persistente', 'limpia']).nullable(),
   modo_configurado: z.enum(['persistente', 'limpia']),
   reinicio_pendiente: z.boolean(),
 });
 
 export type EsModoSesion = z.infer<typeof esquemaEstadoModoSesion>;
+export type ModoSesion = EsModoSesion['modo_configurado'];
 
 export const CODIGOS_ESTADO_API = {
   BAD_REQUEST: 400,

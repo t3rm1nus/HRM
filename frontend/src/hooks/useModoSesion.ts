@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModoSesion, cambiarModoSesion } from '../api/modoSesion';
-import { EsModoSesion } from '../dominio';
+import type { EsModoSesion } from '../dominio';
 
 export interface UseModoSesionResult {
   modoActual: EsModoSesion | undefined;
@@ -19,7 +19,7 @@ export const useModoSesion = (): UseModoSesionResult => {
     staleTime: 60_000,
   });
 
-  const { mutateAsync: cambiarModo, isLoading: mutationIsLoading } = useMutation<
+  const { mutateAsync: cambiarModo, isPending: mutacionEnCurso } = useMutation<
     EsModoSesion,
     Error,
     'persistente' | 'limpia'
@@ -37,7 +37,7 @@ export const useModoSesion = (): UseModoSesionResult => {
 
   return {
     modoActual: data,
-    cargando: isLoading || mutationIsLoading,
+    cargando: isLoading || mutacionEnCurso,
     error,
     cambiarModo: cambiarModoWrapper,
     refetch,

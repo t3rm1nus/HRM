@@ -1,5 +1,6 @@
 import { obtenerApiClient } from './clienteApi';
-import { APIS, esquemaEstadoModoSesion, EsModoSesion } from '../dominio';
+import { APIS, esquemaEstadoModoSesion } from '../dominio';
+import type { EsModoSesion } from '../dominio';
 
 export const fetchModoSesion = async (): Promise<EsModoSesion> => {
   const respuesta = await obtenerApiClient().get<EsModoSesion>(

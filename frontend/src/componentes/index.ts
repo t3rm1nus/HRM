@@ -5,4 +5,5 @@ export * from './sidebar';
 export * from './Header';
 export * from './graficas';
 export * from './mercado';
-export * from './SwitchModoSesion';
+export * from './ui/SwitchModoSesion';
+export * from './ControlModoSesion';

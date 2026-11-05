@@ -1,6 +1,7 @@
 import React from 'react';
 import { useModoStore } from '../estado/storeModo';
 import { BadgeModo } from './ui/badgeModo';
+import { ControlModoSesion } from './ControlModoSesion';
 import { ModalConfirmacionFuerte } from './modaConfirmacionFuerte';
 import { ModoAplicacion, PALABRAS_VERIFICACION } from '../dominio/modo';
 
@@ -58,6 +59,7 @@ export const Navbar: React.FC = () => {
                 MODO SIN CONFIRMAR
               </span>
             )}
+            <ControlModoSesion />
             <div className="flex items-center gap-4 text-sm text-gray-600">
               <span className={`flex items-center gap-1.5 ${estadoConexion === 'conectado' ? 'text-green-600' : estadoConexion === 'desconectado' ? 'text-red-600' : 'text-amber-600'}`}>
                 <span className={`w-2 h-2 rounded-full ${estadoConexion === 'conectado' ? 'bg-green-500' : estadoConexion === 'desconectado' ? 'bg-red-500' : 'bg-amber-500'}`} />
