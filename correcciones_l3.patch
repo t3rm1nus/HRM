@@ -1,0 +1,28 @@
+diff --git a/l3_strategy/models.py b/l3_strategy/models.py
+index 17a4383..0000000 100644
+--- a/l3_strategy/models.py
++++ b/l3_strategy/models.py
+@@ -372,7 +372,6 @@ class StrategicSignal:
+
+ # ===== PERFORMANCE TRACKING MODELS =====
+
+-@dataclass
+ @dataclass
+ class StrategicPerformance:
+     """Métricas de performance estratégica"""
+diff --git a/l3_strategy/regime_specific_models.py b/l3_strategy/regime_specific_models.py
+index 950478f..0000000 100644
+--- a/l3_strategy/regime_specific_models.py
++++ b/l3_strategy/regime_specific_models.py
+@@ -735,9 +735,10 @@ class CrisisMarketModel:
+         alt_allocation = remaining_allocation * 0.5   # Alternative safe assets
+
+         asset_allocation = {
+             'BTC': btc_allocation,
+             'ETH': eth_allocation,
+-            'USDT': cash_allocation
++            'USDT': cash_allocation,
++            'ALT': alt_allocation
+         }
+
+         # Ultra-conservative risk parameters
