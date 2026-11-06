@@ -2,7 +2,7 @@
 
 > **Estado de esta documentación:** actualización basada en la inspección estática del código y de las salidas de consola compartidas durante la auditoría de noviembre de 2026.
 >
-> **Estado del proyecto:** en auditoría técnica. La Fase 0 no está cerrada y la Fase 1 no se ha ejecutado ni validado.
+> **Estado del proyecto:** en auditoría técnica. La Fase 0 no está cerrada y la Fase 1 no se ha ejecutado ni validado completamente.
 >
 > **Importante:** este documento distingue entre código encontrado, código conectado al punto de entrada y comportamiento probado. La presencia de una clase o función no demuestra que el sistema funcione de extremo a extremo.
 
@@ -32,10 +32,11 @@ HRM debe mantenerse en modo PAPER durante el desarrollo y las pruebas. Este READ
 | Área | Estado conocido | Qué falta |
 |---|---|---|
 | Auditoría de arquitectura | Parcial | Completar el inventario y el flujo de todos los componentes. |
-| Aislamiento PAPER PERSISTENTE/LIMPIA | Implementación presente; con riesgos detectados | Corregir y probar la restauración de balances, migración y aislamiento de extremo a extremo. |
+| Aislamiento PAPER PERSISTENTE/LIMPIA | Implementación presente; con riesgos detectados | Completar las pruebas de restauración de balances, migración y aislamiento de extremo a extremo. |
 | Arranque del backend | No certificado | Validar en entorno reproducible, sin alterar datos existentes. |
 | Frontend | No certificado en esta auditoría | `npm ci`, typecheck, tests y build. |
-| Tests Python | Hay tests identificados | Ejecutar la suite y documentar resultados reales. |
+| Tests Python oficiales | `tests_nuevos/` es la única suite activa | Ejecutar y documentar sus resultados reales. |
+| Tests históricos | `tests/` está congelada y fuera de la validación oficial | Conservar como referencia histórica, sin modificar ni ejecutar en la validación ordinaria. |
 | Dependencias | No consolidadas de forma demostrada | Auditar imports y fijar versiones compatibles. |
 | Backtesting | Código presente | Validar datos, costes, sesgos y reproducibilidad. |
 | Integración completa L1-L2-L3 | No certificada | Trazar y probar el flujo real. |
@@ -45,7 +46,7 @@ HRM debe mantenerse en modo PAPER durante el desarrollo y las pruebas. Este READ
 
 **Fase 0 — Auditoría y congelación:** en curso. Se han inspeccionado partes relevantes del arranque, configuración, perfiles PAPER, persistencia, exchange simulado, cartera, gestores de órdenes y limpieza. Todavía falta completar la revisión de todas las áreas y emitir el informe definitivo `INFORME_FASE_0.md`.
 
-**Fase 1 — Estabilización técnica:** pendiente. No se ha realizado una validación completa de instalación, compilación, tests, arranque y apagado. Tampoco se debe afirmar que el backend o el frontend compilan correctamente.
+**Fase 1 — Estabilización técnica:** pendiente de validación completa. La validación automatizada de Python debe realizarse exclusivamente sobre `tests_nuevos/`. También quedan pendientes las comprobaciones de instalación, compilación, arranque y apagado. No se debe utilizar la suite histórica `tests/` como criterio de aceptación.
 
 Hasta cerrar la Fase 0 y autorizar expresamente los cambios, no se deben modificar código, estrategias, señales, indicadores, parámetros de riesgo, configuración PAPER/LIVE ni datos persistentes.
 
@@ -77,7 +78,8 @@ Esta división es la arquitectura prevista. No debe asumirse que cada módulo pa
 | `frontend/` | Aplicación web; tecnología declarada React, TypeScript y Vite. |
 | `backtesting/` | Herramientas de backtesting. |
 | `ml_training/` | Scripts de entrenamiento offline. |
-| `tests/` | Pruebas automatizadas. |
+| `tests/` | Suite histórica congelada. No forma parte de la validación oficial actual. |
+| `tests_nuevos/` | Suite oficial y activa de pruebas automatizadas Python. |
 | `hacienda/` | Herramientas auxiliares de seguimiento fiscal. |
 | `scripts/` | Scripts de soporte y control. |
 | `persistent_state/` | Configuración y determinados estados persistentes. |
@@ -271,17 +273,88 @@ La presencia de scripts de entrenamiento tampoco demuestra que el autoaprendizaj
 
 ## 12. Tests y validación
 
-Se han identificado tests relacionados con perfiles PAPER, preparación de sesión y limpieza. Entre los nombres inspeccionados se encuentran:
+### 12.1. Suite oficial y activa: `tests_nuevos/`
 
-- `tests/test_preparar_sesion.py`
-- `tests/test_perfil_datos.py`
-- `tests/api/test_rutas_operaciones.py`
+**`tests_nuevos/` es la única suite oficial de pruebas automatizadas Python de HRM.**
 
-También se han inspeccionado fragmentos de tests para comprobar la conservación del historial PAPER durante la limpieza técnica.
+Toda validación ordinaria, ejecución de regresiones y comprobación de cambios debe realizarse sobre esta carpeta.
 
-**No se ha ejecutado la suite completa en esta fase de auditoría.** La existencia de un test no demuestra que pase en el entorno actual.
+Los tests nuevos deben incorporarse a `tests_nuevos/`, respetando su organización y estructura existente.
 
-La validación pendiente debe registrar el comando exacto, versión de Python, resultado, duración y fallos. Los mocks deben identificarse y no sustituir integraciones reales cuando se esté validando una integración.
+**Comando oficial para ejecutar la suite Python:**
+
+```powershell
+python -m pytest tests_nuevos/ -v
+```
+
+Para ejecutar un archivo concreto:
+
+```powershell
+python -m pytest tests_nuevos/ruta/del_test.py -v
+```
+
+Para comprobar qué pruebas se van a recoger dentro de la suite activa:
+
+```powershell
+python -m pytest --collect-only tests_nuevos/ -q
+```
+
+La validación debe registrar:
+
+- Comando exacto utilizado.
+- Versión de Python.
+- Número de tests recogidos.
+- Número de tests superados y fallidos.
+- Duración.
+- Errores y dependencias ausentes.
+- Resultado final.
+
+Los tests de regresión de cualquier corrección aprobada deben añadirse a `tests_nuevos/`.
+
+### 12.2. Suite histórica congelada: `tests/`
+
+La carpeta `tests/` contiene pruebas históricas del proyecto y está **congelada**.
+
+Esta carpeta no forma parte de la suite oficial actual de HRM.
+
+Reglas obligatorias:
+
+1. No ejecutar `tests/` como parte de la validación ordinaria.
+2. No utilizar sus resultados para determinar si una modificación actual pasa o falla.
+3. No adaptar sus pruebas a los cambios actuales de arquitectura.
+4. No modificar sus archivos como parte del mantenimiento ordinario.
+5. No borrar sus archivos.
+6. No trasladar sus archivos a `tests_nuevos/` automáticamente.
+7. Conservarlos en el repositorio como referencia histórica.
+8. Consultarlos únicamente cuando sea necesario recuperar o estudiar un comportamiento anterior y exista una autorización expresa para ello.
+
+La congelación significa que el contenido de `tests/` se conserva tal como está, sin participar en el ciclo normal de desarrollo y validación.
+
+### 12.3. Scripts de diagnóstico manual
+
+Los scripts de diagnóstico manual que puedan existir en el repositorio se consideran herramientas auxiliares.
+
+No deben confundirse con la suite oficial de pruebas automatizadas.
+
+Su ejecución debe ser explícita y voluntaria. No deben ejecutarse automáticamente durante la importación de módulos ni interferir con la recogida de tests de `tests_nuevos/`.
+
+La presencia de un script de diagnóstico no implica que forme parte de la suite activa.
+
+### 12.4. Separación obligatoria de las suites
+
+La separación entre ambas carpetas es una decisión de organización del proyecto:
+
+| Elemento | Función | Política |
+|---|---|---|
+| `tests_nuevos/` | Suite oficial de pruebas automatizadas | Activa. Se ejecuta, mantiene y amplía. |
+| `tests/` | Suite histórica | Congelada. Se conserva sin modificaciones y fuera de la validación ordinaria. |
+| Scripts de diagnóstico | Comprobaciones manuales específicas | Ejecución manual y explícita. |
+
+**Importante:** los comandos oficiales de pytest deben indicar expresamente `tests_nuevos/`. No se debe utilizar `python -m pytest` sin especificar la ruta de la suite, porque podría recoger pruebas históricas u otros archivos de prueba fuera del ámbito autorizado.
+
+No se deben borrar carpetas ni archivos históricos para resolver problemas de descubrimiento de pytest. La solución debe estar en la selección explícita de la suite activa y, cuando corresponda, en la configuración de descubrimiento.
+
+Los mocks deben identificarse y no sustituir integraciones reales cuando se esté validando una integración.
 
 ## 13. Dependencias y entorno
 
@@ -301,7 +374,7 @@ No se deben instalar paquetes indiscriminadamente ni actualizar versiones sin co
 
 ## 14. Instalación y ejecución
 
-**No se ofrece aquí un procedimiento de arranque certificado**, porque la Fase 1 aún no se ha realizado y la Fase 0 sigue abierta.
+**No se ofrece aquí un procedimiento de arranque certificado**, porque la Fase 1 aún no se ha completado y la Fase 0 sigue abierta.
 
 No ejecutes scripts de inicio, reinicio o limpieza como método de diagnóstico mientras no se haya revisado su efecto sobre los datos. En particular, se ha identificado un script de Windows que puede reemplazar el estado inicial y borrar datos de estado/operaciones; debe auditarse antes de recomendar su uso.
 
@@ -314,7 +387,7 @@ Cuando la Fase 1 esté autorizada y completada, esta sección deberá incluir un
 - Comprobaciones previas al arranque.
 - Arranque y apagado controlados.
 - Recuperación y conservación de los datos.
-- Comandos de tests y validación.
+- Comandos de tests y validación, utilizando exclusivamente `tests_nuevos/` para la suite oficial Python.
 
 ## 15. Riesgos y bloqueantes conocidos
 
@@ -330,7 +403,7 @@ Cuando la Fase 1 esté autorizada y completada, esta sección deberá incluir un
 | Media | `comms.config.config` se crea al importar el módulo. | `comms/config.py` | Riesgo de configuración desactualizada si cambia el entorno después. |
 | Media | Limpieza recursiva de ciertos temporales dentro de `data/`. | `system/system_cleanup.py` | Comportamiento confirmado; alcance debe revisarse. |
 | Pendiente | Integración real de WebSockets, contratos API y frontend. | `api/`, `frontend/` | No auditado por completo. |
-| Pendiente | Compilación, suite de tests y arranque completo. | Todo el repositorio | No ejecutado/validado. |
+| Pendiente | Compilación, suite oficial de tests y arranque completo. | Todo el repositorio | No ejecutado/validado completamente. |
 
 Los hallazgos anteriores son resultados de inspección estática de los fragmentos y archivos revisados. No equivalen a una reproducción dinámica de todos los fallos.
 
@@ -343,7 +416,7 @@ Los hallazgos anteriores son resultados de inspección estática de los fragment
 3. Trazar fuentes de mercado, bus, coordinación y estado.
 4. Auditar validadores, controles de riesgo, `ExecutionGateway` y gestores de órdenes.
 5. Completar el mapa de API, WebSockets y frontend.
-6. Revisar backtesting, tests y dependencias.
+6. Revisar backtesting, dependencias y organización de las pruebas.
 7. Completar auditoría de persistencia, perfiles PAPER y protección de datos.
 8. Registrar defectos confirmados, riesgos y puntos no comprobados.
 9. Generar `INFORME_FASE_0.md`.
@@ -356,13 +429,28 @@ Los hallazgos anteriores son resultados de inspección estática de los fragment
 3. Unificar la lectura de configuración y documentar variables.
 4. Crear `.env.example` sin secretos.
 5. Resolver rutas absolutas.
-6. Corregir los defectos técnicos aprobados, con tests de regresión.
-7. Ejecutar tests Python y comprobaciones estáticas.
-8. Ejecutar `npm ci`, typecheck, tests y build del frontend.
-9. Validar arranque y apagado controlados en PAPER.
-10. Generar `INFORME_FASE_1.md` con comandos, versiones, resultados y fallos pendientes.
+6. Corregir los defectos técnicos aprobados, con tests de regresión en `tests_nuevos/`.
+7. Ejecutar exclusivamente la suite oficial Python:
 
-No se avanzará a otra fase sin cerrar y documentar la anterior.
+   ```powershell
+   python -m pytest tests_nuevos/ -v
+   ```
+
+8. Comprobar la recogida de pruebas de la suite activa:
+
+   ```powershell
+   python -m pytest --collect-only tests_nuevos/ -q
+   ```
+
+9. Verificar que la validación ordinaria no ejecuta ni modifica la suite histórica `tests/`.
+10. Ejecutar las comprobaciones estáticas.
+11. Ejecutar `npm ci`, typecheck, tests y build del frontend.
+12. Validar arranque y apagado controlados en PAPER.
+13. Generar `INFORME_FASE_1.md` con comandos, versiones, resultados y fallos pendientes.
+
+La carpeta `tests/` permanecerá congelada durante estas fases. No se deben modificar, borrar, trasladar ni adaptar sus pruebas como parte de la estabilización ordinaria.
+
+**No se avanzará a otra fase sin cerrar y documentar la anterior.**
 
 ## 17. Convenciones de desarrollo
 
@@ -374,6 +462,8 @@ No se avanzará a otra fase sin cerrar y documentar la anterior.
 - No ocultar errores con datos ficticios.
 - Usar mocks solo cuando corresponda y marcarlos claramente.
 - No sustituir integraciones reales por implementaciones simuladas para hacer pasar tests.
+- Incorporar las pruebas nuevas y de regresión exclusivamente en `tests_nuevos/`.
+- No modificar la suite histórica congelada `tests/`.
 - No registrar secretos, claves ni datos sensibles en logs.
 
 ## 18. Seguridad operativa
@@ -391,4 +481,11 @@ HRM es software experimental. La simulación PAPER debe permanecer aislada y ser
 
 HRM contiene una base de código amplia y una arquitectura modular, pero todavía no se ha certificado su funcionamiento integral. Se han identificado defectos relevantes en la restauración de balances PAPER, la migración de datos y el reinicio de singletons, además de duplicidad entre implementaciones del exchange simulado y configuración de modos repartida.
 
-**La Fase 0 está parcialmente realizada y debe completarse con un informe formal. La Fase 1 está pendiente.** El siguiente paso correcto es terminar la auditoría sin modificar el repositorio y presentar `INFORME_FASE_0.md` para revisión y autorización.
+La política de pruebas queda establecida de forma explícita:
+
+- **`tests_nuevos/` es la única suite oficial y activa de HRM.**
+- **`tests/` es una suite histórica congelada que se conserva en el repositorio y queda fuera de la validación ordinaria.**
+- Los tests nuevos y las regresiones deben añadirse exclusivamente a `tests_nuevos/`.
+- Los comandos oficiales de pytest deben especificar la ruta `tests_nuevos/`.
+
+**La Fase 0 está parcialmente realizada y debe completarse con un informe formal. La Fase 1 está pendiente de validación completa.** El siguiente paso correcto es terminar la auditoría sin modificar el repositorio y presentar `INFORME_FASE_0.md` para revisión y autorización.

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -71,7 +72,6 @@ def test_migracion_paper_correcta_en_directorio_temporal(tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.regression
-@pytest.mark.xfail(strict=True, reason="Defecto conocido: puede crearse el marcador aunque falle una copia.")
 def test_migracion_no_debe_marcarse_completada_si_falla_una_copia(tmp_path, monkeypatch):
     estado = tmp_path / "persistent_state" / "portfolio_state_live.json"
     estado.parent.mkdir(parents=True)
@@ -81,7 +81,57 @@ def test_migracion_no_debe_marcarse_completada_si_falla_una_copia(tmp_path, monk
         raise OSError("fallo de copia simulado")
 
     monkeypatch.setattr(perfiles.shutil, "copy2", fallar_copia)
-    perfiles.migrar_datos_legacy_a_persistente(tmp_path)
+
+    with pytest.raises(OSError, match="fallo de copia simulado"):
+        perfiles.migrar_datos_legacy_a_persistente(tmp_path)
 
     marcador = tmp_path / "persistent_state" / "migracion_paper_perfiles_v1.json"
     assert not marcador.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.regression
+def test_migracion_parcial_se_reintenta_sin_sobrescribir_archivos(tmp_path, monkeypatch):
+    estado = tmp_path / "persistent_state" / "portfolio_state_live.json"
+    estado.parent.mkdir(parents=True)
+    estado.write_text(json.dumps({"mode": "paper", "balance": 250.0}), encoding="utf-8")
+
+    origen_operaciones = tmp_path / "data" / "paper_trades"
+    origen_operaciones.mkdir(parents=True)
+    (origen_operaciones / "a.json").write_text("primera versión", encoding="utf-8")
+    (origen_operaciones / "b.csv").write_text("segunda operación", encoding="utf-8")
+
+    destino_operaciones = (
+        tmp_path / "data" / "paper" / "persistente" / "paper_trades"
+    )
+    copia_original = perfiles.shutil.copy2
+    fallo_pendiente = True
+
+    def fallar_una_vez(origen, destino):
+        nonlocal fallo_pendiente
+        if Path(origen).name == "b.csv" and fallo_pendiente:
+            fallo_pendiente = False
+            raise OSError("fallo temporal de copia")
+        return copia_original(origen, destino)
+
+    monkeypatch.setattr(perfiles.shutil, "copy2", fallar_una_vez)
+
+    with pytest.raises(OSError, match="fallo temporal de copia"):
+        perfiles.migrar_datos_legacy_a_persistente(tmp_path)
+
+    marcador = tmp_path / "persistent_state" / "migracion_paper_perfiles_v1.json"
+    archivo_a = destino_operaciones / "a.json"
+    archivo_b = destino_operaciones / "b.csv"
+
+    assert not marcador.exists()
+    assert archivo_a.read_text(encoding="utf-8") == "primera versión"
+    assert not archivo_b.exists()
+
+    (origen_operaciones / "a.json").write_text("versión modificada", encoding="utf-8")
+    resultado = perfiles.migrar_datos_legacy_a_persistente(tmp_path)
+
+    assert resultado["cartera"] == 0
+    assert resultado["operaciones"] == 1
+    assert archivo_a.read_text(encoding="utf-8") == "primera versión"
+    assert archivo_b.read_text(encoding="utf-8") == "segunda operación"
+    assert marcador.is_file()

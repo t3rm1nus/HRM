@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
-"""Quick test of logging fix."""
+"""Prueba manual rápida de la configuración de logging."""
 
-import sys
-import os
 
-# Disable TF warnings for quick test
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+def ejecutar_prueba_rapida_de_logging():
+    """Comprueba manualmente que el logger persiste un mensaje en SQLite."""
+    import os
+    import sys
+    import sqlite3
 
-sys.path.append('.')
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    sys.path.append(".")
 
-# Quick import test
-print("Testing logging import and basic usage...")
+    print("Testing logging import and basic usage...")
 
-from core.logging import info, setup_logger
-import sqlite3
+    from core.logging import info, setup_logger
 
-# Setup
-logger = setup_logger()
+    setup_logger()
+    info("Quick logging test", module="quick_test")
 
-# Log something simple
-info("Quick logging test", module="quick_test")
+    with sqlite3.connect("logs/logs.db") as conexion:
+        cursor = conexion.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM logs "
+            "WHERE message LIKE '%Quick logging test%'"
+        )
+        cantidad = cursor.fetchone()[0]
 
-# Check database
-conn = sqlite3.connect('logs/logs.db')
-cursor = conn.cursor()
-cursor.execute("SELECT COUNT(*) FROM logs WHERE message LIKE '%Quick logging test%'")
-count = cursor.fetchone()[0]
-conn.close()
+    print(f"✓ Logged entry found in database: {cantidad}")
+    print("✅ Quick logging test successful!")
 
-print(f"✓ Logged entry found in database: {count}")
-print("✅ Logging fix successful!")
+
+if __name__ == "__main__":
+    ejecutar_prueba_rapida_de_logging()

@@ -93,19 +93,22 @@ def _migrar_cartera_legacy(raiz: Path, destino: Path) -> int:
     nuevo = destino / "portfolio_state.json"
     if not origen.is_file() or nuevo.exists():
         return 0
-    try:
-        contenido = json.loads(origen.read_text(encoding="utf-8"))
-        modo_origen = str(contenido.get("mode", "")).lower()
-        if modo_origen not in {"simulated", "paper"}:
-            registro.info("Se omite la migración de cartera: el estado antiguo no identifica PAPER")
-            return 0
-        nuevo.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(origen, nuevo)
-        registro.info("Cartera PAPER antigua migrada a %s", nuevo)
-        return 1
-    except (OSError, ValueError, AttributeError) as error:
-        registro.warning("No se pudo migrar la cartera PAPER antigua: %s", error)
+
+    contenido = json.loads(origen.read_text(encoding="utf-8"))
+    if not isinstance(contenido, dict):
+        raise ValueError("El estado legacy de cartera debe ser un objeto JSON")
+
+    modo_origen = str(contenido.get("mode", "")).lower()
+    if modo_origen not in {"simulated", "paper"}:
+        registro.info(
+            "Se omite la migración de cartera: "
+            "el estado antiguo no identifica PAPER"
+        )
         return 0
+
+    _copiar_archivo_atomico(origen, nuevo)
+    registro.info("Cartera PAPER antigua migrada a %s", nuevo)
+    return 1
 
 
 def _migrar_operaciones_legacy(raiz: Path, destino: Path) -> int:
@@ -113,18 +116,20 @@ def _migrar_operaciones_legacy(raiz: Path, destino: Path) -> int:
     origen = raiz / "data" / "paper_trades"
     if not origen.is_dir():
         return 0
+
     copiadas = 0
-    for archivo in origen.iterdir():
+    archivos = sorted(origen.iterdir(), key=lambda ruta: ruta.name.lower())
+    for archivo in archivos:
         if not archivo.is_file() or archivo.suffix.lower() not in {".json", ".csv"}:
             continue
+
         nuevo = destino / archivo.name
         if nuevo.exists():
             continue
-        try:
-            shutil.copy2(archivo, nuevo)
-            copiadas += 1
-        except OSError as error:
-            registro.warning("No se pudo migrar %s: %s", archivo, error)
+
+        _copiar_archivo_atomico(archivo, nuevo)
+        copiadas += 1
+
     return copiadas
 
 
@@ -134,12 +139,30 @@ def _migrar_log_cartera_legacy(raiz: Path, destino: Path) -> int:
     nuevo = destino / "portfolio_log.csv"
     if not origen.is_file() or nuevo.exists():
         return 0
+
+    _copiar_archivo_atomico(origen, nuevo)
+    return 1
+
+
+def _copiar_archivo_atomico(origen: Path, destino: Path) -> None:
+    """Copia un archivo mediante un temporal y lo publica de forma atómica."""
+    import os
+    import tempfile
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, ruta_temporal = tempfile.mkstemp(
+        prefix=f".{destino.name}.",
+        suffix=".tmp",
+        dir=destino.parent,
+    )
+    os.close(descriptor)
+    temporal = Path(ruta_temporal)
+
     try:
-        shutil.copy2(origen, nuevo)
-        return 1
-    except OSError as error:
-        registro.warning("No se pudo migrar el log de cartera: %s", error)
-        return 0
+        shutil.copy2(origen, temporal)
+        temporal.replace(destino)
+    finally:
+        temporal.unlink(missing_ok=True)
 
 
 def limpiar_perfil_paper(perfil: str, raiz: Path = Path(".")) -> int:
@@ -199,6 +222,7 @@ def consumir_reset_persistente(raiz: Path = Path(".")) -> None:
     ruta = obtener_ruta_marcador_reset(raiz)
     if ruta.exists():
         ruta.unlink()
+
 
 def _validar_perfil(perfil: str) -> None:
     """Valida que el perfil pertenece al conjunto permitido."""
