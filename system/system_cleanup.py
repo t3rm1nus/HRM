@@ -6,9 +6,8 @@ System Cleanup - Limpieza del sistema antes de iniciar una nueva sesión.
 import os
 import shutil
 import asyncio
-import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict
 from core.logging import logger
 
 
@@ -25,22 +24,12 @@ class SystemCleanup:
         """Ejecuta la limpieza del sistema."""
         try:
             logger.info("🧹 Running system cleanup...")
-            
-            # 1. Limpiar logs antiguos (excepto el actual)
             self._clean_old_logs()
-            
-            # 2. Limpiar caché temporal
             self._clean_cache()
-            
-            # 3. Limpiar archivos temporales de datos
             self._clean_temp_data()
-            
-            # 4. Verificar estructura de directorios
             self._ensure_directories()
-            
             logger.info("✅ System cleanup completed successfully")
             return True
-            
         except Exception as e:
             logger.error(f"❌ Error during system cleanup: {e}")
             return False
@@ -49,51 +38,44 @@ class SystemCleanup:
         """Limpia logs antiguos (mantiene solo los últimos 7 días)."""
         if not self.logs_dir.exists():
             return
-            
+
         import datetime
         cutoff_date = datetime.datetime.now() - datetime.timedelta(days=7)
-        
+
         for log_file in self.logs_dir.glob("*.log"):
             try:
-                # Verificar fecha de modificación
                 mod_time = datetime.datetime.fromtimestamp(log_file.stat().st_mtime)
                 if mod_time < cutoff_date:
                     log_file.unlink()
                     logger.debug(f"Deleted old log: {log_file.name}")
             except Exception as e:
-                logger.debug(f"Could not delete {log_file}: {e}")
+                raise OSError(f"No se pudo eliminar el log antiguo {log_file}: {e}") from e
 
     def _clean_cache(self) -> None:
         """Limpia el directorio de caché."""
         if not self.cache_dir.exists():
             return
-            
-        try:
-            # Eliminar archivos .tmp y .cache
-            for cache_file in self.cache_dir.glob("*"):
-                if cache_file.is_file():
-                    if cache_file.suffix in ['.tmp', '.cache', '.pickle']:
-                        cache_file.unlink()
-                        logger.debug(f"Deleted cache file: {cache_file.name}")
-        except Exception as e:
-            logger.debug(f"Could not clean cache: {e}")
+
+        for cache_file in self.cache_dir.glob("*"):
+            if cache_file.is_file() and cache_file.suffix in [".tmp", ".cache", ".pickle"]:
+                try:
+                    cache_file.unlink()
+                    logger.debug(f"Deleted cache file: {cache_file.name}")
+                except Exception as e:
+                    raise OSError(f"No se pudo eliminar el archivo de caché {cache_file}: {e}") from e
 
     def _clean_temp_data(self) -> None:
         """Limpia archivos temporales de datos."""
         if not self.data_dir.exists():
             return
-            
-        try:
-            # Buscar archivos temporales en data/
-            for temp_file in self.data_dir.rglob("*.tmp"):
-                temp_file.unlink()
-                logger.debug(f"Deleted temp file: {temp_file.name}")
-                
-            for temp_file in self.data_dir.rglob("*_temp.*"):
-                temp_file.unlink()
-                logger.debug(f"Deleted temp file: {temp_file.name}")
-        except Exception as e:
-            logger.debug(f"Could not clean temp data: {e}")
+
+        for pattern in ("*.tmp", "*_temp.*"):
+            for temp_file in self.data_dir.rglob(pattern):
+                try:
+                    temp_file.unlink()
+                    logger.debug(f"Deleted temp file: {temp_file.name}")
+                except Exception as e:
+                    raise OSError(f"No se pudo eliminar el archivo temporal {temp_file}: {e}") from e
 
     def _ensure_directories(self) -> None:
         """Asegura que los directorios necesarios existan."""
@@ -104,9 +86,9 @@ class SystemCleanup:
             self.data_dir / "models",
             self.data_dir / "backtest",
             self.logs_dir,
-            self.cache_dir
+            self.cache_dir,
         ]
-        
+
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
             logger.debug(f"Directory ensured: {directory}")
@@ -118,269 +100,242 @@ class SystemCleanup:
             "data_dir_exists": self.data_dir.exists(),
             "cache_dir_exists": self.cache_dir.exists(),
             "log_files_count": len(list(self.logs_dir.glob("*.log"))) if self.logs_dir.exists() else 0,
-            "data_files_count": len(list(self.data_dir.rglob("*"))) if self.data_dir.exists() else 0
+            "data_files_count": len(list(self.data_dir.rglob("*"))) if self.data_dir.exists() else 0,
         }
 
 
-# =========================
-# FUNCIONES DE FÁCIL USO
-# =========================
+def perform_full_cleanup(mode: str = "paper") -> Dict[str, Any]:
+    """
+    Realiza una limpieza técnica exclusivamente en modo PAPER.
 
-def perform_full_cleanup(mode: str = "paper") -> Dict[str, any]:
+    El argumento se valida explícitamente para evitar que esta rutina se
+    interprete como soporte de limpieza/preparación de otros modos.
     """
-    Realiza una limpieza completa del sistema.
-    
-    Args:
-        mode: Modo de operación ("paper" o "live")
-        
-    Returns:
-        Dict con resultados de la limpieza
-    """
-    try:
-        # 1. Limpiar filesystem
-        filesystem_result = filesystem_cleanup()
-        
-        # 2. Resetear singletons
-        memory_result = memory_reset()
-        
-        # 3. Forzar modo paper
-        paper_result = force_paper_mode()
-        
-        # 4. Resetear contexto async
-        async_result = async_context_reset()
-        
-        return {
-            "success": True,
-            "filesystem": filesystem_result,
-            "memory": memory_result,
-            "paper_mode": paper_result,
-            "async_context": async_result
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Full cleanup failed: {e}")
+    normalized_mode = str(mode).strip().lower() if mode is not None else ""
+    if normalized_mode != "paper":
         return {
             "success": False,
-            "error": str(e)
+            "mode": normalized_mode or None,
+            "error": "perform_full_cleanup solo admite mode='paper'.",
+            "failed_steps": ["mode_validation"],
         }
 
+    # Ejecutar todos los pasos aunque uno falle para devolver un diagnóstico
+    # completo; el éxito global solo se declara si todos terminan correctamente.
+    results = {
+        "filesystem": filesystem_cleanup(),
+        "memory": memory_reset(),
+        "paper_mode": force_paper_mode(),
+        "async_context": async_context_reset(),
+    }
+    failed_steps = [
+        name for name, result in results.items()
+        if not isinstance(result, dict) or result.get("success") is not True
+    ]
 
-def filesystem_cleanup() -> Dict[str, any]:
+    return {
+        "success": not failed_steps,
+        "mode": "paper",
+        **results,
+        "failed_steps": failed_steps,
+    }
+
+
+def filesystem_cleanup() -> Dict[str, Any]:
     """Limpieza del filesystem (archivos, directorios, logs)."""
     try:
         cleanup = SystemCleanup()
         success = cleanup.run_cleanup()
-        
+
         # Los historiales PAPER no pertenecen a la limpieza técnica del sistema.
         # Su ciclo de vida lo controla system.preparar_sesion por perfil.
-
         return {
             "success": success,
-            "deleted_files": 0,  # Could be counted if needed
-            "directories_ensured": 6
+            "deleted_files": 0,
+            "directories_ensured": 7,
         }
-        
     except Exception as e:
         logger.error(f"❌ Filesystem cleanup failed: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
-def memory_reset() -> Dict[str, any]:
-    """Resetear singletons y estado en memoria."""
+def memory_reset() -> Dict[str, Any]:
+    """Resetea singletons y cachés en memoria sin invalidar módulos importados."""
+    reset_items = []
+
     try:
-        # Resetear PortfolioManager singleton
         from core.portfolio_manager import PortfolioManager
         PortfolioManager.reset_instance()
-        logger.info("✅ PortfolioManager singleton reset")
-        
-        # Resetear StateCoordinator singleton
+        reset_items.append("PortfolioManager")
+
         from system.state_coordinator import StateCoordinator
         StateCoordinator.reset_instance()
-        logger.info("✅ StateCoordinator singleton reset")
-        
-        # Limpiar cache de importación
-        if 'core.portfolio_manager' in sys.modules:
-            del sys.modules['core.portfolio_manager']
-        if 'system.state_coordinator' in sys.modules:
-            del sys.modules['system.state_coordinator']
-            
+        reset_items.append("StateCoordinator")
+
+        from storage.paper_trade_logger import reiniciar_loggers_paper
+        reiniciar_loggers_paper()
+        reset_items.append("PaperTradeLogger")
+
+        logger.info("✅ Estado singleton y cachés PAPER reiniciados")
         return {
             "success": True,
-            "singletons_reset": ["PortfolioManager", "StateCoordinator"]
+            "singletons_reset": ["PortfolioManager", "StateCoordinator"],
+            "caches_reset": ["PaperTradeLogger"],
+            "reset_items": reset_items,
         }
-        
     except Exception as e:
         logger.error(f"❌ Memory reset failed: {e}")
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "reset_items": reset_items,
         }
 
 
-def force_paper_mode() -> Dict[str, any]:
-    """Forzar modo paper en todas las configuraciones."""
+def force_paper_mode() -> Dict[str, Any]:
+    """Fija la variable de entorno del proceso en PAPER."""
     try:
-        # Setear variable de entorno
-        os.environ['HRM_MODE'] = 'paper'
-        
-        # Forzar modo paper en config
+        os.environ["HRM_MODE"] = "paper"
+
+        # Mantener la compatibilidad con el cargador de configuración existente.
         try:
             from core.config import get_config
             live_config = get_config("live")
-            if hasattr(live_config, 'PAPER_MODE'):
+            if hasattr(live_config, "PAPER_MODE"):
                 live_config.PAPER_MODE = True
             logger.info("✅ PAPER_MODE forced in config")
         except Exception as e:
             logger.warning(f"⚠️ Could not force PAPER_MODE in config: {e}")
-        
+
         return {
             "success": True,
             "mode": "paper",
-            "env_var": "HRM_MODE=paper"
+            "env_var": "HRM_MODE=paper",
         }
-        
     except Exception as e:
         logger.error(f"❌ Paper mode forcing failed: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
-def async_context_reset() -> Dict[str, any]:
-    """Resetear contexto async para evitar initialize_async vs init issues."""
+def async_context_reset() -> Dict[str, Any]:
+    """Comprueba y prepara el contexto async sin sustituir un loop activo."""
     try:
-        # En Python 3.10+, asyncio gestiona el event loop automáticamente.
-        # No es necesario resetear el loop si ya está corriendo.
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # El loop ya está corriendo, asyncio lo gestiona automáticamente
-                return {"success": True, "message": "Loop already running - managed by asyncio"}
+                return {
+                    "success": True,
+                    "new_loop_created": False,
+                    "message": "Loop already running - managed by asyncio",
+                }
         except RuntimeError:
-            # No hay event loop en el thread actual, crear uno nuevo
             pass
-        
-        # Crear nuevo event loop solo si no existe
+
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
-        
-        # Resetear AsyncContextDetector
+
         try:
             from core.async_balance_helper import AsyncContextDetector
             AsyncContextDetector._is_in_async_context = False
             logger.info("✅ AsyncContextDetector reset")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not reset AsyncContextDetector: {e}")
-        
-        return {
-            "success": True,
-            "new_loop_created": True
-        }
-        
+        except ImportError:
+            logger.debug("AsyncContextDetector no está disponible; no hay estado que reiniciar")
+
+        return {"success": True, "new_loop_created": True}
     except Exception as e:
         logger.error(f"❌ Async context reset failed: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
-def get_cleanup_status() -> Dict[str, any]:
-    """Obtener estado actual del sistema."""
+def get_cleanup_status() -> Dict[str, Any]:
+    """Obtiene el estado actual del sistema."""
     try:
         cleanup = SystemCleanup()
         report = cleanup.get_cleanup_report()
-        
-        # Verificar modo
-        mode = os.environ.get('HRM_MODE', 'unknown')
-        
-        # Verificar singletons
+        mode = os.environ.get("HRM_MODE", "unknown")
+
         from core.portfolio_manager import PortfolioManager
         from system.state_coordinator import StateCoordinator
-        
+
+        try:
+            loop = asyncio.get_running_loop()
+            has_event_loop = loop.is_running()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+                has_event_loop = loop.is_running()
+            except RuntimeError:
+                has_event_loop = False
+
         return {
             "mode": mode,
             "filesystem": report,
             "singletons": {
                 "portfolio_manager_exists": PortfolioManager._instance is not None,
-                "state_coordinator_exists": StateCoordinator._instance is not None
+                "state_coordinator_exists": StateCoordinator._instance is not None,
             },
-            "async_context": {
-                "has_event_loop": asyncio.get_event_loop() is not None
-            }
+            "async_context": {"has_event_loop": has_event_loop},
         }
-        
     except Exception as e:
         logger.error(f"❌ Status check failed: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 
-# FIX: Añadir validación de contenido del cache de sentimiento
 def _validate_sentiment_cache(cache_file_path):
     """Valida que el cache de sentimiento no contiene datos de prueba."""
     try:
         import json
-        with open(cache_file_path, 'r') as f:
+        with open(cache_file_path, "r") as f:
             data = json.load(f)
-        
-        texts = data.get('texts', [])
+
+        texts = data.get("texts", [])
         if not texts:
             return False
-        
-        # Detectar datos de prueba (Sample text pattern)
+
         sample_count = sum(
-            1 for t in texts 
-            if 'Sample text' in str(t) or 'sample text' in str(t).lower()
+            1 for t in texts
+            if "Sample text" in str(t) or "sample text" in str(t).lower()
         )
         sample_ratio = sample_count / len(texts)
-        
-        if sample_ratio > 0.1:  # Más del 10% son datos de prueba
+
+        if sample_ratio > 0.1:
             logger.warning(
                 f"⚠️ Cache de sentimiento contiene {sample_ratio:.0%} datos de prueba. "
                 f"Eliminando cache corrupto: {cache_file_path}"
             )
             os.remove(cache_file_path)
             return False
-        
+
         return True
     except Exception:
         return False
 
 
-# FIX: Limpieza de archivos de sentiment corruptos
 def cleanup_corrupt_sentiment_cache():
     """Limpia archivos de sentiment cache que contienen datos de prueba."""
     import glob
-    
+
     patterns = [
         "archived/sentiment_cache_*.json",
         "sentiment_cache_*.json",
-        "sentiment_inference_*.csv"
+        "sentiment_inference_*.csv",
     ]
-    
+
     deleted_count = 0
     for pattern in patterns:
         for file_path in glob.glob(pattern):
-            if 'sentiment_cache' in file_path and file_path.endswith('.json'):
+            if "sentiment_cache" in file_path and file_path.endswith(".json"):
                 if not _validate_sentiment_cache(file_path):
                     deleted_count += 1
             else:
-                # Eliminar archivos de inference CSV sin validación
                 try:
                     os.remove(file_path)
                     logger.info(f"🗑️ Eliminado archivo de sentiment: {file_path}")
                     deleted_count += 1
-                except:
-                    pass
-    
+                except OSError:
+                    logger.exception("No se pudo eliminar el archivo de sentiment: %s", file_path)
+
     if deleted_count > 0:
         logger.info(f"✅ Eliminados {deleted_count} archivos de sentiment corruptos/obsoletos")
-    
+
     return deleted_count
