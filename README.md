@@ -35,7 +35,7 @@ HRM debe mantenerse en modo PAPER durante el desarrollo y las pruebas. Este READ
 | Aislamiento PAPER PERSISTENTE/LIMPIA | Implementación presente; con riesgos detectados | Completar las pruebas de restauración de balances, migración y aislamiento de extremo a extremo. |
 | Arranque del backend | No certificado | Validar en entorno reproducible, sin alterar datos existentes. |
 | Frontend | No certificado en esta auditoría | `npm ci`, typecheck, tests y build. |
-| Tests Python oficiales | `tests_nuevos/` es la única suite activa | Ejecutar y documentar sus resultados reales. |
+| Tests Python oficiales | `tests/` es la única suite activa | Ejecutar y documentar sus resultados reales. |
 | Tests históricos | `tests/` está congelada y fuera de la validación oficial | Conservar como referencia histórica, sin modificar ni ejecutar en la validación ordinaria. |
 | Dependencias | No consolidadas de forma demostrada | Auditar imports y fijar versiones compatibles. |
 | Backtesting | Código presente | Validar datos, costes, sesgos y reproducibilidad. |
@@ -46,7 +46,7 @@ HRM debe mantenerse en modo PAPER durante el desarrollo y las pruebas. Este READ
 
 **Fase 0 — Auditoría y congelación:** en curso. Se han inspeccionado partes relevantes del arranque, configuración, perfiles PAPER, persistencia, exchange simulado, cartera, gestores de órdenes y limpieza. Todavía falta completar la revisión de todas las áreas y emitir el informe definitivo `INFORME_FASE_0.md`.
 
-**Fase 1 — Estabilización técnica:** pendiente de validación completa. La validación automatizada de Python debe realizarse exclusivamente sobre `tests_nuevos/`. También quedan pendientes las comprobaciones de instalación, compilación, arranque y apagado. No se debe utilizar la suite histórica `tests/` como criterio de aceptación.
+**Fase 1 — Estabilización técnica:** pendiente de validación completa. La validación automatizada de Python debe realizarse exclusivamente sobre `tests/`. También quedan pendientes las comprobaciones de instalación, compilación, arranque y apagado. No se debe utilizar la suite histórica `tests/` como criterio de aceptación.
 
 Hasta cerrar la Fase 0 y autorizar expresamente los cambios, no se deben modificar código, estrategias, señales, indicadores, parámetros de riesgo, configuración PAPER/LIVE ni datos persistentes.
 
@@ -79,7 +79,7 @@ Esta división es la arquitectura prevista. No debe asumirse que cada módulo pa
 | `backtesting/` | Herramientas de backtesting. |
 | `ml_training/` | Scripts de entrenamiento offline. |
 | `tests/` | Suite histórica congelada. No forma parte de la validación oficial actual. |
-| `tests_nuevos/` | Suite oficial y activa de pruebas automatizadas Python. |
+| `tests/` | Suite oficial y activa de pruebas automatizadas Python. |
 | `hacienda/` | Herramientas auxiliares de seguimiento fiscal. |
 | `scripts/` | Scripts de soporte y control. |
 | `persistent_state/` | Configuración y determinados estados persistentes. |
@@ -273,30 +273,30 @@ La presencia de scripts de entrenamiento tampoco demuestra que el autoaprendizaj
 
 ## 12. Tests y validación
 
-### 12.1. Suite oficial y activa: `tests_nuevos/`
+### 12.1. Suite oficial y activa: `tests/`
 
-**`tests_nuevos/` es la única suite oficial de pruebas automatizadas Python de HRM.**
+**`tests/` es la única suite oficial de pruebas automatizadas Python de HRM.**
 
 Toda validación ordinaria, ejecución de regresiones y comprobación de cambios debe realizarse sobre esta carpeta.
 
-Los tests nuevos deben incorporarse a `tests_nuevos/`, respetando su organización y estructura existente.
+Los tests nuevos deben incorporarse a `tests/`, respetando su organización y estructura existente.
 
 **Comando oficial para ejecutar la suite Python:**
 
 ```powershell
-python -m pytest tests_nuevos/ -v
+python -m pytest tests/ -v
 ```
 
 Para ejecutar un archivo concreto:
 
 ```powershell
-python -m pytest tests_nuevos/ruta/del_test.py -v
+python -m pytest tests/ruta/del_test.py -v
 ```
 
 Para comprobar qué pruebas se van a recoger dentro de la suite activa:
 
 ```powershell
-python -m pytest --collect-only tests_nuevos/ -q
+python -m pytest --collect-only tests/ -q
 ```
 
 La validación debe registrar:
@@ -309,7 +309,7 @@ La validación debe registrar:
 - Errores y dependencias ausentes.
 - Resultado final.
 
-Los tests de regresión de cualquier corrección aprobada deben añadirse a `tests_nuevos/`.
+Los tests de regresión de cualquier corrección aprobada deben añadirse a `tests/`.
 
 ### 12.2. Suite histórica congelada: `tests/`
 
@@ -324,7 +324,7 @@ Reglas obligatorias:
 3. No adaptar sus pruebas a los cambios actuales de arquitectura.
 4. No modificar sus archivos como parte del mantenimiento ordinario.
 5. No borrar sus archivos.
-6. No trasladar sus archivos a `tests_nuevos/` automáticamente.
+6. No trasladar sus archivos a `tests/` automáticamente.
 7. Conservarlos en el repositorio como referencia histórica.
 8. Consultarlos únicamente cuando sea necesario recuperar o estudiar un comportamiento anterior y exista una autorización expresa para ello.
 
@@ -336,7 +336,7 @@ Los scripts de diagnóstico manual que puedan existir en el repositorio se consi
 
 No deben confundirse con la suite oficial de pruebas automatizadas.
 
-Su ejecución debe ser explícita y voluntaria. No deben ejecutarse automáticamente durante la importación de módulos ni interferir con la recogida de tests de `tests_nuevos/`.
+Su ejecución debe ser explícita y voluntaria. No deben ejecutarse automáticamente durante la importación de módulos ni interferir con la recogida de tests de `tests/`.
 
 La presencia de un script de diagnóstico no implica que forme parte de la suite activa.
 
@@ -346,11 +346,11 @@ La separación entre ambas carpetas es una decisión de organización del proyec
 
 | Elemento | Función | Política |
 |---|---|---|
-| `tests_nuevos/` | Suite oficial de pruebas automatizadas | Activa. Se ejecuta, mantiene y amplía. |
+| `tests/` | Suite oficial de pruebas automatizadas | Activa. Se ejecuta, mantiene y amplía. |
 | `tests/` | Suite histórica | Congelada. Se conserva sin modificaciones y fuera de la validación ordinaria. |
 | Scripts de diagnóstico | Comprobaciones manuales específicas | Ejecución manual y explícita. |
 
-**Importante:** los comandos oficiales de pytest deben indicar expresamente `tests_nuevos/`. No se debe utilizar `python -m pytest` sin especificar la ruta de la suite, porque podría recoger pruebas históricas u otros archivos de prueba fuera del ámbito autorizado.
+**Importante:** los comandos oficiales de pytest deben indicar expresamente `tests/`. No se debe utilizar `python -m pytest` sin especificar la ruta de la suite, porque podría recoger pruebas históricas u otros archivos de prueba fuera del ámbito autorizado.
 
 No se deben borrar carpetas ni archivos históricos para resolver problemas de descubrimiento de pytest. La solución debe estar en la selección explícita de la suite activa y, cuando corresponda, en la configuración de descubrimiento.
 
@@ -387,7 +387,7 @@ Cuando la Fase 1 esté autorizada y completada, esta sección deberá incluir un
 - Comprobaciones previas al arranque.
 - Arranque y apagado controlados.
 - Recuperación y conservación de los datos.
-- Comandos de tests y validación, utilizando exclusivamente `tests_nuevos/` para la suite oficial Python.
+- Comandos de tests y validación, utilizando exclusivamente `tests/` para la suite oficial Python.
 
 ## 15. Riesgos y bloqueantes conocidos
 
@@ -429,17 +429,17 @@ Los hallazgos anteriores son resultados de inspección estática de los fragment
 3. Unificar la lectura de configuración y documentar variables.
 4. Crear `.env.example` sin secretos.
 5. Resolver rutas absolutas.
-6. Corregir los defectos técnicos aprobados, con tests de regresión en `tests_nuevos/`.
+6. Corregir los defectos técnicos aprobados, con tests de regresión en `tests/`.
 7. Ejecutar exclusivamente la suite oficial Python:
 
    ```powershell
-   python -m pytest tests_nuevos/ -v
+   python -m pytest tests/ -v
    ```
 
 8. Comprobar la recogida de pruebas de la suite activa:
 
    ```powershell
-   python -m pytest --collect-only tests_nuevos/ -q
+   python -m pytest --collect-only tests/ -q
    ```
 
 9. Verificar que la validación ordinaria no ejecuta ni modifica la suite histórica `tests/`.
@@ -462,7 +462,7 @@ La carpeta `tests/` permanecerá congelada durante estas fases. No se deben modi
 - No ocultar errores con datos ficticios.
 - Usar mocks solo cuando corresponda y marcarlos claramente.
 - No sustituir integraciones reales por implementaciones simuladas para hacer pasar tests.
-- Incorporar las pruebas nuevas y de regresión exclusivamente en `tests_nuevos/`.
+- Incorporar las pruebas nuevas y de regresión exclusivamente en `tests/`.
 - No modificar la suite histórica congelada `tests/`.
 - No registrar secretos, claves ni datos sensibles en logs.
 
@@ -483,9 +483,9 @@ HRM contiene una base de código amplia y una arquitectura modular, pero todaví
 
 La política de pruebas queda establecida de forma explícita:
 
-- **`tests_nuevos/` es la única suite oficial y activa de HRM.**
+- **`tests/` es la única suite oficial y activa de HRM.**
 - **`tests/` es una suite histórica congelada que se conserva en el repositorio y queda fuera de la validación ordinaria.**
-- Los tests nuevos y las regresiones deben añadirse exclusivamente a `tests_nuevos/`.
-- Los comandos oficiales de pytest deben especificar la ruta `tests_nuevos/`.
+- Los tests nuevos y las regresiones deben añadirse exclusivamente a `tests/`.
+- Los comandos oficiales de pytest deben especificar la ruta `tests/`.
 
 **La Fase 0 está parcialmente realizada y debe completarse con un informe formal. La Fase 1 está pendiente de validación completa.** El siguiente paso correcto es terminar la auditoría sin modificar el repositorio y presentar `INFORME_FASE_0.md` para revisión y autorización.
