@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 
 
-RAIZ_REPOSITORIO = Path(__file__).resolve().parents[2]
+RAIZ_REPOSITORIO = Path(__file__).resolve().parents[1]
 RUTA_DIAGNOSTICO = RAIZ_REPOSITORIO / "test_l1_diagnostic.py"
 
 
