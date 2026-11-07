@@ -1,192 +1,363 @@
+import copy
+import math
+import re
+import threading
 import time
 import uuid
+
 from typing import Dict, List, Any, Optional
+
 from core.logging import logger
 
 
 class SimulatedExchangeClient:
     """
-    Cliente de intercambio simulado para paper trading.
+    Exchange simulado de HRM para PAPER TRADING.
 
-    - Mantiene balances locales
-    - Ejecuta órdenes ficticias
-    - Aplica slippage + fees
-    - Guarda historial de trades
-    - NUNCA hace requests HTTP
-    - Singleton pattern to maintain state between cycles
+    Responsabilidades:
+    - Mantener balances simulados.
+    - Ejecutar operaciones BUY y SELL.
+    - Aplicar comisiones y slippage.
+    - Mantener historial de órdenes y operaciones.
+    - Preservar el estado entre ciclos mediante Singleton.
+
+    No realiza peticiones HTTP.
+    No obtiene precios de mercado.
+    No ejecuta operaciones reales.
     """
+
     _instance = None
     _initialized = False
-    _just_initialized = False  # Flag para detectar instancia recién creada vs sesión continua
+    _just_initialized = False
 
-    def __new__(cls, initial_balances: Dict[str, float] = None,
-                 fee: float = 0.001,
-                 slippage: float = 0.0005):
-        """Singleton pattern to maintain state between instances"""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    _singleton_lock = threading.RLock()
 
-    @classmethod
-    def get_instance(cls, initial_balances: Dict[str, float] = None,
-                     fee: float = 0.001,
-                     slippage: float = 0.0005):
-        """Get or create the singleton instance of SimulatedExchangeClient.
-        
-        Args:
-            initial_balances: Balances iniciales (solo usados en primera inicialización)
-            fee: Comisión por trade
-            slippage: Slippage por trade
-            
-        Returns:
-            SimulatedExchangeClient: Instancia singleton
-            
-        Raises:
-            RuntimeError: Si no se proporcionan initial_balances y el singleton no existe
-        """
-        if cls._instance is not None:
-            logger.info("SimulatedExchangeClient: returning existing singleton instance")
-            return cls._instance
-            
-        # 🚨 CRITICAL: Se REQUIERE initial_balances - NO hay valores por defecto hardcodeados
-        if initial_balances is None:
-            logger.critical("🚨 FATAL: SimulatedExchangeClient.get_instance() requiere initial_balances")
-            logger.critical("   No se permiten valores por defecto hardcodeados para evitar discrepancias de capital")
-            raise RuntimeError(
-                "SimulatedExchangeClient.get_instance() requires initial_balances parameter. "
-                "Hardcoded defaults are NOT allowed to prevent capital mismatches. "
-                "Provide balances from config."
-            )
-        
-        cls._instance = cls(initial_balances, fee, slippage)
-        return cls._instance
+    QUOTE_ASSET = "USDT"
 
-    @classmethod
-    def reset_instance(cls):
-        """Reset the singleton instance (useful for testing)."""
-        cls._instance = None
-        cls._initialized = False
+    ASSETS_BASE = {
+        "BTC",
+        "ETH"
+    }
 
-    def __init__(
-        self,
-        initial_balances: Dict[str, float] = None,
+    def __new__(
+        cls,
+        initial_balances: Optional[Dict[str, float]] = None,
         fee: float = 0.001,
         slippage: float = 0.0005
     ):
-        """
-        Inicializa el cliente simulado.
-        
-        Args:
-            initial_balances: Balances iniciales para cada activo (REQUERIDO solo para primera inicialización)
-            fee: Comisión por trade (0.001 = 0.1%)
-            slippage: Slippage por trade (0.0005 = 0.05%)
-        
-        Raises:
-            RuntimeError: Si se intenta inicializar sin balances iniciales válidos en primera instanciación
-        """
-        # 🚨 CRITICAL FIX: Strict singleton enforcement - NEVER reinitialize if already initialized
-        if SimulatedExchangeClient._initialized:
-            logger.warning("🚨 BLOCKED: Attempt to reinitialize SimulatedExchangeClient - singleton already exists")
-            logger.warning(f"   Current balances: {self.balances}")
-            logger.warning(f"   Instance ID: {id(self)}")
-            # Do NOT reinitialize - maintain existing state at all costs
-            return
-        
-        # Validar balances iniciales (REQUERIDOS solo para primera inicialización)
-        if initial_balances is None or not isinstance(initial_balances, dict) or len(initial_balances) == 0:
-            logger.critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)", exc_info=True)
-            raise RuntimeError("SimulatedExchangeClient cannot be initialized without valid initial_balances")
-        
-        # Validar que el capital principal (USDT) sea positivo
-        if initial_balances.get("USDT", 0) <= 0:
-            logger.critical(f"🚨 FATAL: USDT balance must be positive. Got: {initial_balances.get('USDT', 0)}", exc_info=True)
-            raise RuntimeError("SimulatedExchangeClient cannot be initialized without positive USDT balance")
-        
-        # BTC y ETH pueden ser 0 (sin posiciones iniciales)
-        invalid_balances = [asset for asset, balance in initial_balances.items() 
-                           if asset in ["BTC", "ETH"] and balance < 0]
-        if invalid_balances:
-            logger.critical(f"🚨 FATAL: BTC and ETH balances cannot be negative. Invalid: {invalid_balances}", exc_info=True)
-            raise RuntimeError("SimulatedExchangeClient cannot be initialized with negative BTC/ETH balances")
-        
-        # Mark as initialized BEFORE setting attributes to prevent race conditions
-        SimulatedExchangeClient._initialized = True
-        SimulatedExchangeClient._just_initialized = True  # Flag para detectar instancia recién creada
-        
-        self.initial_balances = initial_balances.copy()
-        self.balances: Dict[str, float] = initial_balances.copy()
-        self.fee = fee
-        self.slippage = slippage
+        with cls._singleton_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
 
-        self.trades: List[Dict[str, Any]] = []
-        self.order_history: List[Dict[str, Any]] = []
-        self._trade_id_counter = 1
+            return cls._instance
 
-        # 🔐 Garantizar assets base comunes
-        self._ensure_asset("USDT")
-        self._ensure_asset("BTC")
-        self._ensure_asset("ETH")
+    # ------------------------------------------------------------------
+    # INICIALIZACIÓN
+    # ------------------------------------------------------------------
 
-        logger.info("✅ SimulatedExchangeClient INITIALIZED (FIRST TIME ONLY)")
-        logger.info(f"   Instance ID: {id(self)}")
-        logger.info(f"   Initial balances: {self.balances}")
-        logger.info(f"   Fee: {fee*100:.2f}%")
-        logger.info(f"   Slippage: {slippage*100:.2f}%")
-        logger.info(f"   SINGLETON_ENFORCED=True")
+    def __init__(
+        self,
+        initial_balances: Optional[Dict[str, float]] = None,
+        fee: float = 0.001,
+        slippage: float = 0.0005
+    ):
+        with self._singleton_lock:
+
+            if SimulatedExchangeClient._initialized:
+                logger.debug(
+                    "SimulatedExchangeClient ya inicializado. "
+                    "Se conserva el estado actual."
+                )
+                return
+
+            balances = self._validar_balances(initial_balances)
+
+            fee = self._validar_porcentaje(fee, "fee")
+            slippage = self._validar_porcentaje(
+                slippage,
+                "slippage"
+            )
+
+            self._state_lock = threading.RLock()
+
+            self.initial_balances = balances.copy()
+            self.balances = balances.copy()
+
+            self.fee = fee
+            self.slippage = slippage
+
+            self.trades: List[Dict[str, Any]] = []
+            self.order_history: List[Dict[str, Any]] = []
+
+            self._trade_id_counter = 1
+
+            self._asegurar_activos_base()
+
+            SimulatedExchangeClient._initialized = True
+            SimulatedExchangeClient._just_initialized = True
+
+            logger.info(
+                "SimulatedExchangeClient inicializado"
+            )
+            logger.info(
+                "Capital inicial: %s",
+                self.initial_balances
+            )
+            logger.info(
+                "Comisión: %.4f%% | Slippage: %.4f%%",
+                self.fee * 100,
+                self.slippage * 100
+            )
+
+    # ------------------------------------------------------------------
+    # VALIDACIONES
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validar_porcentaje(
+        valor: float,
+        nombre: str
+    ) -> float:
+
+        try:
+            porcentaje = float(valor)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{nombre} debe ser numérico"
+            )
+
+        if (
+            not math.isfinite(porcentaje)
+            or porcentaje < 0
+            or porcentaje >= 1
+        ):
+            raise ValueError(
+                f"{nombre} debe estar entre 0 y 1"
+            )
+
+        return porcentaje
+
+    @staticmethod
+    def _validar_cantidad(
+        valor: float,
+        nombre: str
+    ) -> float:
+
+        try:
+            cantidad = float(valor)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{nombre} debe ser numérico"
+            )
+
+        if not math.isfinite(cantidad) or cantidad <= 0:
+            raise ValueError(
+                f"{nombre} debe ser positivo y finito"
+            )
+
+        return cantidad
 
     @classmethod
-    def initialize_once(cls, initial_balances: Dict[str, float],
-                       fee: float = 0.001,
-                       slippage: float = 0.0005):
-        """
-        Inicializa el SimulatedExchangeClient solo una vez por proceso.
-        
-        Args:
-            initial_balances: Balances iniciales para cada activo (REQUERIDO)
-            fee: Comisión por trade (0.001 = 0.1%)
-            slippage: Slippage por trade (0.0005 = 0.05%)
-        
-        Returns:
-            SimulatedExchangeClient: Instancia del cliente simulado
-        
-        Raises:
-            RuntimeError: Si se intenta inicializar sin balances o más de una vez
-        """
-        if cls._initialized:
-            logger.warning("⚠️ SimulatedExchangeClient already initialized - returning existing instance")
-            return cls._instance
-        
-        return cls(initial_balances, fee, slippage)
+    def _validar_balances(
+        cls,
+        initial_balances: Optional[Dict[str, float]]
+    ) -> Dict[str, float]:
 
-    # ------------------------------------------------------------------
-    # Helpers internos
-    # ------------------------------------------------------------------
+        if not isinstance(initial_balances, dict):
+            raise RuntimeError(
+                "Se requiere un diccionario de balances iniciales"
+            )
 
-    def _ensure_asset(self, asset: str):
-        if asset not in self.balances:
-            self.balances[asset] = 0.0
+        if not initial_balances:
+            raise RuntimeError(
+                "Los balances iniciales no pueden estar vacíos"
+            )
+
+        balances = {}
+
+        for activo, cantidad in initial_balances.items():
+
+            if (
+                not isinstance(activo, str)
+                or not re.fullmatch(r"[A-Z0-9]{2,15}", activo.upper())
+            ):
+                raise ValueError(
+                    f"Activo no válido: {activo}"
+                )
+
+            activo = activo.upper()
+
+            if activo in balances:
+                raise ValueError(
+                    f"Activo duplicado: {activo}"
+                )
+
+            try:
+                cantidad = float(cantidad)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"Balance inválido para {activo}"
+                )
+
+            if not math.isfinite(cantidad) or cantidad < 0:
+                raise ValueError(
+                    f"Balance negativo o no finito: {activo}"
+                )
+
+            balances[activo] = cantidad
+
+        if balances.get(cls.QUOTE_ASSET, 0) <= 0:
+            raise RuntimeError(
+                "El capital inicial USDT debe ser positivo"
+            )
+
+        balances.setdefault("BTC", 0.0)
+        balances.setdefault("ETH", 0.0)
+
+        return balances
+
+    def _asegurar_activos_base(self) -> None:
+        for activo in self.ASSETS_BASE:
+            self.balances.setdefault(activo, 0.0)
+
+        self.balances.setdefault(
+            self.QUOTE_ASSET,
+            0.0
+        )
 
     def _parse_symbol(self, symbol: str):
-        """
-        Asume pares tipo BTCUSDT, ETHUSDT, etc.
-        """
-        if not symbol.endswith("USDT"):
-            raise ValueError(f"Símbolo no soportado en simulado: {symbol}")
+        if not isinstance(symbol, str):
+            raise ValueError("El símbolo debe ser texto")
 
-        base_asset = symbol.replace("USDT", "")
-        quote_asset = "USDT"
+        symbol = symbol.strip().upper()
 
-        self._ensure_asset(base_asset)
-        self._ensure_asset(quote_asset)
+        if not symbol.endswith(self.QUOTE_ASSET):
+            raise ValueError(
+                f"Par no soportado: {symbol}. "
+                f"Se requiere cotización en {self.QUOTE_ASSET}."
+            )
 
-        return base_asset, quote_asset
+        base_asset = symbol[:-len(self.QUOTE_ASSET)]
+
+        if not base_asset or not re.fullmatch(
+            r"[A-Z0-9]{2,15}",
+            base_asset
+        ):
+            raise ValueError(
+                f"Símbolo inválido: {symbol}"
+            )
+
+        self.balances.setdefault(base_asset, 0.0)
+
+        return base_asset, self.QUOTE_ASSET
 
     # ------------------------------------------------------------------
-    # API principal
+    # SINGLETON
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def get_instance(
+        cls,
+        initial_balances: Optional[Dict[str, float]] = None,
+        fee: float = 0.001,
+        slippage: float = 0.0005
+    ):
+        with cls._singleton_lock:
+
+            if cls._instance is not None:
+                return cls._instance
+
+            if initial_balances is None:
+                raise RuntimeError(
+                    "get_instance requiere initial_balances "
+                    "en la primera inicialización"
+                )
+
+            return cls(
+                initial_balances,
+                fee,
+                slippage
+            )
+
+    @classmethod
+    def initialize_once(
+        cls,
+        initial_balances: Dict[str, float],
+        fee: float = 0.001,
+        slippage: float = 0.0005
+    ):
+        return cls.get_instance(
+            initial_balances,
+            fee,
+            slippage
+        )
+
+    @classmethod
+    def reset_instance(cls):
+        with cls._singleton_lock:
+            cls._instance = None
+            cls._initialized = False
+            cls._just_initialized = False
+
+    @classmethod
+    def cleanup(cls) -> bool:
+        with cls._singleton_lock:
+            cls._instance = None
+            cls._initialized = False
+            cls._just_initialized = False
+
+        logger.info(
+            "SimulatedExchangeClient cleanup completado"
+        )
+
+        return True
+
+    # ------------------------------------------------------------------
+    # BALANCES
     # ------------------------------------------------------------------
 
     def get_balances(self) -> Dict[str, float]:
-        return self.balances.copy()
+        with self._state_lock:
+            return self.balances.copy()
+
+    async def get_account_balances(self) -> Dict[str, float]:
+        return self.get_balances()
+
+    def set_balance(
+        self,
+        asset: str,
+        amount: float
+    ) -> None:
+
+        if not isinstance(asset, str) or not asset.strip():
+            raise ValueError("Activo inválido")
+
+        asset = asset.strip().upper()
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            raise ValueError("Balance inválido")
+
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError(
+                "El balance debe ser finito y no negativo"
+            )
+
+        with self._state_lock:
+            anterior = self.balances.get(asset, 0.0)
+            self.balances[asset] = amount
+
+        logger.info(
+            "Balance actualizado: %s %.8f -> %.8f",
+            asset,
+            anterior,
+            amount
+        )
+
+    # ------------------------------------------------------------------
+    # EJECUCIÓN DE ÓRDENES
+    # ------------------------------------------------------------------
 
     def execute_order(
         self,
@@ -196,57 +367,168 @@ class SimulatedExchangeClient:
         market_price: float
     ) -> Dict[str, Any]:
 
-        side = side.upper()
+        side = str(side).upper()
 
-        if qty <= 0:
-            raise ValueError(f"Cantidad inválida: {qty}")
-        if market_price <= 0:
-            raise ValueError(f"Precio inválido: {market_price}")
         if side not in {"BUY", "SELL"}:
-            raise ValueError(f"Lado inválido: {side}")
+            raise ValueError(
+                f"Operación no soportada: {side}"
+            )
 
-        base_asset, quote_asset = self._parse_symbol(symbol)
+        qty = self._validar_cantidad(
+            qty,
+            "qty"
+        )
 
-        # Slippage
-        if side == "BUY":
-            execution_price = market_price * (1 + self.slippage)
-        else:
-            execution_price = market_price * (1 - self.slippage)
+        market_price = self._validar_cantidad(
+            market_price,
+            "market_price"
+        )
 
-        cost = qty * execution_price
-        fee = cost * self.fee
+        with self._state_lock:
 
-        # Validaciones
-        if side == "BUY":
-            required = cost + fee
-            if self.balances[quote_asset] < required:
+            base_asset, quote_asset = self._parse_symbol(
+                symbol
+            )
+
+            execution_price = self._calcular_precio_ejecucion(
+                side,
+                market_price
+            )
+
+            cost = qty * execution_price
+
+            if not math.isfinite(cost):
                 raise ValueError(
-                    f"Fondos insuficientes {quote_asset}: "
-                    f"requiere {required}, disponible {self.balances[quote_asset]}"
-                )
-        else:
-            if self.balances[base_asset] < qty:
-                raise ValueError(
-                    f"Balance insuficiente {base_asset}: "
-                    f"requiere {qty}, disponible {self.balances[base_asset]}"
+                    "El coste de la operación no es válido"
                 )
 
-        # Ejecutar
-        trade_id = self._trade_id_counter
-        self._trade_id_counter += 1
+            fee = cost * self.fee
+
+            if side == "BUY":
+                self._validar_compra(
+                    quote_asset,
+                    cost,
+                    fee
+                )
+            else:
+                self._validar_venta(
+                    base_asset,
+                    qty
+                )
+
+            trade = self._registrar_ejecucion(
+                symbol=symbol.upper(),
+                side=side,
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+                qty=qty,
+                market_price=market_price,
+                execution_price=execution_price,
+                cost=cost,
+                fee=fee
+            )
+
+            self._actualizar_balances(
+                side,
+                base_asset,
+                quote_asset,
+                qty,
+                cost,
+                fee
+            )
+
+            return copy.deepcopy(trade)
+
+    def _calcular_precio_ejecucion(
+        self,
+        side: str,
+        market_price: float
+    ) -> float:
 
         if side == "BUY":
-            self.balances[quote_asset] -= (cost + fee)
+            precio = market_price * (1 + self.slippage)
+        else:
+            precio = market_price * (1 - self.slippage)
+
+        if not math.isfinite(precio) or precio <= 0:
+            raise ValueError(
+                "Precio de ejecución inválido"
+            )
+
+        return precio
+
+    def _validar_compra(
+        self,
+        quote_asset: str,
+        cost: float,
+        fee: float
+    ) -> None:
+
+        requerido = cost + fee
+        disponible = self.balances[quote_asset]
+
+        if disponible < requerido:
+            raise ValueError(
+                f"Fondos insuficientes {quote_asset}: "
+                f"requiere {requerido:.8f}, "
+                f"disponible {disponible:.8f}"
+            )
+
+    def _validar_venta(
+        self,
+        base_asset: str,
+        qty: float
+    ) -> None:
+
+        disponible = self.balances[base_asset]
+
+        if disponible < qty:
+            raise ValueError(
+                f"Balance insuficiente {base_asset}: "
+                f"requiere {qty:.8f}, "
+                f"disponible {disponible:.8f}"
+            )
+
+    def _actualizar_balances(
+        self,
+        side: str,
+        base_asset: str,
+        quote_asset: str,
+        qty: float,
+        cost: float,
+        fee: float
+    ) -> None:
+
+        if side == "BUY":
+            self.balances[quote_asset] -= cost + fee
             self.balances[base_asset] += qty
         else:
             self.balances[base_asset] -= qty
-            self.balances[quote_asset] += (cost - fee)
+            self.balances[quote_asset] += cost - fee
 
+    def _registrar_ejecucion(
+        self,
+        symbol: str,
+        side: str,
+        base_asset: str,
+        quote_asset: str,
+        qty: float,
+        market_price: float,
+        execution_price: float,
+        cost: float,
+        fee: float
+    ) -> Dict[str, Any]:
+
+        trade_id = self._trade_id_counter
+        self._trade_id_counter += 1
+
+        timestamp = time.time()
         order_id = f"simulated_{uuid.uuid4().hex}"
+
         trade = {
             "trade_id": trade_id,
             "order_id": order_id,
-            "timestamp": time.time(),
+            "timestamp": timestamp,
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -254,7 +536,9 @@ class SimulatedExchangeClient:
             "execution_price": execution_price,
             "fee": fee,
             "cost": cost,
-            "slippage_cost": abs(execution_price - market_price) * qty
+            "slippage_cost": abs(
+                execution_price - market_price
+            ) * qty
         }
 
         self.trades.append(trade)
@@ -267,76 +551,189 @@ class SimulatedExchangeClient:
             "price": execution_price,
             "status": "FILLED",
             "fee": fee,
-            "timestamp": trade["timestamp"]
+            "timestamp": timestamp
         })
 
         logger.info(
-            f"✅ SIM ORDER | {side} {qty:.6f} {symbol} @ {execution_price:.2f}"
+            "PAPER ORDER | %s %s %.8f @ %.8f",
+            side,
+            symbol,
+            qty,
+            execution_price
         )
-        logger.info(f"   Fee: {fee:.4f} | Balances: {self.balances}")
 
         return trade
 
     # ------------------------------------------------------------------
-    # Historial y métricas
+    # HISTORIAL
     # ------------------------------------------------------------------
 
     def get_trade_history(self) -> List[Dict[str, Any]]:
-        return self.trades.copy()
+        with self._state_lock:
+            return copy.deepcopy(self.trades)
 
     def get_order_history(self) -> List[Dict[str, Any]]:
-        return self.order_history.copy()
+        with self._state_lock:
+            return copy.deepcopy(self.order_history)
 
     def get_performance_summary(self) -> Dict[str, Any]:
-        if not self.trades:
+
+        with self._state_lock:
+
+            total_trades = len(self.trades)
+
+            total_fees = sum(
+                trade["fee"]
+                for trade in self.trades
+            )
+
+            total_slippage = sum(
+                trade["slippage_cost"]
+                for trade in self.trades
+            )
+
+            compras = sum(
+                1
+                for trade in self.trades
+                if trade["side"] == "BUY"
+            )
+
+            ventas = sum(
+                1
+                for trade in self.trades
+                if trade["side"] == "SELL"
+            )
+
             return {
-                "total_trades": 0,
-                "total_fees": 0.0,
-                "total_slippage_cost": 0.0,
+                "total_trades": total_trades,
+                "buy_trades": compras,
+                "sell_trades": ventas,
+                "total_fees": total_fees,
+                "total_slippage_cost": total_slippage,
+                "avg_slippage": (
+                    total_slippage / total_trades
+                    if total_trades
+                    else 0.0
+                ),
                 "balances": self.balances.copy()
             }
 
-        total_fees = sum(t["fee"] for t in self.trades)
-        total_slippage = sum(t["slippage_cost"] for t in self.trades)
-
-        return {
-            "total_trades": len(self.trades),
-            "buy_trades": sum(1 for t in self.trades if t["side"] == "BUY"),
-            "sell_trades": sum(1 for t in self.trades if t["side"] == "SELL"),
-            "total_fees": total_fees,
-            "total_slippage_cost": total_slippage,
-            "avg_slippage": total_slippage / len(self.trades),
-            "balances": self.balances.copy()
-        }
-
     # ------------------------------------------------------------------
-    # Control
+    # RESET Y CONTROL
     # ------------------------------------------------------------------
 
-    def reset(self, new_balances: Optional[Dict[str, float]] = None):
-        if new_balances:
-            self.balances = new_balances.copy()
+    def reset(
+        self,
+        new_balances: Optional[Dict[str, float]] = None
+    ) -> None:
 
-        self.trades.clear()
-        self.order_history.clear()
-        self._trade_id_counter = 1
+        with self._state_lock:
 
-        logger.info("🔄 SimulatedExchangeClient reiniciado")
-        logger.info(f"   Balances: {self.balances}")
+            if new_balances is None:
+                balances = self.initial_balances.copy()
+            else:
+                balances = self._validar_balances(
+                    new_balances
+                )
 
-    async def close(self):
-        logger.info("✅ SimulatedExchangeClient cerrado (simulación)")
+            self.balances = balances
+            self._asegurar_activos_base()
+
+            self.trades.clear()
+            self.order_history.clear()
+
+            self._trade_id_counter = 1
+
+        logger.info(
+            "SimulatedExchangeClient reiniciado"
+        )
+
+    def force_reset(
+        self,
+        initial_balances: Optional[Dict[str, float]] = None
+    ) -> None:
+
+        if initial_balances is None:
+            raise RuntimeError(
+                "force_reset requiere initial_balances"
+            )
+
+        balances = self._validar_balances(
+            initial_balances
+        )
+
+        with self._state_lock:
+
+            self.initial_balances = balances.copy()
+            self.balances = balances.copy()
+
+            self._asegurar_activos_base()
+
+            self.trades.clear()
+            self.order_history.clear()
+
+            self._trade_id_counter = 1
+
+        logger.warning(
+            "SimulatedExchangeClient reiniciado forzosamente"
+        )
+
+    @classmethod
+    def force_reset_class(
+        cls,
+        initial_balances: Optional[Dict[str, float]] = None
+    ):
+
+        if initial_balances is None:
+            raise RuntimeError(
+                "force_reset_class requiere initial_balances"
+            )
+
+        with cls._singleton_lock:
+
+            if cls._instance is None:
+                raise RuntimeError(
+                    "No existe instancia para reiniciar"
+                )
+
+            cls._instance.force_reset(initial_balances)
+
+            cls._initialized = True
+            cls._just_initialized = True
 
     # ------------------------------------------------------------------
-    # Compatibilidad BinanceClient
+    # CONTROL DE CICLOS
     # ------------------------------------------------------------------
 
-    async def get_account_balances(self) -> Dict[str, float]:
-        """Devuelve los balances actuales - compatibilidad con BinanceClient"""
-        if not hasattr(self, 'balances') or not self.balances:
-            logger.warning("⚠️ SimulatedExchangeClient balances not initialized, returning initial balances")
-            return self.initial_balances.copy()
-        return self.get_balances()
+    @classmethod
+    def mark_cycle_completed(cls) -> bool:
+
+        with cls._singleton_lock:
+
+            estaba_recien_inicializado = cls._just_initialized
+
+            cls._just_initialized = False
+
+            return estaba_recien_inicializado
+
+    @classmethod
+    def is_just_initialized(cls) -> bool:
+
+        with cls._singleton_lock:
+            return cls._just_initialized
+
+    # ------------------------------------------------------------------
+    # COMPATIBILIDAD
+    # ------------------------------------------------------------------
+
+    async def close(self) -> None:
+        """
+        Cierre compatible con clientes asíncronos.
+        El simulador no mantiene conexiones externas.
+        """
+        logger.debug(
+            "SimulatedExchangeClient cerrado"
+        )
 
     async def place_order(
         self,
@@ -346,119 +743,39 @@ class SimulatedExchangeClient:
         price: Optional[float] = None,
         order_type: str = "MARKET"
     ):
+
         raise NotImplementedError(
-            "Use execute_order(symbol, side, qty, market_price) en simulado"
+            "Utiliza execute_order() para ejecutar operaciones "
+            "simuladas. Las órdenes pendientes requieren un "
+            "gestor específico."
         )
 
-    async def cancel_order(self, symbol: str, order_id: str) -> bool:
-        logger.warning("⚠️ Cancelación no soportada en simulado")
+    async def cancel_order(
+        self,
+        symbol: str,
+        order_id: str
+    ) -> bool:
+
+        logger.warning(
+            "No se pueden cancelar órdenes ya ejecutadas en PAPER"
+        )
+
         return False
 
-    async def get_open_orders(self, symbol: str = None) -> List[Dict[str, Any]]:
+    async def get_open_orders(
+        self,
+        symbol: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+
         return []
-    
-    def set_balance(self, asset: str, amount: float):
-        """
-        Set balance for a specific asset.
-        
-        Args:
-            asset: Asset symbol (e.g., 'USDT', 'BTC', 'ETH')
-            amount: New balance amount
-        """
-        old_balance = self.balances.get(asset, 0.0)
-        self.balances[asset] = amount
-        logger.info(f"💰 Balance updated: {asset} {old_balance:.6f} → {amount:.6f}")
-    
-    def force_reset(self, initial_balances: Dict[str, float] = None):
-        """Force reset the client with new initial balances"""
-        if initial_balances:
-            self.balances = initial_balances.copy()
-            self.initial_balances = initial_balances.copy()
-            self.trades.clear()
-            self.order_history.clear()
-            self._trade_id_counter = 1
-            logger.info(f"🔄 SimulatedExchangeClient forcefully reset with balances: {self.balances}")
-        else:
-            logger.critical("🚨 FATAL: force_reset requires initial_balances")
-            raise RuntimeError("force_reset requires initial_balances")
-    
-    @classmethod
-    def force_reset_class(cls, initial_balances: Dict[str, float] = None):
-        """Force reset at class level - should be used only for testing"""
-        if cls._instance is not None:
-            cls._initialized = False
-            if initial_balances:
-                cls._instance.__init__(initial_balances)
-            else:
-                logger.critical("🚨 FATAL: force_reset requires initial_balances")
-                raise RuntimeError("force_reset requires initial_balances")
-            logger.warning("⚠️ SimulatedExchangeClient forcefully reset - testing only")
-        else:
-            logger.warning("⚠️ SimulatedExchangeClient not initialized - cannot reset")
-            
-    def reset(self):
-        """Reinicia el cliente a su estado inicial"""
-        self.balances = self.initial_balances.copy()
-        self.trades.clear()
-        self.order_history.clear()
-        self._trade_id_counter = 1
-        logger.info("🔄 SimulatedExchangeClient reiniciado a estado inicial")
-        logger.info(f"   Balances: {self.balances}")
-    
-    @classmethod
-    def cleanup(cls) -> bool:
-        """
-        Cleanup completo del singleton - USAR TRAS SystemCleanup.
-        Resetea los flags para permitir nueva inicialización.
-        
-        Returns:
-            True si cleanup fue exitoso
-        """
-        cls._instance = None
-        cls._initialized = False
-        cls._just_initialized = False
-        logger.info("🔄 SimulatedExchangeClient.cleanup() completado - singleton listo para re-init")
-        return True
-
-    @classmethod
-    def mark_cycle_completed(cls) -> bool:
-        """
-        Marca que el primer ciclo ha sido completado.
-        Esto pone _just_initialized a False, indicando que ya no es una sesión nueva.
-        
-        Returns:
-            True si el flag estaba en True (instancia recién creada), False si ya estaba en False
-        """
-        was_just_initialized = cls._just_initialized
-        if cls._just_initialized:
-            cls._just_initialized = False
-            logger.info("🔄 SimulatedExchangeClient: Primer ciclo completado - instancia marcada como 'en uso'")
-        return was_just_initialized
-
-    @classmethod
-    def is_just_initialized(cls) -> bool:
-        """
-        Verifica si la instancia es recién creada (primer ciclo).
-        
-        Returns:
-            True si es instancia recién creada, False si es sesión continua
-        """
-        return cls._just_initialized
-
-    # ------------------------------------------------------------------
-    # Market Price - DEPRECATED
-    # ------------------------------------------------------------------
 
     def get_market_price(self, symbol: str) -> float:
         """
-        DEPRECATED: No usar - use MarketDataManager instead.
-        
-        Obtiene el precio actual del mercado para un símbolo simulado.
-        
-        Args:
-            symbol: Símbolo del par de trading (e.g., 'BTCUSDT', 'ETHUSDT')
-        
-        Returns:
-            Precio actual del símbolo
+        Los precios pertenecen al sistema de datos de mercado.
+
+        No se deben generar precios artificiales desde el exchange
+        simulado.
         """
-        raise NotImplementedError("get_market_price is deprecated - use MarketDataManager instead")
+        raise NotImplementedError(
+            "Utiliza MarketDataManager para obtener precios reales"
+        )

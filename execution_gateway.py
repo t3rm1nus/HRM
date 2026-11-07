@@ -1,354 +1,492 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HRM Execution Gateway Module
+Gateway central de ejecución de HRM.
 
-This module provides the single point of execution for the HRM system.
-It handles order validation, execution, and risk management.
+Centraliza la validación, el control de riesgo y la delegación
+de órdenes al OrderManager existente.
 """
 
-import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
 
 from core.logging import logger
 from core.portfolio_manager import PortfolioManager
-from core.error_handler import ErrorHandler
-from core.trading_metrics import TradingMetrics
-
+from core.trading_metrics import get_trading_metrics
 from l1_operational.order_manager import OrderManager
-from l1_operational.binance_client import BinanceClient
-from l1_operational.order_validators import OrderValidator
 from l1_operational.risk_guard import RiskGuard
-
-from l2_tactic.tactical_signal_processor import TacticalSignal
-from l2_tactic.config import L2Config
-
-from comms.config import config
 
 
 class ExecutionGateway:
-    """Single point of execution for HRM system orders."""
-    
-    def __init__(self, portfolio_manager: PortfolioManager, order_manager: OrderManager):
+    """Punto único de entrada para ejecutar órdenes."""
+
+    def __init__(
+        self,
+        portfolio_manager: PortfolioManager,
+        order_manager: OrderManager
+    ):
         self.portfolio_manager = portfolio_manager
         self.order_manager = order_manager
-        self.binance_client = order_manager.binance_client
-        
-        # Initialize execution components
-        self.validator = OrderValidator(portfolio_manager)
+
+        # Reutilizar los componentes ya inicializados por OrderManager.
+        self.validator = order_manager.validators
         self.risk_guard = RiskGuard(portfolio_manager)
-        self.trading_metrics = TradingMetrics()
-        
-        # Execution state
+        self.trading_metrics = get_trading_metrics()
+
         self.execution_stats = {
-            'total_orders': 0,
-            'successful_executions': 0,
-            'failed_executions': 0,
-            'rejected_orders': 0,
-            'risk_blocks': 0
+            "total_orders": 0,
+            "successful_executions": 0,
+            "failed_executions": 0,
+            "rejected_orders": 0,
+            "risk_blocks": 0,
         }
-    
-    async def execute_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute a list of orders through the gateway."""
+
+    async def execute_orders(
+        self,
+        orders: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Valida, filtra y delega las órdenes al motor existente."""
+
         if not orders:
             return []
-        
-        logger.info(f"💰 Gateway: Processing {len(orders)} orders")
-        
-        # Update execution stats
-        self.execution_stats['total_orders'] += len(orders)
-        
-        # 1. Validate all orders
-        validated_orders = await self._validate_orders(orders)
-        
-        # 2. Apply risk management
-        risk_checked_orders = await self._apply_risk_management(validated_orders)
-        
-        # 3. Execute orders
-        executed_orders = await self._execute_validated_orders(risk_checked_orders)
-        
-        # 4. Update portfolio and metrics
-        await self._update_portfolio_and_metrics(executed_orders)
-        
-        # 5. Log execution results
-        await self._log_execution_results(orders, validated_orders, risk_checked_orders, executed_orders)
-        
-        return executed_orders
-    
-    async def _validate_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Validate orders before execution."""
-        validated_orders = []
-        
-        for order in orders:
-            try:
-                # Basic order validation
-                validation_result = self.validator.validate_order(order)
-                
-                if validation_result['valid']:
-                    # Portfolio-specific validation
-                    portfolio_validation = self.validator.validate_portfolio_constraints(order)
-                    
-                    if portfolio_validation['valid']:
-                        validated_orders.append(order)
-                        logger.debug(f"✅ Order validated: {order.get('symbol')} {order.get('side')} {order.get('quantity')}")
-                    else:
-                        logger.warning(f"❌ Portfolio validation failed: {portfolio_validation['reason']}")
-                        order['status'] = 'rejected'
-                        order['validation_error'] = portfolio_validation['reason']
-                        self.execution_stats['rejected_orders'] += 1
-                        validated_orders.append(order)
-                else:
-                    logger.warning(f"❌ Order validation failed: {validation_result['reason']}")
-                    order['status'] = 'rejected'
-                    order['validation_error'] = validation_result['reason']
-                    self.execution_stats['rejected_orders'] += 1
-                    validated_orders.append(order)
-                    
-            except Exception as e:
-                logger.error(f"❌ Order validation error: {e}")
-                order['status'] = 'rejected'
-                order['validation_error'] = str(e)
-                self.execution_stats['rejected_orders'] += 1
-                validated_orders.append(order)
-        
-        return validated_orders
-    
-    async def _apply_risk_management(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Apply risk management rules to orders."""
-        risk_checked_orders = []
-        
-        for order in orders:
-            try:
-                # Check if order should be blocked by risk management
-                risk_check = await self.risk_guard.check_order_risk(order)
-                
-                if risk_check['allowed']:
-                    risk_checked_orders.append(order)
-                    logger.debug(f"🛡️ Risk check passed: {order.get('symbol')} {order.get('side')}")
-                else:
-                    logger.warning(f"🛡️ Risk check blocked: {risk_check['reason']}")
-                    order['status'] = 'rejected'
-                    order['risk_error'] = risk_check['reason']
-                    self.execution_stats['risk_blocks'] += 1
-                    risk_checked_orders.append(order)
-                    
-            except Exception as e:
-                logger.error(f"❌ Risk management error: {e}")
-                order['status'] = 'rejected'
-                order['risk_error'] = str(e)
-                self.execution_stats['risk_blocks'] += 1
-                risk_checked_orders.append(order)
-        
-        return risk_checked_orders
-    
-    async def _execute_validated_orders(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute validated and risk-checked orders."""
-        executed_orders = []
-        
-        for order in orders:
-            if order.get('status') == 'rejected':
-                executed_orders.append(order)
-                continue
-            
-            try:
-                # Execute order through order manager
-                execution_result = await self.order_manager.execute_single_order(order)
-                
-                if execution_result.get('status') == 'filled':
-                    self.execution_stats['successful_executions'] += 1
-                    logger.info(f"✅ Order executed: {order.get('symbol')} {order.get('side')} {order.get('quantity')} @ {execution_result.get('fill_price')}")
-                else:
-                    self.execution_stats['failed_executions'] += 1
-                    logger.warning(f"⚠️ Order failed: {order.get('symbol')} {order.get('side')} - {execution_result.get('status')}")
-                
-                executed_orders.append(execution_result)
-                
-            except Exception as e:
-                logger.error(f"❌ Order execution failed: {e}")
-                order['status'] = 'failed'
-                order['execution_error'] = str(e)
-                self.execution_stats['failed_executions'] += 1
-                executed_orders.append(order)
-        
-        return executed_orders
-    
-    async def _update_portfolio_and_metrics(self, executed_orders: List[Dict[str, Any]]):
-        """Update portfolio state and trading metrics."""
-        try:
-            # Update portfolio from executed orders - VERSIÓN PURA: no requiere market_data
-            await self.portfolio_manager.update_from_orders_async(executed_orders)
-            
-            # Update trading metrics - CRITICAL FIX: Use async method (no market_data needed)
-            total_value = await self.portfolio_manager.get_total_value_async()
-            self.trading_metrics.update_from_orders(executed_orders, total_value)
-            
-            # Save portfolio state periodically
-            if self.execution_stats['total_orders'] % 5 == 0:
-                self.portfolio_manager.save_to_json()
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to update portfolio and metrics: {e}")
-    
-    async def _log_execution_results(self, original_orders: List[Dict[str, Any]], 
-                                   validated_orders: List[Dict[str, Any]],
-                                   risk_checked_orders: List[Dict[str, Any]],
-                                   executed_orders: List[Dict[str, Any]]):
-        """Log execution results and statistics."""
-        try:
-            # Count different types of orders
-            successful = [o for o in executed_orders if o.get('status') == 'filled']
-            failed = [o for o in executed_orders if o.get('status') == 'failed']
-            rejected = [o for o in executed_orders if o.get('status') == 'rejected']
-            
-            # Log summary
-            logger.info(
-                f"💰 Gateway Results: "
-                f"Original: {len(original_orders)} | "
-                f"Validated: {len(validated_orders)} | "
-                f"Risk-checked: {len(risk_checked_orders)} | "
-                f"Executed: {len(executed_orders)} | "
-                f"Successful: {len(successful)} | "
-                f"Failed: {len(failed)} | "
-                f"Rejected: {len(rejected)}"
+
+        self.execution_stats["total_orders"] += len(orders)
+
+        logger.info(
+            "Gateway: procesando %s órdenes",
+            len(orders)
+        )
+
+        ordenes_validadas = self._validar_ordenes(orders)
+        ordenes_autorizadas = await self._validar_riesgo(
+            ordenes_validadas
+        )
+
+        if not ordenes_autorizadas:
+            return self._obtener_ordenes_rechazadas(
+                ordenes_validadas
             )
-            
-            # Log detailed stats periodically
-            if self.execution_stats['total_orders'] % 10 == 0:
-                logger.info(
-                    f"📊 Gateway Stats (Total: {self.execution_stats['total_orders']}): "
-                    f"Successful: {self.execution_stats['successful_executions']} | "
-                    f"Failed: {self.execution_stats['failed_executions']} | "
-                    f"Rejected: {self.execution_stats['rejected_orders']} | "
-                    f"Risk Blocks: {self.execution_stats['risk_blocks']}"
+
+        resultados = await self._ejecutar_ordenes(
+            ordenes_autorizadas
+        )
+
+        self._actualizar_estadisticas(resultados)
+
+        await self._registrar_resultados(resultados)
+
+        return self._combinar_resultados(
+            ordenes_validadas,
+            resultados
+        )
+
+    def _validar_ordenes(
+        self,
+        ordenes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Normaliza y valida las órdenes antes de evaluar su riesgo."""
+
+        ordenes_validas = []
+
+        for orden_original in ordenes:
+            orden = dict(orden_original)
+
+            try:
+                resultado = self.validator.validate_and_normalize_order(
+                    orden
                 )
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to log execution results: {e}")
-    
-    async def execute_signal(self, signal: TacticalSignal, market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Execute a single tactical signal."""
+
+                reporte = resultado["validation"]
+
+                if reporte["status"] != "valid":
+                    orden["status"] = "rejected"
+                    orden["validation_error"] = "; ".join(
+                        reporte.get("errors", [])
+                    )
+
+                    self.execution_stats["rejected_orders"] += 1
+                    ordenes_validas.append(orden)
+                    continue
+
+                orden_normalizada = resultado["order"]
+
+                # Mantener los campos adicionales del contrato original.
+                orden_normalizada.update({
+                    clave: valor
+                    for clave, valor in orden.items()
+                    if clave not in orden_normalizada
+                })
+
+                orden_normalizada["side"] = (
+                    orden_normalizada["action"]
+                )
+
+                orden_normalizada["action"] = (
+                    orden_normalizada["action"].lower()
+                )
+
+                ordenes_validas.append(orden_normalizada)
+
+            except Exception as error:
+                orden["status"] = "rejected"
+                orden["validation_error"] = str(error)
+
+                self.execution_stats["rejected_orders"] += 1
+                ordenes_validas.append(orden)
+
+                logger.exception(
+                    "Error validando una orden"
+                )
+
+        return ordenes_validas
+
+    async def _validar_riesgo(
+        self,
+        ordenes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Comprueba el riesgo individual de cada orden."""
+
+        ordenes_autorizadas = []
+
+        for orden in ordenes:
+            if orden.get("status") == "rejected":
+                continue
+
+            try:
+                resultado = await self.risk_guard.check_order_risk(
+                    orden
+                )
+
+                if not resultado.get("allowed", False):
+                    orden["status"] = "rejected"
+                    orden["risk_error"] = resultado.get(
+                        "reason",
+                        "Orden bloqueada por riesgo"
+                    )
+
+                    self.execution_stats["risk_blocks"] += 1
+                    self.execution_stats["rejected_orders"] += 1
+
+                    logger.warning(
+                        "Orden bloqueada por riesgo: %s",
+                        orden["risk_error"]
+                    )
+                    continue
+
+                ordenes_autorizadas.append(orden)
+
+            except Exception as error:
+                # Ante un fallo del control de riesgo, bloquear.
+                orden["status"] = "rejected"
+                orden["risk_error"] = str(error)
+
+                self.execution_stats["risk_blocks"] += 1
+                self.execution_stats["rejected_orders"] += 1
+
+                logger.exception(
+                    "Error durante la validación de riesgo"
+                )
+
+        return ordenes_autorizadas
+
+    async def _ejecutar_ordenes(
+        self,
+        ordenes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Delega la ejecución al OrderManager real."""
+
         try:
-            # Convert signal to orders
-            orders = await self._convert_signal_to_orders(signal, market_data)
-            
-            # Execute orders through gateway
-            executed_orders = await self.execute_orders(orders)
-            
-            return executed_orders
-            
-        except Exception as e:
-            logger.error(f"❌ Signal execution failed: {e}")
-            return []
-    
-    async def _convert_signal_to_orders(self, signal: TacticalSignal, market_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Convert a tactical signal to executable orders."""
-        try:
-            symbol = getattr(signal, 'symbol', '')
-            side = getattr(signal, 'side', 'hold')
-            confidence = getattr(signal, 'confidence', 0.5)
-            
-            if side == 'hold':
-                return []
-            
-            # Get current price for the symbol
-            current_price = self._get_current_price(symbol, market_data)
-            if not current_price:
-                logger.warning(f"⚠️ No price data for {symbol}")
-                return []
-            
-            # Calculate order size based on signal strength and portfolio allocation
-            order_size = await self._calculate_order_size(signal, market_data, current_price)
-            
-            if order_size <= 0:
-                logger.warning(f"⚠️ Invalid order size for {symbol}")
-                return []
-            
-            # Create order
-            order = {
-                'symbol': symbol,
-                'side': side,
-                'type': 'MARKET',
-                'quantity': order_size,
-                'price': current_price,
-                'confidence': confidence,
-                'signal_source': 'tactical',
-                'status': 'pending',
-                'timestamp': pd.Timestamp.utcnow().isoformat()
-            }
-            
-            logger.info(f"🎯 Signal converted to order: {symbol} {side} {order_size} @ {current_price}")
-            return [order]
-            
-        except Exception as e:
-            logger.error(f"❌ Signal conversion failed: {e}")
-            return []
-    
-    def _get_current_price(self, symbol: str, market_data: Dict[str, Any]) -> Optional[float]:
-        """Get current price for a symbol."""
-        try:
-            symbol_data = market_data.get(symbol, {})
-            if isinstance(symbol_data, dict) and 'close' in symbol_data:
-                return float(symbol_data['close'])
-            elif isinstance(symbol_data, pd.DataFrame) and not symbol_data.empty:
-                return float(symbol_data['close'].iloc[-1])
-            return None
+            return await self.order_manager.execute_orders(
+                ordenes
+            )
+
         except Exception:
+            logger.exception(
+                "Error ejecutando órdenes en OrderManager"
+            )
+
+            resultados = []
+
+            for orden in ordenes:
+                resultado = dict(orden)
+                resultado["status"] = "failed"
+                resultado["execution_error"] = (
+                    "Error interno del motor de ejecución"
+                )
+                resultados.append(resultado)
+
+            return resultados
+
+    def _actualizar_estadisticas(
+        self,
+        resultados: List[Dict[str, Any]]
+    ) -> None:
+        """Actualiza los contadores de ejecución."""
+
+        for resultado in resultados:
+            estado = str(
+                resultado.get("status", "")
+            ).lower()
+
+            if estado == "filled":
+                self.execution_stats[
+                    "successful_executions"
+                ] += 1
+
+            elif estado in ("failed", "error"):
+                self.execution_stats[
+                    "failed_executions"
+                ] += 1
+
+            elif estado == "rejected":
+                self.execution_stats[
+                    "rejected_orders"
+                ] += 1
+
+    async def _registrar_resultados(
+        self,
+        resultados: List[Dict[str, Any]]
+    ) -> None:
+        """Registra los resultados sin duplicar actualizaciones del portfolio."""
+
+        ejecutadas = [
+            resultado
+            for resultado in resultados
+            if resultado.get("status") == "filled"
+        ]
+
+        if not ejecutadas:
+            return
+
+        try:
+            valor_cartera = (
+                await self.portfolio_manager.get_total_value_async()
+            )
+
+            self.trading_metrics.update_from_orders(
+                executed_orders=ejecutadas,
+                portfolio_value=valor_cartera
+            )
+
+        except Exception:
+            logger.exception(
+                "No se pudieron actualizar las métricas de trading"
+            )
+
+    def _obtener_ordenes_rechazadas(
+        self,
+        ordenes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Devuelve las órdenes rechazadas durante los controles."""
+
+        return [
+            orden
+            for orden in ordenes
+            if orden.get("status") == "rejected"
+        ]
+
+    def _combinar_resultados(
+        self,
+        ordenes_originales: List[Dict[str, Any]],
+        resultados: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Conserva tanto las órdenes ejecutadas como las rechazadas."""
+
+        rechazadas = [
+            orden
+            for orden in ordenes_originales
+            if orden.get("status") == "rejected"
+        ]
+
+        return resultados + rechazadas
+
+    async def execute_signal(
+        self,
+        signal: Any,
+        market_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Convierte una señal táctica en una orden ejecutable."""
+
+        try:
+            ordenes = await self._convertir_senal_a_orden(
+                signal,
+                market_data
+            )
+
+            return await self.execute_orders(ordenes)
+
+        except Exception:
+            logger.exception(
+                "Error ejecutando señal táctica"
+            )
+            return []
+
+    async def _convertir_senal_a_orden(
+        self,
+        signal: Any,
+        market_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Construye una orden a partir de una señal."""
+
+        symbol = getattr(signal, "symbol", "")
+        side = str(
+            getattr(signal, "side", "hold")
+        ).lower()
+
+        confidence = float(
+            getattr(signal, "confidence", 0.5)
+        )
+
+        if side not in ("buy", "sell"):
+            return []
+
+        precio = self._obtener_precio_actual(
+            symbol,
+            market_data
+        )
+
+        if precio is None or precio <= 0:
+            logger.warning(
+                "No hay precio válido para %s. Orden cancelada.",
+                symbol
+            )
+            return []
+
+        cantidad = await self._calcular_cantidad(
+            symbol,
+            confidence,
+            precio
+        )
+
+        if cantidad <= 0:
+            return []
+
+        return [{
+            "symbol": symbol,
+            "action": side,
+            "side": side,
+            "type": "MARKET",
+            "quantity": cantidad,
+            "price": precio,
+            "confidence": confidence,
+            "signal_source": "tactical",
+            "status": "pending",
+            "timestamp": datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }]
+
+    def _obtener_precio_actual(
+        self,
+        symbol: str,
+        market_data: Dict[str, Any]
+    ) -> Optional[float]:
+        """Obtiene el último precio disponible en los datos recibidos."""
+
+        datos = market_data.get(symbol)
+
+        try:
+            if isinstance(datos, dict):
+                precio = datos.get("close")
+
+            elif isinstance(datos, pd.DataFrame):
+                if datos.empty or "close" not in datos.columns:
+                    return None
+
+                precio = datos["close"].iloc[-1]
+
+            else:
+                return None
+
+            precio = float(precio)
+
+            if precio <= 0:
+                return None
+
+            return precio
+
+        except (TypeError, ValueError, KeyError, IndexError):
             return None
-    
-    async def _calculate_order_size(self, signal: TacticalSignal, market_data: Dict[str, Any], current_price: float) -> float:
-        """Calculate order size based on signal and portfolio constraints."""
+
+    async def _calcular_cantidad(
+        self,
+        symbol: str,
+        confidence: float,
+        precio: float
+    ) -> float:
+        """Calcula la cantidad respetando el capital disponible."""
+
         try:
-            symbol = getattr(signal, 'symbol', '')
-            confidence = getattr(signal, 'confidence', 0.5)
-            
-            # Get portfolio state - CRITICAL FIX: Use async method (no market_data needed)
-            portfolio_state = self.portfolio_manager.get_portfolio_state()
-            total_value = await self.portfolio_manager.get_total_value_async()
-            
-            # Calculate position size based on confidence and risk limits
-            base_allocation = total_value * 0.10  # 10% base allocation
-            risk_adjusted_allocation = base_allocation * confidence
-            
-            # Calculate quantity
-            quantity = risk_adjusted_allocation / current_price
-            
-            # Apply minimum order size constraints
-            min_notional = 10.0  # Minimum $10 order
-            if quantity * current_price < min_notional:
-                quantity = min_notional / current_price
-            
-            # Apply portfolio constraints
-            max_position_size = total_value * 0.30  # Max 30% in single position
-            max_quantity = max_position_size / current_price
-            
-            quantity = min(quantity, max_quantity)
-            
-            return max(0.0, quantity)
-            
-        except Exception as e:
-            logger.error(f"❌ Order size calculation failed: {e}")
+            valor_cartera = float(
+                await self.portfolio_manager.get_total_value_async()
+            )
+
+            if valor_cartera <= 0:
+                return 0.0
+
+            confianza = max(
+                0.0,
+                min(confidence, 1.0)
+            )
+
+            asignacion = valor_cartera * 0.10 * confianza
+
+            cantidad = asignacion / precio
+
+            # No forzar mínimos que puedan superar el capital disponible.
+            return max(0.0, cantidad)
+
+        except Exception:
+            logger.exception(
+                "No se pudo calcular la cantidad para %s",
+                symbol
+            )
             return 0.0
-    
-    def get_execution_stats(self) -> Dict[str, Any]:
-        """Get execution statistics."""
+
+    def get_execution_stats(self) -> Dict[str, int]:
+        """Devuelve una copia de las estadísticas."""
+
         return self.execution_stats.copy()
-    
-    async def cleanup_stale_orders(self, current_positions: Dict[str, float]):
-        """Clean up stale stop-loss and profit-taking orders."""
+
+    async def cleanup_stale_orders(
+        self,
+        current_positions: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """Delega la limpieza al gestor de órdenes."""
+
         try:
-            cleanup_stats = self.order_manager.cleanup_stale_orders(current_positions)
-            logger.info(f"🧹 Gateway cleanup: {cleanup_stats}")
-            return cleanup_stats
-        except Exception as e:
-            logger.error(f"❌ Gateway cleanup failed: {e}")
+            resultado = self.order_manager.cleanup_stale_orders(
+                current_positions
+            )
+
+            if hasattr(resultado, "__await__"):
+                resultado = await resultado
+
+            return resultado or {}
+
+        except Exception:
+            logger.exception(
+                "Error limpiando órdenes obsoletas"
+            )
             return {}
 
 
-async def create_execution_gateway(portfolio_manager: PortfolioManager, 
-                                 order_manager: OrderManager) -> ExecutionGateway:
-    """Create and initialize an execution gateway."""
-    gateway = ExecutionGateway(portfolio_manager, order_manager)
-    logger.info("✅ Execution Gateway initialized")
+async def create_execution_gateway(
+    portfolio_manager: PortfolioManager,
+    order_manager: OrderManager
+) -> ExecutionGateway:
+    """Construye el gateway de ejecución."""
+
+    gateway = ExecutionGateway(
+        portfolio_manager,
+        order_manager
+    )
+
+    logger.info(
+        "Execution Gateway inicializado"
+    )
+
     return gateway
