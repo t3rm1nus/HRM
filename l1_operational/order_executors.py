@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+import math
 
 from core.logging import logger
 from l1_operational.simulated_exchange_client import (
@@ -15,11 +16,6 @@ except ImportError:
     get_paper_logger = None
     PAPER_LOGGER_AVAILABLE = False
 
-try:
-    from core.trading_metrics import get_trading_metrics
-except ImportError:
-    get_trading_metrics = None
-
 
 class OrderExecutors:
     """
@@ -29,14 +25,19 @@ class OrderExecutors:
         Ejecuta operaciones exclusivamente contra el exchange simulado.
 
     LIVE y TESTNET:
-        No ejecuta operaciones desde esta clase. Se necesita un
-        ejecutor real integrado y explícitamente habilitado.
+        No ejecuta operaciones desde esta clase.
 
-    No crea capital ficticio ni cambia de modo automáticamente.
+    La actualización de métricas corresponde al ExecutionGateway.
+    Esta clase no debe contabilizar una operación por segunda vez.
     """
 
     MODOS_PAPER = {"paper", "simulated"}
-    MODOS_REALES = {"live", "testnet", "backtest"}
+
+    MODOS_NO_HABILITADOS = {
+        "live",
+        "testnet",
+        "backtest",
+    }
 
     def __init__(
         self,
@@ -50,16 +51,14 @@ class OrderExecutors:
         self.mode = self._normalizar_modo(mode)
 
         self.paper_mode = self.mode in self.MODOS_PAPER
-        self.use_testnet = self.mode == "testnet"
+        self.use_testnet = False
 
         self.simulated_client = simulated_client
         self.paper_logger = None
-        self.trading_metrics = None
 
         if self.paper_mode:
             self._inicializar_simulador()
             self._inicializar_registro()
-            self._inicializar_metricas()
 
         logger.info(
             "OrderExecutors inicializado: modo=%s, paper=%s",
@@ -70,7 +69,9 @@ class OrderExecutors:
     @staticmethod
     def _normalizar_modo(mode: str) -> str:
         if not isinstance(mode, str) or not mode.strip():
-            raise ValueError("El modo de ejecución es obligatorio")
+            raise ValueError(
+                "El modo de ejecución es obligatorio"
+            )
 
         modo = mode.strip().lower()
 
@@ -83,7 +84,9 @@ class OrderExecutors:
         }
 
         if modo not in modos_validos:
-            raise ValueError(f"Modo de ejecución no válido: {modo}")
+            raise ValueError(
+                f"Modo de ejecución no válido: {modo}"
+            )
 
         return modo
 
@@ -100,9 +103,18 @@ class OrderExecutors:
                 "configurado. No se permite crear capital ficticio."
             )
 
-        if not hasattr(self.simulated_client, "execute_order"):
+        if not callable(
+            getattr(self.simulated_client, "execute_order", None)
+        ):
             raise TypeError(
                 "El cliente simulado no implementa execute_order()"
+            )
+
+        if not callable(
+            getattr(self.simulated_client, "get_balances", None)
+        ):
+            raise TypeError(
+                "El cliente simulado no implementa get_balances()"
             )
 
         logger.info(
@@ -122,17 +134,6 @@ class OrderExecutors:
         except Exception:
             logger.exception(
                 "No se pudo inicializar PaperTradeLogger"
-            )
-
-    def _inicializar_metricas(self) -> None:
-        if get_trading_metrics is None:
-            return
-
-        try:
-            self.trading_metrics = get_trading_metrics()
-        except Exception:
-            logger.exception(
-                "No se pudieron inicializar TradingMetrics"
             )
 
     @staticmethod
@@ -155,35 +156,61 @@ class OrderExecutors:
             cantidad = float(quantity)
             precio = float(current_price)
         except (TypeError, ValueError):
-            return "Cantidad y precio deben ser numéricos"
-
-        import math
+            return (
+                "Cantidad y precio deben ser numéricos"
+            )
 
         if not math.isfinite(cantidad) or cantidad <= 0:
-            return "La cantidad debe ser positiva y finita"
+            return (
+                "La cantidad debe ser positiva y finita"
+            )
 
         if not math.isfinite(precio) or precio <= 0:
-            return "El precio debe ser positivo y finito"
+            return (
+                "El precio debe ser positivo y finito"
+            )
 
         return None
 
     async def _obtener_nav(self) -> Optional[float]:
         if self.portfolio_manager is None:
-            return None
+            raise RuntimeError(
+                "PortfolioManager no está inicializado"
+            )
 
-        try:
-            return float(
-                await self.portfolio_manager.get_total_value_async()
+        metodo = getattr(
+            self.portfolio_manager,
+            "get_total_value_async",
+            None,
+        )
+
+        if not callable(metodo):
+            raise RuntimeError(
+                "PortfolioManager no permite consultar el NAV"
             )
-        except Exception:
-            logger.exception(
-                "No se pudo calcular el valor del portfolio"
+
+        valor = await metodo()
+        nav = float(valor)
+
+        if not math.isfinite(nav) or nav < 0:
+            raise RuntimeError(
+                "El NAV del portfolio no es válido"
             )
-            return None
+
+        return nav
 
     async def _sincronizar_portfolio(self) -> None:
+        """
+        Sincroniza el portfolio con el exchange simulado.
+
+        Una respuesta False significa que la sincronización ha fallado.
+        Una respuesta None se considera correcta por compatibilidad
+        con implementaciones que no devuelven un booleano.
+        """
         if self.portfolio_manager is None:
-            return
+            raise RuntimeError(
+                "No existe PortfolioManager para sincronizar"
+            )
 
         metodo = getattr(
             self.portfolio_manager,
@@ -191,40 +218,110 @@ class OrderExecutors:
             None,
         )
 
-        if metodo is None:
-            return
+        if not callable(metodo):
+            raise RuntimeError(
+                "PortfolioManager no implementa "
+                "sync_from_exchange_async()"
+            )
 
-        await metodo(self.simulated_client)
+        resultado = await metodo(self.simulated_client)
+
+        if resultado is False:
+            raise RuntimeError(
+                "El portfolio ha rechazado la sincronización "
+                "con el exchange simulado"
+            )
 
     async def _registrar_trade(
         self,
         resultado: Dict[str, Any],
-        nav_after: Optional[float],
     ) -> None:
-        if self.paper_logger is not None:
-            try:
-                self.paper_logger.log_paper_trade(
-                    order=resultado,
-                    market_data=None,
-                    cycle_id=None,
-                    strategy="order_executor",
-                )
-                resultado["_already_logged"] = True
-            except Exception:
-                logger.exception(
-                    "No se pudo persistir el trade PAPER"
-                )
+        """
+        Persiste el trade PAPER.
 
-        if self.trading_metrics is not None:
-            try:
-                self.trading_metrics.update_from_orders(
-                    executed_orders=[resultado],
-                    portfolio_value=nav_after or 0.0,
-                )
-            except Exception:
-                logger.exception(
-                    "No se pudieron actualizar las métricas"
-                )
+        No actualiza TradingMetrics: esa responsabilidad pertenece
+        exclusivamente al ExecutionGateway.
+        """
+        if self.paper_logger is None:
+            return
+
+        try:
+            self.paper_logger.log_paper_trade(
+                order=resultado,
+                market_data=None,
+                cycle_id=None,
+                strategy="order_executor",
+            )
+            resultado["_already_logged"] = True
+
+        except Exception:
+            logger.exception(
+                "No se pudo persistir el trade PAPER"
+            )
+
+    async def _ejecutar_trade_simulado(
+        self,
+        symbol: str,
+        action: str,
+        quantity: float,
+        current_price: float,
+    ) -> Dict[str, Any]:
+        return self.simulated_client.execute_order(
+            symbol=symbol,
+            side=action,
+            qty=quantity,
+            market_price=current_price,
+        )
+
+    def _crear_resultado_ejecucion(
+        self,
+        symbol: str,
+        action: str,
+        quantity: float,
+        current_price: float,
+        trade: Dict[str, Any],
+        balances: Dict[str, Any],
+        nav_before: Optional[float],
+        nav_after: Optional[float],
+        error_sincronizacion: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resultado = {
+            "status": "filled",
+            "symbol": symbol,
+            "action": action,
+            "side": action,
+            "quantity": quantity,
+            "filled_quantity": quantity,
+            "market_price": current_price,
+            "filled_price": trade["execution_price"],
+            "fill_price": trade["execution_price"],
+            "price": trade["execution_price"],
+            "order_value": trade["cost"],
+            "commission": trade["fee"],
+            "slippage_cost": trade["slippage_cost"],
+            "timestamp": datetime.now(
+                timezone.utc
+            ).isoformat(),
+            "execution_type": "SIMULATED_TRADE",
+            "order_id": trade["order_id"],
+            "order_type": "MARKET",
+            "balances_after": balances,
+            "signal_source": "order_executor",
+            "reason": "Orden simulada ejecutada",
+            "nav_before": nav_before,
+            "nav_after": nav_after,
+            "simulated": True,
+            "portfolio_synced": (
+                error_sincronizacion is None
+            ),
+        }
+
+        if error_sincronizacion is not None:
+            resultado["portfolio_sync_error"] = (
+                error_sincronizacion
+            )
+
+        return resultado
 
     async def execute_order(
         self,
@@ -236,15 +333,26 @@ class OrderExecutors:
         take_profit: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Ejecuta una orden MARKET simulada.
+        Ejecuta una orden MARKET exclusivamente en PAPER.
 
-        Las órdenes pendientes y las protecciones stop-loss /
-        take-profit necesitan un gestor específico. Recibir esos
-        parámetros no significa que se hayan colocado.
+        No admite órdenes de protección porque todavía no existe
+        un gestor de órdenes stop-loss/take-profit integrado.
         """
+        symbol_normalizado = (
+            symbol.strip().upper()
+            if isinstance(symbol, str)
+            else str(symbol)
+        )
+
+        action_normalizada = (
+            action.strip().lower()
+            if isinstance(action, str)
+            else str(action)
+        )
+
         error = self._validar_orden(
-            symbol,
-            action,
+            symbol_normalizado,
+            action_normalizada,
             quantity,
             current_price,
         )
@@ -252,108 +360,134 @@ class OrderExecutors:
         if error:
             return self._crear_resultado(
                 "rejected",
-                symbol,
-                action,
+                symbol_normalizado,
+                action_normalizada,
                 error,
             )
 
         if not self.paper_mode:
             return self._crear_resultado(
                 "rejected",
-                symbol,
-                action,
+                symbol_normalizado,
+                action_normalizada,
                 (
-                    f"El modo {self.mode} no está habilitado en "
-                    "OrderExecutors. No se cambiará automáticamente "
-                    "a PAPER ni se enviará una orden real."
+                    f"El modo {self.mode} no está habilitado "
+                    "en OrderExecutors. No se enviará una "
+                    "orden real ni se cambiará automáticamente "
+                    "a PAPER."
                 ),
             )
 
         if stop_loss is not None or take_profit is not None:
             return self._crear_resultado(
                 "rejected",
-                symbol,
-                action,
+                symbol_normalizado,
+                action_normalizada,
                 (
-                    "No se aceptan stop_loss ni take_profit en esta "
-                    "ejecución MARKET: todavía no existe un gestor "
-                    "de órdenes de protección integrado."
+                    "No se aceptan stop_loss ni take_profit "
+                    "en esta ejecución MARKET: todavía no "
+                    "existe un gestor de órdenes de protección."
                 ),
             )
 
-        nav_before = await self._obtener_nav()
+        cantidad = float(quantity)
+        precio = float(current_price)
 
         try:
+            # No ejecutar si el estado inicial de la cartera
+            # no puede sincronizarse correctamente.
             await self._sincronizar_portfolio()
 
-            trade = self.simulated_client.execute_order(
-                symbol=symbol.strip().upper(),
-                side=action.strip().upper(),
-                qty=float(quantity),
-                market_price=float(current_price),
-            )
-
-            balances = self.simulated_client.get_balances()
-
-            await self._sincronizar_portfolio()
-
-            nav_after = await self._obtener_nav()
-
-            resultado = {
-                "status": "filled",
-                "symbol": symbol.strip().upper(),
-                "action": action.strip().lower(),
-                "side": action.strip().lower(),
-                "quantity": float(quantity),
-                "filled_quantity": float(quantity),
-                "market_price": float(current_price),
-                "filled_price": trade["execution_price"],
-                "fill_price": trade["execution_price"],
-                "price": trade["execution_price"],
-                "order_value": trade["cost"],
-                "commission": trade["fee"],
-                "slippage_cost": trade["slippage_cost"],
-                "timestamp": datetime.now(
-                    timezone.utc
-                ).isoformat(),
-                "execution_type": "SIMULATED_TRADE",
-                "order_id": trade["order_id"],
-                "order_type": "MARKET",
-                "balances_after": balances,
-                "signal_source": "order_executor",
-                "reason": "Orden simulada ejecutada",
-                "nav_before": nav_before,
-                "nav_after": nav_after,
-                "simulated": True,
-            }
-
-            await self._registrar_trade(
-                resultado,
-                nav_after,
-            )
-
-            logger.info(
-                "PAPER ejecutado: %s %s cantidad=%s precio=%s",
-                action.upper(),
-                symbol,
-                quantity,
-                trade["execution_price"],
-            )
-
-            return resultado
+            nav_before = await self._obtener_nav()
 
         except Exception as error:
             logger.exception(
-                "Error ejecutando orden PAPER: %s",
-                symbol,
+                "Sincronización previa fallida. "
+                "Orden bloqueada: %s",
+                symbol_normalizado,
             )
 
             return self._crear_resultado(
                 "failed",
-                symbol,
-                action,
+                symbol_normalizado,
+                action_normalizada,
+                (
+                    "Orden bloqueada por fallo de sincronización "
+                    f"previa: {error}"
+                ),
+            )
+
+        try:
+            trade = await self._ejecutar_trade_simulado(
+                symbol_normalizado,
+                action_normalizada.upper(),
+                cantidad,
+                precio,
+            )
+
+        except Exception as error:
+            logger.exception(
+                "Error ejecutando orden PAPER: %s",
+                symbol_normalizado,
+            )
+
+            return self._crear_resultado(
+                "failed",
+                symbol_normalizado,
+                action_normalizada,
                 str(error),
             )
+
+        try:
+            balances = self.simulated_client.get_balances()
+
+        except Exception:
+            balances = {}
+
+            logger.exception(
+                "No se pudieron consultar los balances "
+                "posteriores a la ejecución"
+            )
+
+        error_sincronizacion = None
+        nav_after = None
+
+        try:
+            await self._sincronizar_portfolio()
+            nav_after = await self._obtener_nav()
+
+        except Exception as error:
+            error_sincronizacion = str(error)
+
+            logger.exception(
+                "La orden se ejecutó, pero falló la "
+                "sincronización posterior: %s",
+                symbol_normalizado,
+            )
+
+        resultado = self._crear_resultado_ejecucion(
+            symbol=symbol_normalizado,
+            action=action_normalizada,
+            quantity=cantidad,
+            current_price=precio,
+            trade=trade,
+            balances=balances,
+            nav_before=nav_before,
+            nav_after=nav_after,
+            error_sincronizacion=error_sincronizacion,
+        )
+
+        await self._registrar_trade(resultado)
+
+        logger.info(
+            "PAPER ejecutado: %s %s cantidad=%s precio=%s",
+            action_normalizada.upper(),
+            symbol_normalizado,
+            cantidad,
+            trade["execution_price"],
+        )
+
+        return resultado
 
     @staticmethod
     def _crear_resultado(
@@ -379,9 +513,7 @@ class OrderExecutors:
                 PAPER_LOGGER_AVAILABLE
                 and self.paper_logger is not None
             ),
-            "trading_metrics_available": (
-                self.trading_metrics is not None
-            ),
+            "trading_metrics_available": False,
             "paper_trades": {},
             "metrics": {},
         }
@@ -391,19 +523,10 @@ class OrderExecutors:
                 resumen["paper_trades"] = (
                     self.paper_logger.get_session_summary()
                 )
+
             except Exception:
                 logger.exception(
                     "Error consultando historial PAPER"
-                )
-
-        if self.trading_metrics is not None:
-            try:
-                resumen["metrics"] = (
-                    self.trading_metrics.get_summary_report()
-                )
-            except Exception:
-                logger.exception(
-                    "Error consultando métricas"
                 )
 
         return resumen

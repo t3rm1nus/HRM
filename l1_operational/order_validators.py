@@ -15,6 +15,9 @@ class OrderValidators:
     - Símbolos y acciones.
     - Tipo de orden.
     - Límites de tamaño y valor.
+
+    Admite órdenes procedentes de módulos antiguos siempre
+    que puedan normalizarse sin inventar datos financieros.
     """
 
     CAMPOS_OBLIGATORIOS = (
@@ -26,11 +29,23 @@ class OrderValidators:
         "side",
     )
 
-    TIPOS_ORDEN = {"MARKET", "LIMIT"}
-    ACCIONES = {"BUY", "SELL"}
+    TIPOS_ORDEN = {
+        "MARKET",
+        "LIMIT",
+    }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.config = config or ConfigObject()
+    ACCIONES = {
+        "BUY",
+        "SELL",
+    }
+
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+    ):
+        self.config = (
+            config if config is not None else ConfigObject()
+        )
         self.logger = logger
 
     @staticmethod
@@ -38,12 +53,16 @@ class OrderValidators:
         valor: Any,
         nombre: str,
     ) -> Optional[float]:
+        """
+        Convierte un valor a float y rechaza valores no finitos.
+        """
         if isinstance(valor, bool):
             return None
 
         try:
             numero = float(valor)
-        except (TypeError, ValueError):
+
+        except (TypeError, ValueError, OverflowError):
             return None
 
         if not math.isfinite(numero):
@@ -52,7 +71,12 @@ class OrderValidators:
         return numero
 
     @staticmethod
-    def _normalizar_texto(valor: Any) -> Optional[str]:
+    def _normalizar_texto(
+        valor: Any,
+    ) -> Optional[str]:
+        """
+        Elimina espacios y rechaza textos vacíos.
+        """
         if not isinstance(valor, str):
             return None
 
@@ -63,19 +87,85 @@ class OrderValidators:
 
         return texto
 
+    def _obtener_configuracion(
+        self,
+        clave: str,
+        predeterminado: Any = None,
+    ) -> Any:
+        """
+        Obtiene una opción tanto de configuraciones planas
+        como de configuraciones anidadas.
+        """
+        if isinstance(self.config, dict):
+            if clave in self.config:
+                return self.config[clave]
+
+            limites = self.config.get(
+                "RISK_LIMITS",
+                self.config.get("risk_limits", {}),
+            )
+
+            if isinstance(limites, dict):
+                if clave in limites:
+                    return limites[clave]
+
+            return predeterminado
+
+        valor = getattr(
+            self.config,
+            clave,
+            None,
+        )
+
+        if valor is not None:
+            return valor
+
+        limites = getattr(
+            self.config,
+            "RISK_LIMITS",
+            getattr(
+                self.config,
+                "risk_limits",
+                {},
+            ),
+        )
+
+        if isinstance(limites, dict):
+            return limites.get(
+                clave,
+                predeterminado,
+            )
+
+        return predeterminado
+
     def _obtener_limite(
         self,
         clave: str,
         predeterminado: float,
     ) -> float:
-        if isinstance(self.config, dict):
-            valor = self.config.get(clave, predeterminado)
-        else:
-            valor = getattr(self.config, clave, predeterminado)
+        """
+        Obtiene un límite numérico de configuración.
 
-        numero = self._convertir_numero(valor, clave)
+        Si el valor configurado es inválido, utiliza el
+        valor predeterminado seguro.
+        """
+        valor = self._obtener_configuracion(
+            clave,
+            predeterminado,
+        )
+
+        numero = self._convertir_numero(
+            valor,
+            clave,
+        )
 
         if numero is None or numero < 0:
+            self.logger.warning(
+                "Límite de configuración inválido: %s. "
+                "Se utiliza el valor predeterminado.",
+                clave,
+            )
+
             return predeterminado
 
         return numero
@@ -84,6 +174,10 @@ class OrderValidators:
         self,
         order: Dict[str, Any],
     ) -> Optional[str]:
+        """
+        Comprueba la presencia y validez estructural
+        de los campos obligatorios.
+        """
         if not isinstance(order, dict):
             return "La orden debe ser un diccionario"
 
@@ -99,10 +193,21 @@ class OrderValidators:
                 + ", ".join(faltantes)
             )
 
-        action = self._normalizar_texto(order["action"])
-        side = self._normalizar_texto(order["side"])
-        symbol = self._normalizar_texto(order["symbol"])
-        order_type = self._normalizar_texto(order["type"])
+        action = self._normalizar_texto(
+            order["action"]
+        )
+
+        side = self._normalizar_texto(
+            order["side"]
+        )
+
+        symbol = self._normalizar_texto(
+            order["symbol"]
+        )
+
+        order_type = self._normalizar_texto(
+            order["type"]
+        )
 
         if action is None or action.upper() not in self.ACCIONES:
             return "Campo action inválido"
@@ -111,13 +216,18 @@ class OrderValidators:
             return "Campo side inválido"
 
         if action.upper() != side.upper():
-            return "Los campos action y side no coinciden"
+            return (
+                "Los campos action y side no coinciden"
+            )
 
         if symbol is None:
             return "Campo symbol inválido"
 
-        if order_type is None or order_type.upper() not in self.TIPOS_ORDEN:
+        if order_type is None:
             return "Campo type inválido"
+
+        if order_type.upper() not in self.TIPOS_ORDEN:
+            return "Tipo de orden no permitido"
 
         quantity = self._convertir_numero(
             order["quantity"],
@@ -125,7 +235,9 @@ class OrderValidators:
         )
 
         if quantity is None or quantity <= 0:
-            return "Campo quantity debe ser positivo y finito"
+            return (
+                "Campo quantity debe ser positivo y finito"
+            )
 
         price = self._convertir_numero(
             order["price"],
@@ -133,7 +245,9 @@ class OrderValidators:
         )
 
         if price is None or price <= 0:
-            return "Campo price debe ser positivo y finito"
+            return (
+                "Campo price debe ser positivo y finito"
+            )
 
         return None
 
@@ -141,6 +255,10 @@ class OrderValidators:
         self,
         order: Dict[str, Any],
     ) -> Optional[str]:
+        """
+        Comprueba el valor económico y los límites
+        configurados para una orden.
+        """
         if not isinstance(order, dict):
             return "La orden no es válida"
 
@@ -148,21 +266,28 @@ class OrderValidators:
             order.get("quantity"),
             "quantity",
         )
+
         precio = self._convertir_numero(
             order.get("price"),
             "price",
         )
 
         if cantidad is None or precio is None:
-            return "Cantidad o precio no válidos"
+            return (
+                "Cantidad o precio no válidos"
+            )
 
         if cantidad <= 0 or precio <= 0:
-            return "Cantidad y precio deben ser positivos"
+            return (
+                "Cantidad y precio deben ser positivos"
+            )
 
         valor_orden = cantidad * precio
 
         if not math.isfinite(valor_orden):
-            return "El valor de la orden no es finito"
+            return (
+                "El valor de la orden no es finito"
+            )
 
         minimo = self._obtener_limite(
             "MIN_ORDER_SIZE_USDT",
@@ -175,15 +300,27 @@ class OrderValidators:
                 f"inferior al mínimo ({minimo:.2f} USDT)"
             )
 
-        simbolo = order.get("symbol", "").strip().upper()
+        simbolo = self._normalizar_texto(
+            order.get("symbol")
+        )
+
+        if simbolo is None:
+            return "Símbolo no válido"
+
+        simbolo = simbolo.upper()
 
         if not simbolo.endswith("USDT"):
-            return "Solo se admiten pares cotizados en USDT"
+            return (
+                "Solo se admiten pares cotizados en USDT"
+            )
 
         activo = simbolo[:-4]
 
         if not activo:
             return "Activo base no válido"
+
+        if not activo.isalnum():
+            return "El símbolo contiene caracteres no permitidos"
 
         limite = self._obtener_limite(
             f"MAX_ORDER_SIZE_{activo}",
@@ -213,6 +350,9 @@ class OrderValidators:
         self,
         order: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Ejecuta las validaciones estructurales y económicas.
+        """
         reporte = {
             "status": "valid",
             "valid": True,
@@ -229,20 +369,29 @@ class OrderValidators:
             "errors": [],
         }
 
-        error_campos = self.validate_order_fields(order)
+        error_campos = self.validate_order_fields(
+            order
+        )
 
         if error_campos:
             reporte["status"] = "invalid"
             reporte["valid"] = False
-            reporte["errors"].append(error_campos)
+            reporte["errors"].append(
+                error_campos
+            )
+
             return reporte
 
-        error_valores = self.validate_order_values(order)
+        error_valores = self.validate_order_values(
+            order
+        )
 
         if error_valores:
             reporte["status"] = "invalid"
             reporte["valid"] = False
-            reporte["errors"].append(error_valores)
+            reporte["errors"].append(
+                error_valores
+            )
 
         return reporte
 
@@ -250,42 +399,72 @@ class OrderValidators:
         self,
         order: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Normaliza una orden sin modificar el objeto original.
+
+        No inventa cantidad, precio ni símbolo.
+        """
         if not isinstance(order, dict):
-            raise TypeError("La orden debe ser un diccionario")
+            raise TypeError(
+                "La orden debe ser un diccionario"
+            )
 
         normalizada = dict(order)
 
-        action = order.get("action", order.get("side", ""))
-        side = order.get("side", action)
+        action = order.get(
+            "action",
+            order.get("side", ""),
+        )
+
+        side = order.get(
+            "side",
+            action,
+        )
 
         if isinstance(action, str):
-            normalizada["action"] = action.strip().upper()
+            normalizada["action"] = (
+                action.strip().upper()
+            )
 
         if isinstance(side, str):
-            normalizada["side"] = side.strip().upper()
+            normalizada["side"] = (
+                side.strip().upper()
+            )
 
         symbol = order.get("symbol")
 
         if isinstance(symbol, str):
-            normalizada["symbol"] = symbol.strip().upper()
+            normalizada["symbol"] = (
+                symbol.strip().upper()
+            )
 
         order_type = order.get(
             "type",
-            order.get("order_type", "MARKET"),
+            order.get(
+                "order_type",
+                "MARKET",
+            ),
         )
 
         if isinstance(order_type, str):
-            normalizada["type"] = order_type.strip().upper()
+            normalizada["type"] = (
+                order_type.strip().upper()
+            )
 
-        for campo in ("quantity", "price"):
-            if campo in order:
-                numero = self._convertir_numero(
-                    order[campo],
-                    campo,
-                )
+        for campo in (
+            "quantity",
+            "price",
+        ):
+            if campo not in order:
+                continue
 
-                if numero is not None:
-                    normalizada[campo] = numero
+            numero = self._convertir_numero(
+                order[campo],
+                campo,
+            )
+
+            if numero is not None:
+                normalizada[campo] = numero
 
         normalizada.setdefault(
             "reason",
@@ -298,10 +477,24 @@ class OrderValidators:
         self,
         order: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Normaliza y valida una orden.
+
+        Mantiene el contrato esperado por ExecutionGateway:
+        {
+            "order": orden_normalizada,
+            "validation": reporte
+        }
+        """
         try:
-            normalizada = self.normalize_order(order)
-            validacion = self.validate_order_completeness(
-                normalizada
+            normalizada = self.normalize_order(
+                order
+            )
+
+            validacion = (
+                self.validate_order_completeness(
+                    normalizada
+                )
             )
 
             return {
@@ -311,11 +504,17 @@ class OrderValidators:
 
         except (TypeError, ValueError) as error:
             return {
-                "order": order if isinstance(order, dict) else {},
+                "order": (
+                    order
+                    if isinstance(order, dict)
+                    else {}
+                ),
                 "validation": {
                     "status": "invalid",
                     "valid": False,
-                    "errors": [str(error)],
+                    "errors": [
+                        str(error)
+                    ],
                 },
             }
 
