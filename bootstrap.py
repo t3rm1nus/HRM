@@ -522,22 +522,49 @@ class HRMBootstrap:
         )
 
     async def _initialize_runtime_loop(self) -> None:
-        """Inicializa el bucle principal de ejecución."""
+        """Inicializa el runtime y exige un Gateway operativo."""
+
         from runtime_loop import HRMRuntimeLoop
 
-        self.runtime_loop = HRMRuntimeLoop(
+        if self.portfolio_manager is None:
+            raise RuntimeError(
+                "No se puede iniciar RuntimeLoop sin PortfolioManager"
+            )
+
+        if self.order_manager is None:
+            raise RuntimeError(
+                "No se puede iniciar RuntimeLoop sin OrderManager"
+            )
+
+        if self.execution_gateway is None:
+            raise RuntimeError(
+                "No se puede iniciar RuntimeLoop sin ExecutionGateway"
+            )
+
+        if not callable(
+            getattr(self.execution_gateway, "execute_orders", None)
+        ):
+            raise RuntimeError(
+                "ExecutionGateway no implementa execute_orders"
+            )
+
+        runtime_loop = HRMRuntimeLoop(
             self.portfolio_manager,
             self.order_manager,
         )
 
-        # Se conserva la referencia para la integración
-        # del Gateway en runtime_loop.
-        self.runtime_loop.execution_gateway = (
-            self.execution_gateway
+        runtime_loop.execution_gateway = self.execution_gateway
+
+        if runtime_loop.execution_gateway is not self.execution_gateway:
+            raise RuntimeError(
+                "No se pudo inyectar ExecutionGateway en RuntimeLoop"
+            )
+
+        self.runtime_loop = runtime_loop
+
+        logger.info(
+            "RuntimeLoop inicializado correctamente con ExecutionGateway PAPER"
         )
-
-        logger.info("RuntimeLoop inicializado")
-
     async def _initialize_sentiment_manager(self) -> Dict[str, Any]:
         """Inicializa el gestor de análisis de sentimiento."""
         logger.info("Inicializando análisis de sentimiento")
