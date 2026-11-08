@@ -232,7 +232,23 @@ class HRMRuntimeLoop:
             logger.exception("❌ Cleanup failed")
 
 
-async def run_runtime_loop(portfolio_manager: PortfolioManager, order_manager: OrderManager):
-    """Construye y ejecuta el bucle de runtime."""
-    runtime_loop = HRMRuntimeLoop(portfolio_manager, order_manager)
+async def run_runtime_loop(
+    portfolio_manager: PortfolioManager,
+    order_manager: OrderManager,
+    execution_gateway: Any,
+):
+    """Construye y ejecuta el runtime con Gateway obligatorio."""
+    if execution_gateway is None or not callable(
+        getattr(execution_gateway, "execute_orders", None)
+    ):
+        raise RuntimeError(
+            "ExecutionGateway obligatorio: se bloquea el arranque "
+            "para impedir una ruta de ejecución sin validación y control de riesgo."
+        )
+
+    runtime_loop = HRMRuntimeLoop(
+        portfolio_manager,
+        order_manager,
+    )
+    runtime_loop.execution_gateway = execution_gateway
     await runtime_loop.run()
