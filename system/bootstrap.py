@@ -1,139 +1,315 @@
-from l1_operational.simulated_exchange_client import SimulatedExchangeClient
+
+"""
+Bootstrap del exchange simulado y contexto principal de HRM.
+
+La inicialización del exchange se realiza exclusivamente en PAPER.
+Las sesiones continuas conservan el estado del singleton.
+"""
+
+import copy
 import logging
+import math
+from typing import Any, Dict, Optional
+
+from l1_operational.simulated_exchange_client import (
+    SimulatedExchangeClient,
+)
+
 
 log = logging.getLogger(__name__)
 
 
-def bootstrap_simulated_exchange(config, force_paper: bool = True):
+def _obtener_balances_configurados(
+    config: Dict[str, Any],
+) -> Dict[str, float]:
     """
-    Bootstrap SimulatedExchangeClient con soporte cleanup.
-    
-    Detecta si es una instancia recién creada (sesión nueva) o un singleton
-    existente (sesión continua) para decidir de dónde tomar el capital inicial.
-    
-    Args:
-        config: Configuración del sistema
-        force_paper: Si True, fuerza modo paper ignorando config
-    
-    Returns:
-        SimulatedExchangeClient instance
-    """
-    # Check if we should use paper mode
-    use_paper = force_paper or config.get("paper_mode", False)
-    
-    if not use_paper:
-        log.info("Paper mode disabled - not initializing SimulatedExchangeClient")
-        return None
+    Obtiene y prepara los balances iniciales de PAPER.
 
-    # Leer capital objetivo desde la configuración
-    config_balances = config.get("simulated_initial_balances", {})
-    
-    # Si no hay balances configurados, usar INITIAL_BALANCE de config
-    if not config_balances:
-        initial_balance = config.get("INITIAL_BALANCE", 500.0)
-        config_balances = {
+    Prioriza simulated_initial_balances.
+    Si no existe USDT, utiliza INITIAL_BALANCE.
+    """
+    balances_configurados = config.get(
+        "simulated_initial_balances",
+        {},
+    )
+
+    if balances_configurados is None:
+        balances_configurados = {}
+
+    if not isinstance(balances_configurados, dict):
+        raise TypeError(
+            "simulated_initial_balances debe ser un diccionario"
+        )
+
+    balances = copy.deepcopy(balances_configurados)
+
+    if not balances:
+        capital_inicial = config.get(
+            "INITIAL_BALANCE",
+            500.0,
+        )
+
+        balances = {
             "BTC": 0.0,
             "ETH": 0.0,
-            "USDT": initial_balance
+            "USDT": capital_inicial,
         }
-        log.info(f"🎯 Config no especifica simulated_initial_balances - usando INITIAL_BALANCE: {initial_balance} USDT")
-    else:
-        # Asegurar que todos los activos estén presentes
-        config_balances.setdefault("BTC", 0.0)
-        config_balances.setdefault("ETH", 0.0)
-        # Validar que USDT venga de config, no hardcodeado
-        if "USDT" not in config_balances:
-            initial_balance = config.get("INITIAL_BALANCE", 500.0)
-            config_balances["USDT"] = initial_balance
-            log.warning(f"⚠️ Config no especifica USDT en simulated_initial_balances - usando INITIAL_BALANCE: {initial_balance}")
-        log.info(f"🎯 Config especifica balances: {config_balances}")
 
-    # 🔍 DETECTAR: ¿Instancia recién creada o sesión continua?
-    singleton_existed_before = SimulatedExchangeClient._instance is not None
-    was_just_initialized = SimulatedExchangeClient.is_just_initialized()
-    
+        log.info(
+            "No hay balances PAPER configurados. "
+            "Se utiliza INITIAL_BALANCE: %s USDT",
+            capital_inicial,
+        )
+
+    else:
+        balances.setdefault("BTC", 0.0)
+        balances.setdefault("ETH", 0.0)
+
+        if "USDT" not in balances:
+            capital_inicial = config.get(
+                "INITIAL_BALANCE",
+                500.0,
+            )
+
+            balances["USDT"] = capital_inicial
+
+            log.warning(
+                "No se ha configurado USDT en "
+                "simulated_initial_balances. "
+                "Se utiliza INITIAL_BALANCE: %s USDT",
+                capital_inicial,
+            )
+
+    return balances
+
+
+def _obtener_capital_usdt(
+    balances: Dict[str, float],
+) -> float:
+    """
+    Valida y devuelve el capital USDT de unos balances.
+    """
+    try:
+        capital = float(balances.get("USDT", 0.0))
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(
+            "El capital USDT configurado no es válido"
+        ) from error
+
+    if not math.isfinite(capital) or capital <= 0:
+        raise ValueError(
+            "El capital USDT debe ser positivo y finito"
+        )
+
+    return capital
+
+
+def _obtener_balances_sesion_activa() -> Dict[str, float]:
+    """
+    Recupera los balances del singleton sin modificarlos.
+    """
+    instancia = SimulatedExchangeClient._instance
+
+    if instancia is None:
+        raise RuntimeError(
+            "No existe una instancia PAPER activa"
+        )
+
+    return instancia.get_balances()
+
+
+def _aplicar_balances_configurados(
+    balances: Dict[str, float],
+) -> None:
+    """
+    Aplica los balances configurados a una instancia recién creada.
+
+    Si el reset falla, detiene el bootstrap.
+    No modifica directamente los atributos internos del cliente.
+    """
+    instancia = SimulatedExchangeClient._instance
+
+    if instancia is None:
+        raise RuntimeError(
+            "No existe una instancia PAPER para inicializar"
+        )
+
+    try:
+        instancia.force_reset(
+            copy.deepcopy(balances)
+        )
+    except Exception as error:
+        log.exception(
+            "No se pudo aplicar el capital inicial PAPER"
+        )
+
+        raise RuntimeError(
+            "No se puede inicializar el capital PAPER"
+        ) from error
+
+
+def bootstrap_simulated_exchange(
+    config: Dict[str, Any],
+    force_paper: bool = True,
+) -> Optional[SimulatedExchangeClient]:
+    """
+    Inicializa el exchange simulado y conserva el estado de sesión.
+
+    Una instancia nueva recibe el capital configurado.
+    Una sesión continua conserva sus balances actuales.
+
+    Args:
+        config: Configuración del sistema.
+        force_paper: Fuerza la inicialización PAPER.
+
+    Returns:
+        Instancia SimulatedExchangeClient o None si PAPER
+        está deshabilitado explícitamente.
+    """
+    if not isinstance(config, dict):
+        raise TypeError(
+            "La configuración debe ser un diccionario"
+        )
+
+    use_paper = (
+        force_paper
+        or config.get("paper_mode", False)
+    )
+
+    if not use_paper:
+        log.info(
+            "PAPER deshabilitado. "
+            "No se inicializa SimulatedExchangeClient."
+        )
+        return None
+
+    balances_configurados = _obtener_balances_configurados(
+        config
+    )
+
+    capital_configurado = _obtener_capital_usdt(
+        balances_configurados
+    )
+
+    singleton_existia = (
+        SimulatedExchangeClient._instance is not None
+    )
+
+    recien_inicializado = (
+        SimulatedExchangeClient.is_just_initialized()
+    )
+
     log.info("=" * 70)
-    log.info("🔍 CAPITAL SOURCE DECISION")
-    log.info(f"   Singleton existed before: {singleton_existed_before}")
-    log.info(f"   _just_initialized flag: {was_just_initialized}")
+    log.info("INICIALIZACIÓN DEL EXCHANGE PAPER")
+    log.info(
+        "Singleton existente: %s",
+        singleton_existia,
+    )
+    log.info(
+        "Instancia recién inicializada: %s",
+        recien_inicializado,
+    )
 
-    # 🔄 CRITICAL FIX: Lógica de decisión del capital
-    if singleton_existed_before and not was_just_initialized:
-        # SESIÓN CONTINUA: Respetar el singleton existente
-        log.info("📌 PATH TAKEN: SESIÓN CONTINUA")
-        log.info("   Razón: Singleton ya existía y no es recién creado")
-        log.info("   Acción: Usar capital del singleton (preservar estado)")
-        
-        existing_balances = SimulatedExchangeClient._instance.get_balances()
-        existing_usdt = existing_balances.get('USDT', 0.0)
-        config_usdt = config_balances.get('USDT', 0)
-        
-        if abs(existing_usdt - config_usdt) > 1.0:
-            log.info(f"   ⚠️ CAPITAL MISMATCH detectado pero IGNORADO:")
-            log.info(f"      - Singleton tiene: {existing_usdt} USDT")
-            log.info(f"      - Config dice: {config_usdt} USDT")
-            log.info(f"      - Se mantiene el capital del singleton para preservar sesión")
-        
-        # Usar balances existentes (ignorar config)
-        initial_balances = existing_balances
-        
-    elif singleton_existed_before and was_just_initialized:
-        # CASO BORDE: Singleton existe pero fue recién creado en este ciclo
-        # Esto no debería pasar, pero lo manejamos por seguridad
-        log.info("📌 PATH TAKEN: CASO BORDE (singleton existe + just_initialized)")
-        log.info("   Razón: Inconsistencia de estado detectada")
-        log.info("   Acción: Aplicar capital de config (instancia recién creada)")
-        
-        # 🔄 CRITICAL FIX: Realmente aplicar el capital de config al singleton existente
-        config_usdt = config_balances.get('USDT', 500.0)
-        existing_instance = SimulatedExchangeClient._instance
-        
-        if existing_instance is not None:
-            # Aplicar el balance de config usando force_reset
-            try:
-                existing_instance.force_reset(config_balances.copy())
-                log.info(f"✅ SimClient balance synchronized with config: USDT=${config_usdt:.2f}")
-            except Exception as e:
-                log.error(f"❌ Error aplicando capital de config: {e}")
-                # Fallback: modificar directamente los balances
-                existing_instance.balances = config_balances.copy()
-                existing_instance.initial_balances = config_balances.copy()
-                log.info(f"✅ SimClient balance synchronized (fallback): USDT=${config_usdt:.2f}")
-        
-        initial_balances = config_balances
-        
-    else:
-        # SESIÓN NUEVA: No hay singleton, aplicar capital de config
-        log.info("📌 PATH TAKEN: SESIÓN NUEVA")
-        log.info("   Razón: No existe singleton (instancia recién creada)")
-        log.info("   Acción: Aplicar capital desde config")
-        initial_balances = config_balances
+    if singleton_existia and not recien_inicializado:
+        log.info(
+            "Sesión continua: se conservan los balances existentes."
+        )
 
-    # 🔄 Obtener instancia singleton (crea nueva si no existe)
-    client = SimulatedExchangeClient.get_instance(initial_balances=initial_balances)
-    
-    # 🔚 Marcar que ya no es recién inicializada (primer ciclo completado)
-    was_new_instance = SimulatedExchangeClient.mark_cycle_completed()
-    
-    # ✅ VERIFICACIÓN EXPLÍCITA: Comparar balance SimClient con config
-    sim_balance = client.balances.get('USDT', 0)
-    config_balance = config_balances.get('USDT', 0)
-    balance_match = abs(sim_balance - config_balance) < 0.01  # Tolerancia de 1 centavo
-    
-    if balance_match:
-        log.info(f"✅ SimClient balance matches config: {sim_balance:.2f} == {config_balance:.2f}")
+        balances_iniciales = (
+            _obtener_balances_sesion_activa()
+        )
+
+        capital_existente = _obtener_capital_usdt(
+            balances_iniciales
+        )
+
+        if abs(
+            capital_existente - capital_configurado
+        ) > 1.0:
+            log.warning(
+                "Diferencia entre capital configurado y "
+                "capital de sesión. Se conserva la sesión. "
+                "Existente: %.2f USDT | Configurado: %.2f USDT",
+                capital_existente,
+                capital_configurado,
+            )
+
+        balances_para_instancia = balances_iniciales
+
+    elif singleton_existia and recien_inicializado:
+        log.info(
+            "Instancia recién creada en este ciclo: "
+            "se aplica el capital configurado."
+        )
+
+        _aplicar_balances_configurados(
+            balances_configurados
+        )
+
+        balances_para_instancia = balances_configurados
+
     else:
-        log.error(f"❌ MISMATCH: SimClient {sim_balance:.2f} != Config {config_balance:.2f}")
-        log.error(f"   Esta discrepancia es CRÍTICA para trading en vivo")
-    
-    log.info("=" * 70)
-    log.info("🎮 SIMULATED EXCHANGE CLIENT INITIALIZED")
-    log.info(f"   SIM_STATE_ID: {id(client)}")
-    log.info(f"   Was new instance: {was_new_instance}")
-    log.info(f"   Capital source: {'CONFIG (nueva sesión)' if was_new_instance else 'SINGLETON (sesión continua)'}")
-    log.info(f"   BTC:  {client.balances.get('BTC', 0):.6f}")
-    log.info(f"   ETH:  {client.balances.get('ETH', 0):.4f}")
-    log.info(f"   USDT: ${client.balances.get('USDT', 0):.2f}")
+        log.info(
+            "Sesión nueva: se utiliza el capital configurado."
+        )
+
+        balances_para_instancia = balances_configurados
+
+    client = SimulatedExchangeClient.get_instance(
+        initial_balances=copy.deepcopy(
+            balances_para_instancia
+        )
+    )
+
+    was_new_instance = (
+        SimulatedExchangeClient.mark_cycle_completed()
+    )
+
+    balances_actuales = client.get_balances()
+    capital_actual = _obtener_capital_usdt(
+        balances_actuales
+    )
+
+    if was_new_instance:
+        if abs(
+            capital_actual - capital_configurado
+        ) >= 0.01:
+            raise RuntimeError(
+                "El capital inicial PAPER no coincide "
+                "con el capital configurado."
+            )
+
+    log.info(
+        "Exchange PAPER inicializado correctamente."
+    )
+    log.info(
+        "Identificador de sesión: %s",
+        id(client),
+    )
+    log.info(
+        "Instancia nueva: %s",
+        was_new_instance,
+    )
+    log.info(
+        "Origen del capital: %s",
+        (
+            "CONFIGURACIÓN"
+            if was_new_instance
+            else "SESIÓN EXISTENTE"
+        ),
+    )
+    log.info(
+        "BTC: %.8f",
+        balances_actuales.get("BTC", 0.0),
+    )
+    log.info(
+        "ETH: %.8f",
+        balances_actuales.get("ETH", 0.0),
+    )
+    log.info(
+        "USDT: %.2f",
+        capital_actual,
+    )
     log.info("=" * 70)
 
     return client
@@ -141,37 +317,55 @@ def bootstrap_simulated_exchange(config, force_paper: bool = True):
 
 class SystemBootstrap:
     """
-    Clase para la inicialización centralizada del sistema HRM.
-    Proporciona métodos para configurar y arrancar todos los componentes del sistema.
+    Inicialización centralizada del contexto del sistema HRM.
+
+    Esta clase mantiene la interfaz de compatibilidad existente.
+    La inicialización de los componentes de trading corresponde
+    al bootstrap principal del sistema.
     """
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
         """
-        Inicializa el bootstrap del sistema.
+        Inicializa el contexto de componentes.
         """
-        self.components = {}
+        self.components: Dict[str, Any] = {}
         self.external_adapter = None
-        log.info("SystemBootstrap initialized")
-    
-    def initialize_system(self):
+
+        log.info(
+            "SystemBootstrap inicializado"
+        )
+
+    def initialize_system(self) -> Any:
         """
-        Inicializa todo el sistema HRM.
-        
+        Construye y devuelve el contexto del sistema.
+
         Returns:
-            object: Contexto del sistema con componentes inicializados
+            Contexto con componentes y adaptador externo.
         """
-        log.info("Initializing HRM system components...")
-        
-        # Aquí se puede agregar la lógica de inicialización de componentes
-        # como PortfolioManager, OrderManager, L2TacticProcessor, etc.
-        
-        # Crear un objeto de contexto simple para compatibilidad
+        log.info(
+            "Inicializando contexto de componentes HRM..."
+        )
+
         class SystemContext:
-            def __init__(self, components, external_adapter):
+            """
+            Contexto de compatibilidad de HRM.
+            """
+
+            def __init__(
+                self,
+                components: Dict[str, Any],
+                external_adapter: Any,
+            ) -> None:
                 self.components = components
                 self.external_adapter = external_adapter
-        
-        system_context = SystemContext(self.components, self.external_adapter)
-        log.info("SystemBootstrap completed successfully")
-        
+
+        system_context = SystemContext(
+            components=self.components,
+            external_adapter=self.external_adapter,
+        )
+
+        log.info(
+            "SystemBootstrap completado correctamente"
+        )
+
         return system_context
