@@ -148,8 +148,18 @@ def _aplicar_balances_configurados(
         ) from error
 
 
+def admite_consulta_por_clave(config: Any) -> bool:
+    """
+    Indica si la configuración se puede consultar con ``.get``.
+
+    main.py entrega un ``HRMAppConfig``, que se comporta como un
+    diccionario sin heredar de ``dict``; exigir ``dict`` impedía arrancar.
+    """
+    return callable(getattr(config, "get", None))
+
+
 def bootstrap_simulated_exchange(
-    config: Dict[str, Any],
+    config: Any,
     force_paper: bool = True,
 ) -> Optional[SimulatedExchangeClient]:
     """
@@ -166,9 +176,10 @@ def bootstrap_simulated_exchange(
         Instancia SimulatedExchangeClient o None si PAPER
         está deshabilitado explícitamente.
     """
-    if not isinstance(config, dict):
+    if not admite_consulta_por_clave(config):
         raise TypeError(
-            "La configuración debe ser un diccionario"
+            "La configuración debe permitir consultas con "
+            ".get(clave, valor_por_defecto)"
         )
 
     use_paper = (

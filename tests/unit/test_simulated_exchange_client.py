@@ -75,7 +75,7 @@ def test_rechaza_venta_sin_activo_suficiente(exchange):
 
 @pytest.mark.unit
 def test_rechaza_simbolos_que_no_terminan_en_usdt(exchange):
-    with pytest.raises(ValueError, match="Símbolo no soportado"):
+    with pytest.raises(ValueError, match="Par no soportado"):
         exchange.execute_order("BTCEUR", "BUY", 0.01, 100.0)
 
 

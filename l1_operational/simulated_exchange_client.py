@@ -99,14 +99,10 @@ class SimulatedExchangeClient:
             logger.info(
                 "SimulatedExchangeClient inicializado"
             )
+            logger.info(f"Capital inicial: {self.initial_balances}")
             logger.info(
-                "Capital inicial: %s",
-                self.initial_balances
-            )
-            logger.info(
-                "Comisión: %.4f%% | Slippage: %.4f%%",
-                self.fee * 100,
-                self.slippage * 100
+                f"Comisión: {self.fee * 100:.4f}% | "
+                f"Slippage: {self.slippage * 100:.4f}%"
             )
 
     # ------------------------------------------------------------------
@@ -349,10 +345,7 @@ class SimulatedExchangeClient:
             self.balances[asset] = amount
 
         logger.info(
-            "Balance actualizado: %s %.8f -> %.8f",
-            asset,
-            anterior,
-            amount
+            f"Balance actualizado: {asset} {anterior:.8f} -> {amount:.8f}"
         )
 
     # ------------------------------------------------------------------
@@ -555,11 +548,7 @@ class SimulatedExchangeClient:
         })
 
         logger.info(
-            "PAPER ORDER | %s %s %.8f @ %.8f",
-            side,
-            symbol,
-            qty,
-            execution_price
+            f"PAPER ORDER | {side} {symbol} {qty:.8f} @ {execution_price:.8f}"
         )
 
         return trade

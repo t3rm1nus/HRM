@@ -1,0 +1,11 @@
+# Opcionales: sin ellos HRM arranca (solo emite avisos).
+# Instalar con: pip install -r requirements.txt -r requirements-opcional.txt
+stable-baselines3
+gymnasium
+yfinance
+# Solo entrenamiento o fuentes externas, no verificadas en el arranque:
+# scikit-learn
+# scipy
+# finrl
+# fredapi
+# newsapi-python

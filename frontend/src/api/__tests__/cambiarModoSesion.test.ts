@@ -21,7 +21,8 @@ describe('cambiarModoSesion', () => {
   it('propaga el error del backend', async () => {
     simularFetch({ detail: 'Modo no válido' }, 400);
     await expect(cambiarModoSesion('limpia')).rejects.toMatchObject({
-      code: 'RESPUESTA_INVALIDA',
+      message: 'Modo no válido',
+      statusCode: 400,
     });
   });
 
@@ -33,6 +34,18 @@ describe('cambiarModoSesion', () => {
   });
 });
 describe('reiniciarDatosPaper', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('propaga el rechazo del servidor', async () => {
+    const { reiniciarDatosPaper } = await import('../modoSesion');
+    simularFetch({ detail: 'El reinicio de datos solo está permitido en modo PAPER' }, 403);
+
+    await expect(reiniciarDatosPaper('CONFIRMAR')).rejects.toMatchObject({
+      message: 'El reinicio de datos solo está permitido en modo PAPER',
+      statusCode: 403,
+    });
+  });
+
   it('envía la confirmación al endpoint diferido', async () => {
     const { reiniciarDatosPaper } = await import('../modoSesion');
     const funcion = simularFetch({ estado: 'pendiente', mensaje: 'Se reiniciará al arrancar' }, 202);

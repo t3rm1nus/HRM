@@ -20,7 +20,8 @@ describe('fetchModoSesion', () => {
   it('propaga el error del backend', async () => {
     simularFetch({ detail: 'Modo no válido' }, 400);
     await expect(fetchModoSesion()).rejects.toMatchObject({
-      code: 'RESPUESTA_INVALIDA',
+      message: 'Modo no válido',
+      statusCode: 400,
     });
   });
 

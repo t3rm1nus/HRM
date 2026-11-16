@@ -1,0 +1,1 @@
+Eliminar del repo: frontend/src/api/__tests__/resetDatosPaper.test.ts
