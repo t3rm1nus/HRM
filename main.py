@@ -110,7 +110,6 @@ async def main():
     # ================================================================
     # FIX: Verificación de seguridad modo LIVE — debe ejecutarse ANTES del cleanup
     # ================================================================
-    import os
     binance_mode = os.getenv('BINANCE_MODE', 'paper').lower()
     paper_mode_env = os.getenv('PAPER_MODE', 'true').lower()
     
@@ -287,7 +286,6 @@ async def main():
             logger.info("✅ OrderFlowCapture iniciado y registrado para shutdown (modo POLLING)")
             
             # Verificar que el directorio de datos existe
-            import os
             orderflow_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtesting/data/orderflow")
             os.makedirs(orderflow_dir, exist_ok=True)
             print(f"📁 Directorio OrderFlow verificado: {orderflow_dir}", flush=True)

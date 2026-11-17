@@ -48,6 +48,11 @@ class StatusResponse(BaseModel):
     cycle_count: int = Field(default=0, description="Contador de ciclos")
     uptime: str = Field(default="no disponible", description="Tiempo de actividad")
     mode: str = Field(default="unknown", description="Modo real del backend: paper, live o unknown")
+    runtime_state: str = Field(default="STOPPED", description="Estado interno del ciclo de vida")
+    reason: str = Field(default="", description="Motivo del último cambio de estado")
+    component: str = Field(default="", description="Componente que registró el cambio")
+    updated_at: str = Field(default="", description="Fecha UTC del último cambio")
+    last_error: str | None = Field(default=None, description="Último error del runtime")
 
 class PortfolioResponse(BaseModel):
     btc_balance: float = Field(default=0.0, description="Balance BTC")
