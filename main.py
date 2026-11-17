@@ -26,7 +26,7 @@ from system.market_data_manager import MarketDataManager
 from system.trading_pipeline_manager import TradingPipelineManager
 
 # Import funciones de shutdown global desde bootstrap
-from bootstrap import shutdown, register_component_for_shutdown, setup_signal_handlers
+from bootstrap import shutdown, register_component_for_shutdown
 
 # Import modularized components
 from core.state_manager import log_cycle_data
@@ -104,8 +104,10 @@ except ImportError:
 from sentiment.sentiment_manager import update_sentiment_texts
 
 
-async def main():
-    """Main HRM system function."""
+async def main(shutdown_event: Optional[asyncio.Event] = None):
+    """Main HRM system function with coordinated graceful shutdown."""
+    if shutdown_event is None:
+        shutdown_event = asyncio.Event()
     
     # ================================================================
     # FIX: Verificación de seguridad modo LIVE — debe ejecutarse ANTES del cleanup
@@ -151,11 +153,6 @@ async def main():
     
     try:
         
-        # ================================================================
-        # CONFIGURAR MANEJADORES DE SEÑALES PARA SHUTDOWN LIMPIO
-        # ================================================================
-        setup_signal_handlers()
-
         # No ejecutar limpiezas destructivas al arrancar: los historiales y
         # estados persistentes deben sobrevivir a reinicios normales.
         logger.info("Se conserva el estado persistente; limpieza manual bajo demanda.")
@@ -799,7 +796,7 @@ async def main():
         
         last_cycle_time = pd.Timestamp.utcnow()
 
-        while True:
+        while not shutdown_event.is_set():
             cycle_id += 1
             start_time = pd.Timestamp.utcnow()
             
@@ -1263,24 +1260,35 @@ if __name__ == "__main__":
     
     async def main_with_api() -> None:
         """Ejecutar el trading loop y la API FastAPI concurrentemente."""
-        # Configurar y iniciar FastAPI en background
+        # Ejecutar API FastAPI en background y compartir su señal de salida
+        # con el bucle de trading para que Ctrl+C detenga ambos servicios.
         import uvicorn
+        shutdown_event = asyncio.Event()
         config = uvicorn.Config(
             app=app,
             host=os.getenv("HRM_API_HOST", "127.0.0.1"),
             port=8000,
             log_level="info",
         )
-        server = uvicorn.Server(config)
-        
-        # Ejecutar API FastAPI en una tarea separada
+
+        class ServidorUvicornHRM(uvicorn.Server):
+            """Propaga la señal SIGINT/SIGTERM de Uvicorn al runtime HRM."""
+
+            def handle_exit(self, sig, frame):
+                super().handle_exit(sig, frame)
+                shutdown_event.set()
+
+        server = ServidorUvicornHRM(config)
+
+        # Ejecutar API FastAPI en una tarea separada.
         api_task = asyncio.create_task(server.serve())
-        
-        # Ejecutar el trading loop principal
+
+        # Ejecutar el trading loop principal.
         try:
-            await main()
+            await main(shutdown_event)
         finally:
-            # Cuando el trading loop termine, detener la API
+            # Garantizar que ambos servicios reciben la orden de apagado.
+            shutdown_event.set()
             server.should_exit = True
             await api_task
     
