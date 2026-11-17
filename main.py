@@ -147,6 +147,7 @@ async def main():
     market_data_manager = None
     trading_pipeline = None
     error_recovery = None
+    arranque_rechazado = False
     
     try:
         
@@ -189,7 +190,17 @@ async def main():
         # ✅ INJECT IMMEDIATELY
         from core.state_manager import inject_state_coordinator
         inject_state_coordinator(state_coordinator)
+        servicio_estado_vivo.registrar_coordinador(state_coordinator)
         logger.info("✅ StateCoordinator injected globally")
+
+        # Adquirir el runtime de forma atómica antes de inicializar componentes.
+        if not state_coordinator.iniciar_arranque(
+            motivo="Inicialización del runtime HRM",
+            componente="main",
+        ):
+            arranque_rechazado = True
+            logger.error("⛔ Arranque rechazado: ya existe un runtime activo")
+            return
 
         # ================================================================
         # STEP 3: INITIALIZE SYSTEM BOOTSTRAP - WITH ERROR HANDLING
@@ -802,6 +813,9 @@ async def main():
             last_cycle_time = pd.Timestamp.utcnow()
 
             try:
+                # RUNNING solo se publica al comenzar trabajo real del ciclo.
+                servicio_estado_vivo.registrar_inicio_ciclo(cycle_id)
+
                 # ============================================================
                 # CYCLE STEP 0: CHECK FOR ZERO BALANCES (DETECCIÓN TEMPRANA)
                 # ============================================================
@@ -1149,6 +1163,7 @@ async def main():
 
             except Exception as cycle_error:
                 logger.error(f"❌ Cycle {cycle_id} error: {cycle_error}")
+                servicio_estado_vivo.registrar_error_ciclo(cycle_id, cycle_error)
                 
                 # Use ErrorRecoveryManager for intelligent recovery
                 try:
@@ -1191,28 +1206,39 @@ async def main():
             
     except Exception as fatal_error:
         logger.critical(f"🚨 FATAL ERROR: {fatal_error}")
+        if state_coordinator is not None:
+            servicio_estado_vivo.registrar_fallo(fatal_error)
         import traceback
         logger.critical(traceback.format_exc())
             
     finally:
-        servicio_estado_vivo.registrar_parada()
-        # 🔧 SHUTDOWN LIMPIO GLOBAL desde bootstrap
-        logger.info("🧹 Ejecutando shutdown limpio global desde bootstrap...")
-        try:
-            # Usar la función shutdown global de bootstrap
-            await shutdown()
-            logger.info("✅ Shutdown global completado exitosamente")
-        except Exception as shutdown_error:
-            logger.error(f"❌ Error en shutdown global: {shutdown_error}")
-        
-        # Cleanup adicional de verificación de señales
-        try:
-            await stop_signal_verification()
-            logger.info("✓ Signal verification stopped")
-        except Exception as cleanup_error:
-            logger.warning(f"⚠️ Cleanup error: {cleanup_error}")
-        
-        logger.info("👋 HRM System shutdown complete")
+        # Un segundo arranque rechazado no debe apagar el runtime ya existente.
+        if arranque_rechazado:
+            logger.warning("Se omite el cleanup porque el runtime ya estaba activo")
+        else:
+            servicio_estado_vivo.registrar_parada()
+            # 🔧 SHUTDOWN LIMPIO GLOBAL desde bootstrap
+            logger.info("🧹 Ejecutando shutdown limpio global desde bootstrap...")
+            try:
+                await shutdown()
+                logger.info("✅ Shutdown global completado exitosamente")
+            except Exception as shutdown_error:
+                logger.error(f"❌ Error en shutdown global: {shutdown_error}")
+                if state_coordinator is not None:
+                    servicio_estado_vivo.registrar_fallo(shutdown_error)
+
+            # Cleanup adicional de verificación de señales
+            try:
+                await stop_signal_verification()
+                logger.info("✓ Signal verification stopped")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ Cleanup error: {cleanup_error}")
+
+            # STOPPED se confirma después de terminar el cleanup.
+            if state_coordinator is not None:
+                servicio_estado_vivo.confirmar_parada()
+
+            logger.info("👋 HRM System shutdown complete")
 
 
 
