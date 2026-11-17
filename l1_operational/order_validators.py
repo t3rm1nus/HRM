@@ -161,7 +161,7 @@ class OrderValidators:
 
         if numero is None or numero < 0:
             self.logger.warning(
-                "Límite de configuración inválido: %s. "
+                "Límite de configuración inválido: {}. "
                 "Se utiliza el valor predeterminado.",
                 clave,
             )

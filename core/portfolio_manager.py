@@ -82,7 +82,7 @@ async def save_portfolio_to_csv(state: Dict[str, Any]):
         logger.info("📝 Portfolio guardado en CSV")
 
     except Exception as e:
-        logger.error(f"❌ Error guardando portfolio CSV: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"❌ Error guardando portfolio CSV: {e}")
 
 # =========================
 # PORTFOLIO MANAGER
@@ -215,7 +215,7 @@ class PortfolioManager:
             "USDT": self.portfolio.get("USDT", {}).get("free", 0.0),
         }
         self.exchange_client.force_reset(balances)
-        logger.info("🔄 Exchange PAPER hidratado desde cartera persistida: %s", balances)
+        logger.info("🔄 Exchange PAPER hidratado desde cartera persistida: {}", balances)
 
     # =========================
     # SYNC FROM EXCHANGE (CRITICAL FIX)
@@ -308,7 +308,7 @@ class PortfolioManager:
             return True
             
         except Exception as e:
-            logger.error(f"[SYNC] ❌ Error during sync_from_exchange: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[SYNC] ❌ Error during sync_from_exchange: {e}")
             return False
 
     async def sync_from_exchange_async(self, exchange_client) -> bool:
@@ -405,7 +405,7 @@ class PortfolioManager:
             return True
             
         except Exception as e:
-            logger.error(f"[SYNC] ❌ Error during sync_from_exchange_async: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"[SYNC] ❌ Error during sync_from_exchange_async: {e}")
             return False
 
     async def update_nav(self) -> Dict[str, float]:
@@ -1221,7 +1221,7 @@ class PortfolioManager:
                         await self._sync_from_client_async()
 
         except Exception as e:
-            logger.error(f"❌ Error update_from_orders_async: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error update_from_orders_async: {e}")
 
     def update_from_orders(self, orders: list, market_data: Optional[Dict] = None):
         """
@@ -1508,7 +1508,7 @@ class PortfolioManager:
             return nav
             
         except Exception as e:
-            logger.error(f"Error calculando NAV: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"Error calculando NAV: {e}")
             return 0.0
 
     # =========================

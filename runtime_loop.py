@@ -82,7 +82,7 @@ class HRMRuntimeLoop:
             await self._update_portfolio_from_orders(processed_orders, market_data)
             await self._log_cycle_results(start_time, l2_signals, processed_orders)
         except Exception as error:
-            logger.exception("❌ Cycle %s failed", self.cycle_id)
+            logger.exception("❌ Cycle {} failed", self.cycle_id)
             await ErrorHandler.handle_cycle_error(error, self.cycle_id)
 
     async def _update_market_data(self) -> Dict[str, Any]:
@@ -90,7 +90,7 @@ class HRMRuntimeLoop:
         try:
             market_data = await self.data_feed.get_market_data()
             if market_data:
-                logger.info("📊 Market data updated for %s symbols", len(market_data))
+                logger.info("📊 Market data updated for {} symbols", len(market_data))
             return market_data or {}
         except Exception:
             logger.exception("❌ Failed to update market data")
@@ -116,7 +116,7 @@ class HRMRuntimeLoop:
             return
         self.sentiment_texts_cache = await update_sentiment_texts()
         self.last_sentiment_update = self.cycle_id
-        logger.info("✅ Sentiment analysis updated with %s texts", len(self.sentiment_texts_cache))
+        logger.info("✅ Sentiment analysis updated with {} texts", len(self.sentiment_texts_cache))
 
     async def _execute_l3_processing(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
         """Obtiene el contexto estratégico."""
@@ -142,7 +142,7 @@ class HRMRuntimeLoop:
         """Genera señales tácticas."""
         try:
             signals = self.l2_processor.generate_signals_conservative(market_data=market_data, l3_context=l3_decision)
-            logger.info("🎯 Generated %s L2 signals", len(signals))
+            logger.info("🎯 Generated {} L2 signals", len(signals))
             return signals
         except Exception:
             logger.exception("❌ L2 processing failed")
@@ -153,7 +153,7 @@ class HRMRuntimeLoop:
         del market_data
         try:
             orders = await self.order_manager.generate_orders(get_system_state(), l2_signals)
-            logger.info("✅ Generated %s candidate orders", len(orders))
+            logger.info("✅ Generated {} candidate orders", len(orders))
             return orders
         except Exception:
             logger.exception("❌ L1 processing failed")
@@ -168,7 +168,7 @@ class HRMRuntimeLoop:
             raise RuntimeError("ExecutionGateway no conectado: ejecución bloqueada para no saltarse validación y riesgo")
         resultados = await gateway.execute_orders(orders)
         ejecutadas = sum(1 for orden in resultados if orden.get("status") == "filled")
-        logger.info("💰 ExecutionGateway ejecutó %s órdenes", ejecutadas)
+        logger.info("💰 ExecutionGateway ejecutó {} órdenes", ejecutadas)
         return resultados
 
     async def _update_portfolio_from_orders(self, processed_orders: list, market_data: Dict[str, Any]):
@@ -200,7 +200,7 @@ class HRMRuntimeLoop:
                 if precio > 0:
                     precios[simbolo] = precio
             except (TypeError, ValueError, KeyError, IndexError):
-                logger.debug("Precio no válido para %s", simbolo)
+                logger.debug("Precio no válido para {}", simbolo)
         return precios
 
     async def _log_cycle_results(self, start_time: pd.Timestamp, l2_signals: list, processed_orders: list):
@@ -210,7 +210,7 @@ class HRMRuntimeLoop:
             rechazadas = sum(1 for orden in processed_orders if orden.get("status") == "rejected")
             accionables = sum(1 for signal in l2_signals if getattr(signal, "side", None) not in ("hold", "HOLD"))
             logger.info(
-                "📊 Cycle %s | Duration: %.1fs | Signals: %s (actionable: %s) | Orders: %s | Rejected: %s",
+                "📊 Cycle {} | Duration: {}s | Signals: {} (actionable: {}) | Orders: {} | Rejected: {}",
                 self.cycle_id, duration, len(l2_signals), accionables, len(processed_orders) - rechazadas, rechazadas,
             )
             if self.cycle_id % 10 == 0:

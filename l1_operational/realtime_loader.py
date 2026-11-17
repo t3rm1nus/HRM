@@ -66,7 +66,7 @@ class RealTimeDataLoader:
                     # Por ejemplo: actualizar el datafeed, generar señales, etc.
                     
         except Exception as e:
-            logger.error(f"❌ Error en stream de {symbol}: {str(e)}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error en stream de {symbol}: {str(e)}")
 
     async def fetch_realtime_data(self, symbol: str, timeframe: str = '1m', limit: int = 200) -> pd.DataFrame:
         """
@@ -107,7 +107,7 @@ class RealTimeDataLoader:
             return pd.DataFrame()
             
         except Exception as e:
-            logger.error(f"❌ Error obteniendo datos en tiempo real para {symbol}: {str(e)} (detalle completo)", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error obteniendo datos en tiempo real para {symbol}: {str(e)} (detalle completo)")
             return pd.DataFrame()
 
     async def get_realtime_data(self) -> Dict[str, pd.DataFrame]:
@@ -128,7 +128,7 @@ class RealTimeDataLoader:
 
             return market_data
         except Exception as e:
-            logger.error(f"❌ Error en get_realtime_data: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error en get_realtime_data: {e}")
             return {}
 
     async def simulate_realtime_data(self, historical_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:

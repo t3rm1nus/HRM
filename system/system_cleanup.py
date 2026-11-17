@@ -333,7 +333,7 @@ def cleanup_corrupt_sentiment_cache():
                     logger.info(f"🗑️ Eliminado archivo de sentiment: {file_path}")
                     deleted_count += 1
                 except OSError:
-                    logger.exception("No se pudo eliminar el archivo de sentiment: %s", file_path)
+                    logger.exception("No se pudo eliminar el archivo de sentiment: {}", file_path)
 
     if deleted_count > 0:
         logger.info(f"✅ Eliminados {deleted_count} archivos de sentiment corruptos/obsoletos")

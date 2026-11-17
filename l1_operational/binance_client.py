@@ -56,7 +56,7 @@ class BinanceClient:
         self._inicializar_exchanges()
 
         logger.info(
-            "BinanceClient inicializado: modo=%s, paper=%s",
+            "BinanceClient inicializado: modo={}, paper={}",
             self.mode,
             self.paper_mode
         )
@@ -349,7 +349,7 @@ class BinanceClient:
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 if intento == 2:
                     logger.exception(
-                        "No se pudieron obtener klines de %s",
+                        "No se pudieron obtener klines de {}",
                         symbol
                     )
                     raise
@@ -393,7 +393,7 @@ class BinanceClient:
 
         except Exception:
             logger.exception(
-                "Error obteniendo precio de %s",
+                "Error obteniendo precio de {}",
                 symbol
             )
             raise
@@ -556,7 +556,7 @@ class BinanceClient:
 
         except Exception:
             logger.exception(
-                "Error cancelando orden %s",
+                "Error cancelando orden {}",
                 order_id
             )
             raise

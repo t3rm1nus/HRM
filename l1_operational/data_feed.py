@@ -98,13 +98,13 @@ class DataFeed:
             return df
 
         except ccxt.AuthenticationError as e:
-            logger.error(f"❌ Error de autenticación para {symbol}: {str(e)} (verifique claves de testnet)", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error de autenticación para {symbol}: {str(e)} (verifique claves de testnet)")
             return pd.DataFrame()
         except ccxt.NetworkError as e:
-            logger.error(f"❌ Error de red para {symbol}: {str(e)} (verifique conexión o URLs de testnet)", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error de red para {symbol}: {str(e)} (verifique conexión o URLs de testnet)")
             return pd.DataFrame()
         except Exception as e:
-            logger.error(f"❌ Error obteniendo OHLCV para {symbol}: {str(e)}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error obteniendo OHLCV para {symbol}: {str(e)}")
             return pd.DataFrame()
 
     async def get_market_data(self) -> Dict[str, pd.DataFrame]:
@@ -129,7 +129,7 @@ class DataFeed:
             return market_data
 
         except Exception as e:
-            logger.error(f"❌ Error en get_market_data: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error en get_market_data: {e}")
             return {}
 
     async def close(self):
@@ -143,4 +143,4 @@ class DataFeed:
                 await self.ccxt_exchange.close()
             logger.info("✅ Conexiones de DataFeed cerradas")
         except Exception as e:
-            logger.error(f"❌ Error cerrando DataFeed: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error cerrando DataFeed: {e}")

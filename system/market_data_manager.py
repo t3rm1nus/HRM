@@ -420,7 +420,7 @@ class MarketDataManager:
                 return {}
                 
         except Exception as e:
-            logger.error(f"❌ Error en get_market_data: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error en get_market_data: {e}")
             return {}
     
     async def validate_and_repair(self, data: Dict[str, Any]) -> Dict[str, pd.DataFrame]:

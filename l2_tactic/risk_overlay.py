@@ -53,7 +53,7 @@ class RiskOverlay:
             return signals
 
         except Exception as e:
-            logger.error(f"❌ Error generando señales de riesgo: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error generando señales de riesgo: {e}")
             return []
     
     async def _check_volatility_risk(self, market_data: Dict[str, pd.DataFrame]) -> List[TacticalSignal]:
@@ -94,7 +94,7 @@ class RiskOverlay:
             return signals
             
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de volatilidad: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error verificando riesgo de volatilidad: {e}")
             return []
     
     async def _check_correlation_risk(self, market_data: Dict[str, pd.DataFrame], portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
@@ -139,7 +139,7 @@ class RiskOverlay:
             return signals
 
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de correlación: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error verificando riesgo de correlación: {e}")
             return []
     
     async def _check_drawdown_risk(self, portfolio_data: Dict[str, Any]) -> List[TacticalSignal]:
@@ -171,5 +171,5 @@ class RiskOverlay:
             return signals
             
         except Exception as e:
-            logger.error(f"❌ Error verificando riesgo de drawdown: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error verificando riesgo de drawdown: {e}")
             return []

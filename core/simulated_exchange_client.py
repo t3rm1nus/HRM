@@ -94,13 +94,13 @@ class SimulatedExchangeClient:
         
         # Validar balances iniciales (REQUERIDOS)
         if initial_balances is None or not isinstance(initial_balances, dict) or len(initial_balances) == 0:
-            logger.critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)", exc_info=True)
+            logger.opt(exception=True).critical("🚨 FATAL: SimulatedExchangeClient requires valid initial_balances (non-empty dict)")
             raise RuntimeError("SimulatedExchangeClient cannot be initialized without valid initial_balances")
         
         # Validar que los balances sean positivos
         invalid_balances = [asset for asset, balance in initial_balances.items() if balance <= 0]
         if invalid_balances:
-            logger.critical(f"🚨 FATAL: SimulatedExchangeClient balances must be positive. Invalid: {invalid_balances}", exc_info=True)
+            logger.opt(exception=True).critical(f"🚨 FATAL: SimulatedExchangeClient balances must be positive. Invalid: {invalid_balances}")
             raise RuntimeError("SimulatedExchangeClient cannot be initialized with non-positive balances")
         
         SimulatedExchangeClient._initialized = True

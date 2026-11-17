@@ -169,7 +169,7 @@ class RiskGuard:
             self.daily_pnl = 0.0
 
             logger.info(
-                "Referencia diaria de NAV establecida: %.8f USDT",
+                "Referencia diaria de NAV establecida: {} USDT",
                 nav_actual,
             )
             return None
@@ -397,7 +397,7 @@ class RiskGuard:
         """Valida parámetros de señal sin inventar balances."""
 
         logger.info(
-            "Validando señal %s",
+            "Validando señal {}",
             getattr(signal, "signal_id", "unknown"),
         )
 
@@ -413,7 +413,7 @@ class RiskGuard:
 
                 if not resultado.is_valid:
                     logger.warning(
-                        "Señal rechazada: %s",
+                        "Señal rechazada: {}",
                         resultado.reason,
                     )
                     return resultado
@@ -686,7 +686,7 @@ class RiskGuard:
         )
 
         logger.info(
-            "Posición actualizada: %s = %s",
+            "Posición actualizada: {} = {}",
             activo,
             self.current_positions[activo],
         )
@@ -704,7 +704,7 @@ class RiskGuard:
         self.daily_pnl += pnl
 
         logger.info(
-            "PnL diario actualizado: %s",
+            "PnL diario actualizado: {}",
             self.daily_pnl,
         )
 

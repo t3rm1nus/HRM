@@ -2,12 +2,19 @@ import js from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 export default [
   js.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
     languageOptions: {
+      parser: tseslint.parser,
       ecmaVersion: 2020,
       sourceType: 'module',
       parserOptions: {
@@ -24,13 +31,15 @@ export default [
       '@typescript-eslint/no-shadow': 'error',
       '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': 'error',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
 
       // Funciones: máximo 25 líneas en lógica, 80 en componentes
       'max-lines-per-function': ['error', { max: 25, skipBlankLines: true, skipComments: true }],
 
       // Sin números mágicos
-      'no-magic-numbers': 'error',
+      'no-magic-numbers': 'off',
       '@typescript-eslint/no-magic-numbers': ['error', { ignoreNumericLiteralTypes: true, ignoreEnums: true, ignoreReadonlyClassProperties: true }],
 
       // React hooks
@@ -44,7 +53,14 @@ export default [
   {
     files: ['**/*.{ts,tsx}'],
     rules: {
-      'max-lines-per-function': ['error', { max: 80, skipBlankLines: true, skipComments: true, Iife: true }],
+      'max-lines-per-function': ['error', { max: 80, skipBlankLines: true, skipComments: true, IIFEs: true }],
+    },
+  },
+  {
+    files: ['**/__tests__/**/*.{ts,tsx}', '**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],
+    rules: {
+      'max-lines-per-function': 'off',
+      '@typescript-eslint/no-magic-numbers': 'off',
     },
   },
   {

@@ -399,7 +399,7 @@ async def main():
                     "USDT": portfolio_manager.portfolio.get("USDT", {}).get("free", 0.0),
                 }
                 simulated_client.force_reset(balances_restaurados)
-                logger.info("✅ Exchange simulado restaurado desde el perfil PAPER: %s", balances_restaurados)
+                logger.info("✅ Exchange simulado restaurado desde el perfil PAPER: {}", balances_restaurados)
             
             order_manager = OrderManager(state_coordinator, portfolio_manager, mode=mode, simulated_client=simulated_client)
             components['order_manager'] = order_manager
@@ -773,7 +773,7 @@ async def main():
         # Save initial state to persistent storage
         portfolio_manager.save_to_json()
         from storage.perfil_datos import obtener_ruta_cartera
-        logger.info("✅ Initial portfolio state saved to %s", obtener_ruta_cartera(modo=portfolio_manager.mode))
+        logger.info("✅ Initial portfolio state saved to {}", obtener_ruta_cartera(modo=portfolio_manager.mode))
         
         # ================================================================
         # STEP 18: MAIN TRADING LOOP
@@ -1449,7 +1449,7 @@ async def log_portfolio_comparison(cycle_context, portfolio_manager, cycle_id, m
             logger.info("=" * 70)
         
         except Exception as e:
-            logger.error(f"❌ Error in portfolio comparison: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error in portfolio comparison: {e}")
 
 
 # 🚀 INTEGRACIÓN FastAPI - BEGIN

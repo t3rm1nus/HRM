@@ -111,7 +111,7 @@ class L2BusAdapter:
             await self.bus.subscribe(MessageType.PORTFOLIO_ALLOCATION.value, self._handle_portfolio_allocation)
             logger.info("✅ Suscrito a todos los tópicos del bus")
         except Exception as e:
-            logger.error(f"❌ Error suscribiendo tópicos: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error suscribiendo tópicos: {e}")
 
     # ---------- handlers ----------
     async def _handle_strategic_decision(self, message: Message):
@@ -124,7 +124,7 @@ class L2BusAdapter:
                 mf = await self._get_features(sig.symbol)
                 await self._process_signal(sig, mf)
         except Exception as e:
-            logger.error("❌ Error handling strategic decision", exc_info=True)
+            logger.opt(exception=True).error("❌ Error handling strategic decision")
 
     async def _handle_market_data_update(self, message: Message):
         try:
@@ -136,7 +136,7 @@ class L2BusAdapter:
             self.l2_state.market_data[symbol] = pd.DataFrame(l2msg.data.get("data", {}))
             logger.debug(f"📊 Market data actualizado para {symbol}")
         except Exception as e:
-            logger.error("❌ Error handling market data update", exc_info=True)
+            logger.opt(exception=True).error("❌ Error handling market data update")
 
     async def _handle_execution_report(self, message: Message):
         try:
@@ -146,7 +146,7 @@ class L2BusAdapter:
             logger.info(f"📊 Execution report {symbol}: {status}")
             self.metrics.record_execution(symbol=symbol, status=status)
         except Exception as e:
-            logger.error("❌ Error handling execution report", exc_info=True)
+            logger.opt(exception=True).error("❌ Error handling execution report")
 
     async def _handle_market_regime_update(self, message: Message):
         try:
@@ -154,7 +154,7 @@ class L2BusAdapter:
             self.l2_state.regime = l2msg.data.get("regime", "neutral")
             logger.info(f"📊 Régimen de mercado actualizado: {self.l2_state.regime}")
         except Exception as e:
-            logger.error("❌ Error handling market regime update", exc_info=True)
+            logger.opt(exception=True).error("❌ Error handling market regime update")
 
     async def _handle_portfolio_allocation(self, message: Message):
         try:
@@ -162,7 +162,7 @@ class L2BusAdapter:
             self.l2_state.allocation = l2msg.data
             logger.info(f"📊 Allocation recibida de L3: {self.l2_state.allocation}")
         except Exception as e:
-            logger.error("❌ Error handling portfolio allocation", exc_info=True)
+            logger.opt(exception=True).error("❌ Error handling portfolio allocation")
 
     # ---------- processing ----------
     async def _process_signal(self, signal: TacticalSignal, mf: MarketFeatures):
@@ -200,7 +200,7 @@ class L2BusAdapter:
             await self._publish(MessageType.POSITION_SIZE, asdict(adjusted))
             self.metrics.record_signal(signal.symbol, accepted=True)
         except Exception as e:
-            logger.error(f"❌ Error procesando señal para {signal.symbol}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error procesando señal para {signal.symbol}: {e}")
 
     # ---------- helpers ----------
     async def _get_market_data(self) -> Dict[str, pd.DataFrame]:
@@ -223,7 +223,7 @@ class L2BusAdapter:
             await self.bus.publish(msg.to_bus_message())
             logger.debug(f"📤 Publicado mensaje {mtype.value}")
         except Exception as e:
-            logger.error(f"❌ Error publicando mensaje {mtype.value}: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error publicando mensaje {mtype.value}: {e}")
 
     async def publish_performance_report(self):
         try:
@@ -234,7 +234,7 @@ class L2BusAdapter:
             await self._publish(MessageType.PERFORMANCE_REPORT, payload)
             logger.info("📊 Performance report publicado a L4")
         except Exception as e:
-            logger.error(f"❌ Error publicando performance report: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error publicando performance report: {e}")
 
     # ---------- background ----------
     async def _heartbeat_task(self):
@@ -246,7 +246,7 @@ class L2BusAdapter:
                 )
                 await asyncio.sleep(30)
             except Exception as e:
-                logger.error(f"❌ Error en heartbeat task: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"❌ Error en heartbeat task: {e}")
 
     async def _performance_report_task(self):
         """Loop periódico que envía métricas de L2 hacia L4."""
@@ -255,7 +255,7 @@ class L2BusAdapter:
                 await self.publish_performance_report()
                 await asyncio.sleep(60)
             except Exception as e:
-                logger.error(f"❌ Error en performance report task: {e}", exc_info=True)
+                logger.opt(exception=True).error(f"❌ Error en performance report task: {e}")
 
     async def close(self):
         """Cierra el adaptador y detiene las tareas."""

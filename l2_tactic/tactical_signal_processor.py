@@ -118,7 +118,7 @@ class L2TacticProcessor:
             return await self._process_traditional_signals(state, market_data)
 
         except Exception as e:
-            logger.error(f"❌ Error in L2 signal processing: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error in L2 signal processing: {e}")
             return []
 
     async def _process_with_hrm_path_modes(self, state: Dict[str, Any], market_data: Dict) -> List[TacticalSignal]:

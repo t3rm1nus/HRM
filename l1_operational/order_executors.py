@@ -61,7 +61,7 @@ class OrderExecutors:
             self._inicializar_registro()
 
         logger.info(
-            "OrderExecutors inicializado: modo=%s, paper=%s",
+            "OrderExecutors inicializado: modo={}, paper={}",
             self.mode,
             self.paper_mode,
         )
@@ -118,7 +118,7 @@ class OrderExecutors:
             )
 
         logger.info(
-            "Exchange PAPER conectado. Balances: %s",
+            "Exchange PAPER conectado. Balances: {}",
             self.simulated_client.get_balances(),
         )
 
@@ -403,7 +403,7 @@ class OrderExecutors:
         except Exception as error:
             logger.exception(
                 "Sincronización previa fallida. "
-                "Orden bloqueada: %s",
+                "Orden bloqueada: {}",
                 symbol_normalizado,
             )
 
@@ -427,7 +427,7 @@ class OrderExecutors:
 
         except Exception as error:
             logger.exception(
-                "Error ejecutando orden PAPER: %s",
+                "Error ejecutando orden PAPER: {}",
                 symbol_normalizado,
             )
 
@@ -461,7 +461,7 @@ class OrderExecutors:
 
             logger.exception(
                 "La orden se ejecutó, pero falló la "
-                "sincronización posterior: %s",
+                "sincronización posterior: {}",
                 symbol_normalizado,
             )
 
@@ -480,7 +480,7 @@ class OrderExecutors:
         await self._registrar_trade(resultado)
 
         logger.info(
-            "PAPER ejecutado: %s %s cantidad=%s precio=%s",
+            "PAPER ejecutado: {} {} cantidad={} precio={}",
             action_normalizada.upper(),
             symbol_normalizado,
             cantidad,

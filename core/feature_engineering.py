@@ -119,7 +119,7 @@ def integrate_features_with_l2(technical_indicators: dict, l3_context: dict) -> 
         return enriched_indicators
         
     except Exception as e:
-        logger.error(f"❌ Error general enriqueciendo features con L3: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"❌ Error general enriqueciendo features con L3: {e}")
         return technical_indicators
 
 # ----------------------

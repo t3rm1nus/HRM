@@ -283,7 +283,7 @@ class ExposureManager:
             return rebalancing
 
         except Exception as e:
-            logger.error(f"❌ Error calculating rebalancing: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error calculating rebalancing: {e}")
             return {}
 
     def _determine_action(self, adjustment_value: float, threshold: float = 50.0) -> str:

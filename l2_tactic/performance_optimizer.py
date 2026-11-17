@@ -419,7 +419,7 @@ class _BatchGroup:
                     *[ _call_model_async(self.model.predict, f, self.cfg.model_call_timeout_s) for f in feats ]
                 )
         except Exception as e:
-            logger.exception("[Batcher] Error calling model", exc_info=True)
+            logger.opt(exception=True).exception("[Batcher] Error calling model")
             # fallar todas las futures
             for fut, _ in pending:
                 if not fut.done():

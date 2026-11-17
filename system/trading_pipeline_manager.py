@@ -86,7 +86,7 @@ class TradingPipelineManager:
         }
 
         logger.info(
-            "CYCLE SNAPSHOT | Cycle %s | Balances: %s | Prices: %s",
+            "CYCLE SNAPSHOT | Cycle {} | Balances: {} | Prices: {}",
             cycle_id,
             balances,
             prices,
@@ -203,11 +203,7 @@ class TradingPipelineManager:
                     result.portfolio_value = nav_result["total_nav"]
 
                 except Exception as nav_error:
-                    logger.error(
-                        "Error calculando NAV: %s",
-                        nav_error,
-                        exc_info=True,
-                    )
+                    logger.exception("Error calculando NAV: {}", nav_error)
                     result.portfolio_value = (
                         self._calculate_nav_from_snapshot()
                     )
@@ -225,16 +221,12 @@ class TradingPipelineManager:
 
                 if usdt > 0 or btc > 0 or eth > 0:
                     logger.critical(
-                        "NAV inválido con balances no nulos: %s",
+                        "NAV inválido con balances no nulos: {}",
                         result.portfolio_value,
                     )
 
         except Exception as error:
-            logger.error(
-                "Error en ciclo de trading: %s",
-                error,
-                exc_info=True,
-            )
+            logger.exception("Error en ciclo de trading: {}", error)
 
         finally:
             result.execution_time = (
@@ -242,8 +234,8 @@ class TradingPipelineManager:
             ).total_seconds()
 
             logger.info(
-                "Ciclo completado en %.2fs | Señales: %s | "
-                "Órdenes: %s ejecutadas, %s rechazadas",
+                "Ciclo completado en {}s | Señales: {} | "
+                "Órdenes: {} ejecutadas, {} rechazadas",
                 result.execution_time,
                 result.signals_generated,
                 result.orders_executed,
@@ -269,7 +261,7 @@ class TradingPipelineManager:
         if self.execution_gateway is None:
             logger.critical(
                 "ExecutionGateway no inicializado. "
-                "Se bloquea la ejecución de %s órdenes.",
+                "Se bloquea la ejecución de {} órdenes.",
                 len(ordenes),
             )
 
@@ -331,7 +323,7 @@ class TradingPipelineManager:
         )
 
         logger.info(
-            "Snapshot de cartera actualizado: %s",
+            "Snapshot de cartera actualizado: {}",
             balances,
         )
 
@@ -392,11 +384,7 @@ class TradingPipelineManager:
                     market_data=market_data,
                 )
             except Exception as error:
-                logger.error(
-                    "Error en auto-learning: %s",
-                    error,
-                    exc_info=True,
-                )
+                logger.exception("Error en auto-learning: {}", error)
 
     async def _log_paper_trades(
         self,
@@ -430,7 +418,7 @@ class TradingPipelineManager:
                 )
 
                 logger.warning(
-                    "Trade sin marca de registro previo: %s",
+                    "Trade sin marca de registro previo: {}",
                     order.get("order_id"),
                 )
 
@@ -501,7 +489,7 @@ class TradingPipelineManager:
 
                     if signal_type in {"sell", "buy"}:
                         logger.info(
-                            "Periodo de gracia: señal %s bloqueada para %s",
+                            "Periodo de gracia: señal {} bloqueada para {}",
                             signal_type.upper(),
                             symbol,
                         )
@@ -529,7 +517,7 @@ class TradingPipelineManager:
         self._bootstrap_completed_at = current_cycle
 
         logger.info(
-            "Bootstrap completado en ciclo %s",
+            "Bootstrap completado en ciclo {}",
             current_cycle,
         )
 

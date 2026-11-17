@@ -134,7 +134,7 @@ class HRMBootstrap:
         self._forzar_modo_paper()
 
         logger.info("Iniciando HRM en modo PAPER")
-        logger.info("SESSION_IS_FRESH: %s", is_session_fresh())
+        logger.info("SESSION_IS_FRESH: {}", is_session_fresh())
 
         try:
             await self._perform_system_cleanup()
@@ -211,7 +211,7 @@ class HRMBootstrap:
             return
 
         logger.info(
-            "Limpieza completada: %s archivos y %s directorios",
+            "Limpieza completada: {} archivos y {} directorios",
             resultado.get("deleted_files", 0),
             resultado.get("deleted_dirs", 0),
         )
@@ -266,7 +266,7 @@ class HRMBootstrap:
         state = validate_state_structure(state)
 
         logger.info(
-            "Estado inicializado. Símbolos: %s. Capital: %s USDT",
+            "Estado inicializado. Símbolos: {}. Capital: {} USDT",
             symbols,
             initial_balance,
         )
@@ -355,7 +355,7 @@ class HRMBootstrap:
         )
 
         logger.info(
-            "Exchange PAPER inicializado. Estado: %s",
+            "Exchange PAPER inicializado. Estado: {}",
             balances,
         )
 
@@ -368,7 +368,7 @@ class HRMBootstrap:
         from l1_operational.trend_ai import models as l1_models
 
         logger.info(
-            "Modelos L1 cargados: %s",
+            "Modelos L1 cargados: {}",
             list(l1_models.keys()),
         )
 
@@ -577,7 +577,7 @@ class HRMBootstrap:
             )
 
             logger.info(
-                "Análisis de sentimiento inicializado: %s textos",
+                "Análisis de sentimiento inicializado: {} textos",
                 len(sentiment_texts_cache),
             )
 
@@ -631,7 +631,7 @@ class HRMBootstrap:
 
             except Exception:
                 logger.exception(
-                    "Error cerrando componente: %s",
+                    "Error cerrando componente: {}",
                     type(component).__name__,
                 )
 
@@ -686,7 +686,7 @@ def register_component_for_shutdown(
     _shutdown_components[name] = component
 
     logger.debug(
-        "Componente registrado para shutdown: %s",
+        "Componente registrado para shutdown: {}",
         name,
     )
 
@@ -699,7 +699,7 @@ def unregister_component_for_shutdown(
         _shutdown_components[name] = None
 
         logger.debug(
-            "Componente desregistrado: %s",
+            "Componente desregistrado: {}",
             name,
         )
 
@@ -734,11 +734,11 @@ async def _cerrar_componente(
         if asyncio.iscoroutine(resultado):
             await resultado
 
-        logger.info("Componente cerrado: %s", nombre)
+        logger.info("Componente cerrado: {}", nombre)
 
     except Exception:
         logger.exception(
-            "Error cerrando componente: %s",
+            "Error cerrando componente: {}",
             nombre,
         )
 
@@ -823,7 +823,7 @@ async def _close_aiohttp_sessions() -> None:
 
         if sesiones_cerradas:
             logger.info(
-                "Sesiones aiohttp cerradas: %s",
+                "Sesiones aiohttp cerradas: {}",
                 sesiones_cerradas,
             )
 
@@ -849,7 +849,7 @@ async def _cancel_pending_tasks() -> None:
             return
 
         logger.info(
-            "Cancelando tareas pendientes: %s",
+            "Cancelando tareas pendientes: {}",
             len(tareas_pendientes),
         )
 
@@ -870,7 +870,7 @@ async def _cancel_pending_tasks() -> None:
         )
 
         logger.info(
-            "Tareas canceladas: %s",
+            "Tareas canceladas: {}",
             canceladas,
         )
 
@@ -896,7 +896,7 @@ def _signal_handler(signum, frame) -> None:
     nombre_senal = signal.Signals(signum).name
 
     logger.info(
-        "Señal recibida: %s",
+        "Señal recibida: {}",
         nombre_senal,
     )
 

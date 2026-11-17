@@ -56,7 +56,7 @@ class ExecutionGateway:
         self.execution_stats["total_orders"] += len(orders)
 
         logger.info(
-            "Gateway: procesando %s órdenes",
+            "Gateway: procesando {} órdenes",
             len(orders)
         )
 
@@ -171,7 +171,7 @@ class ExecutionGateway:
                     self.execution_stats["rejected_orders"] += 1
 
                     logger.warning(
-                        "Orden bloqueada por riesgo: %s",
+                        "Orden bloqueada por riesgo: {}",
                         orden["risk_error"]
                     )
                     continue
@@ -350,7 +350,7 @@ class ExecutionGateway:
 
         if precio is None or precio <= 0:
             logger.warning(
-                "No hay precio válido para %s. Orden cancelada.",
+                "No hay precio válido para {}. Orden cancelada.",
                 symbol
             )
             return []
@@ -441,7 +441,7 @@ class ExecutionGateway:
 
         except Exception:
             logger.exception(
-                "No se pudo calcular la cantidad para %s",
+                "No se pudo calcular la cantidad para {}",
                 symbol
             )
             return 0.0

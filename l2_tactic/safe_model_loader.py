@@ -60,5 +60,5 @@ def load_model_safely(model_path):
         return model
     
     except Exception as e:
-        logger.error(f"❌ Error cargando modelo: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"❌ Error cargando modelo: {e}")
         raise

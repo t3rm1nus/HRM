@@ -61,7 +61,7 @@ class L1OperationalProcessor:
             return tactical_signals
 
         except Exception as e:
-            logger.error(f"❌ Error procesando datos de mercado en L1: {e}", exc_info=True)
+            logger.opt(exception=True).error(f"❌ Error procesando datos de mercado en L1: {e}")
             return []
 
     def _convert_to_tactical_signals(self, l1_signals: List[L1Signal]) -> List[TacticalSignal]:
