@@ -60,7 +60,7 @@ from l2_tactic.risk_overlay import RiskOverlay
 from l2_tactic.models import TacticalSignal
 from l2_tactic.config import L2Config as L2ConfigClass
 from core.l3_processor import get_l3_decision
-from fix_l3_dominance import should_l3_block_l2_signals
+from l3_strategy.l3_dominance import should_l3_block_l2_signals
 
 # =============================================================================
 # CONFIGURACIÓN Y CONSTANTES

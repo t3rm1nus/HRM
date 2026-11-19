@@ -9,7 +9,7 @@ from typing import Dict, Tuple, Any
 from datetime import datetime, timezone
 
 from core.logging import logger
-from fix_l3_dominance import should_l3_block_l2_signals
+from l3_strategy.l3_dominance import should_l3_block_l2_signals
 
 
 def should_execute_with_l3_dominance(l2_signal: Dict, l3_info: Dict) -> Tuple[bool, str]:

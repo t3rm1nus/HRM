@@ -16,7 +16,6 @@ from typing import Any, Dict, Tuple
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
 
@@ -51,7 +50,7 @@ from comms.message_bus import MessageBus
 from sentiment.sentiment_manager import update_sentiment_texts
 
 from system.system_cleanup import perform_full_cleanup
-from config_loader import get_initial_balances, get_capital_usd
+from core.config_loader import get_initial_balances, get_capital_usd
 
 
 # Estado de sesión
@@ -491,7 +490,7 @@ class HRMBootstrap:
 
     async def _initialize_execution_gateway(self) -> None:
         """Crea la puerta central de ejecución de órdenes."""
-        from execution_gateway import ExecutionGateway
+        from l1_operational.execution_gateway import ExecutionGateway
 
         if self.portfolio_manager is None:
             raise RuntimeError(
@@ -524,7 +523,7 @@ class HRMBootstrap:
     async def _initialize_runtime_loop(self) -> None:
         """Inicializa el runtime y exige un Gateway operativo."""
 
-        from runtime_loop import HRMRuntimeLoop
+        from system.runtime_loop import HRMRuntimeLoop
 
         if self.portfolio_manager is None:
             raise RuntimeError(

@@ -10,8 +10,8 @@ from datetime import datetime
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from integration_auto_learning import AutoLearningIntegration
-from auto_learning_system import SelfImprovingTradingSystem
+from auto_learning.integration import AutoLearningIntegration
+from auto_learning.auto_learning_system import SelfImprovingTradingSystem
 
 # Try to import storage module for trade log checking
 try:

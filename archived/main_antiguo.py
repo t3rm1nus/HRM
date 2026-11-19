@@ -1,0 +1,1295 @@
+﻿# -*- coding: utf-8 -*-
+# main.py - VERSI├ôN COMPLETAMENTE CORREGIDA CON FIXES CR├ìTICOS
+
+import asyncio
+import sys
+import os
+import pandas as pd
+from datetime import datetime
+from dotenv import load_dotenv
+from typing import Optional
+
+# Suppress TensorFlow warnings before any imports
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# Add project root to path (insert at beginning for priority)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import SystemBootstrap for centralized system initialization
+from system.bootstrap import SystemBootstrap
+
+# Import MarketDataManager for centralized market data handling
+from system.market_data_manager import MarketDataManager
+
+# Import TradingPipelineManager for trading cycle orchestration
+from system.trading_pipeline_manager import TradingPipelineManager
+
+# Import funciones de shutdown global desde bootstrap
+from bootstrap import shutdown, register_component_for_shutdown
+
+# Import modularized components
+from core.state_manager import log_cycle_data
+from core.data_validator import validate_market_data, _extract_current_price_safely
+from core.logging import logger
+from core.config import get_config
+from core.error_handler import ErrorHandler
+from core.incremental_signal_verifier import get_signal_verifier, start_signal_verification, stop_signal_verification
+from core.trading_metrics import get_trading_metrics
+
+# Import StateCoordinator
+from system.state_coordinator import StateCoordinator
+
+# Import ErrorRecoveryManager
+from system.error_recovery_manager import ErrorRecoveryManager, RecoveryActionType
+
+# ­ƒîè ORDER FLOW CAPTURE - L1 Perfecto
+from l1_operational.order_flow_capture import (
+    OrderFlowCapture,
+    create_and_start_order_flow_capture,
+    get_order_flow_capture
+)
+
+# ­ƒîè ORDER FLOW SIGNAL GENERATOR - Se├▒ales basadas en bid_ask_imbalance
+from l1_operational.orderflow_signal_generator import (
+    OrderFlowSignalGenerator,
+    create_order_flow_signal_generator,
+    get_order_flow_signal_generator
+)
+
+from l1_operational.data_feed import DataFeed
+from l2_tactic.tactical_signal_processor import L2TacticProcessor
+from l2_tactic.models import L2State, TacticalSignal
+from l2_tactic.risk_controls.manager import RiskControlManager
+from l1_operational.order_manager import OrderManager
+from l1_operational.binance_client import BinanceClient
+from l1_operational.realtime_loader import RealTimeDataLoader
+from l1_operational.bus_adapter import BusAdapterAsync
+
+from comms.config import config, APAGAR_L3
+from l2_tactic.config import L2Config
+from comms.message_bus import MessageBus
+
+from fix_l3_dominance import (
+    should_l3_block_l2_signals,
+    should_trigger_rebalancing,
+    calculate_allocation_deviation,
+    L3DominanceFixConfig
+)
+
+# ­ƒöä AUTO-LEARNING SYSTEM INTEGRATION
+from integration_auto_learning import integrate_with_main_system
+
+# ­ƒº╣ SYSTEM CLEANUP - USAR NUEVO M├ôDULO
+# PRIORIDAD 4: memory_reset = False ANTES del try
+memory_reset = False
+CLEANUP_AVAILABLE = False
+
+try:
+    from system.system_cleanup import (
+        perform_full_cleanup, 
+        force_paper_mode,
+        filesystem_cleanup,
+        memory_reset as cleanup_memory_reset,
+        async_context_reset
+    )
+    # PRIORIDAD 4: Asignar despu├®s del import si est├í disponible
+    memory_reset = cleanup_memory_reset
+    CLEANUP_AVAILABLE = True
+except ImportError:
+    logger.warning("ÔÜá´©Å SystemCleanup not available, skipping cleanup")
+    CLEANUP_AVAILABLE = False
+
+# ­ƒôè SENTIMENT ANALYSIS
+from sentiment.sentiment_manager import update_sentiment_texts
+
+
+async def main(shutdown_event: Optional[asyncio.Event] = None):
+    """Main HRM system function with coordinated graceful shutdown."""
+    if shutdown_event is None:
+        shutdown_event = asyncio.Event()
+    
+    # ================================================================
+    # FIX: Verificaci├│n de seguridad modo LIVE ÔÇö debe ejecutarse ANTES del cleanup
+    # ================================================================
+    binance_mode = os.getenv('BINANCE_MODE', 'paper').lower()
+    paper_mode_env = os.getenv('PAPER_MODE', 'true').lower()
+    
+    if binance_mode == 'live' and paper_mode_env != 'false':
+        logger.warning(
+            "ÔÜá´©Å BINANCE_MODE=live detectado pero PAPER_MODE no es 'false' expl├¡cito. "
+            "Forzando paper mode por seguridad. Para operar en live, debes establecer "
+            "PAPER_MODE=false de forma expl├¡cita y consciente."
+        )
+        os.environ['PAPER_MODE'] = 'true'
+        os.environ['BINANCE_MODE'] = 'paper'
+    
+    if binance_mode == 'live' and paper_mode_env == 'false' and os.getenv('HRM_ENABLE_LIVE_TRADING', 'false').lower() != 'true':
+        logger.critical("Trading real bloqueado: falta HRM_ENABLE_LIVE_TRADING=true. Se fuerza paper.")
+        os.environ['PAPER_MODE'] = 'true'
+        os.environ['BINANCE_MODE'] = 'paper'
+        binance_mode = 'paper'
+        paper_mode_env = 'true'
+
+    if (binance_mode == 'live' and paper_mode_env == 'false' and os.getenv('HRM_ENABLE_LIVE_TRADING', 'false').lower() == 'true'):
+        # Requiere confirmaci├│n expl├¡cita ÔÇö nunca arrancar live sin esto
+        logger.critical("­ƒÜ¿ MODO LIVE CON DINERO REAL DETECTADO ­ƒÜ¿")
+        logger.critical(f"   Capital en riesgo: {os.getenv('INITIAL_CAPITAL', 'DESCONOCIDO')} USDT")
+        logger.critical("   Tienes 10 segundos para cancelar (Ctrl+C)...")
+        await asyncio.sleep(10)
+        logger.critical("­ƒÜ¿ ARRANCANDO EN MODO LIVE ÔÇö SIN VUELTA ATR├üS")
+    
+    # ================================================================
+    # CRITICAL VARIABLE DECLARATIONS
+    # ================================================================
+    state_coordinator: Optional[StateCoordinator] = None
+    portfolio_manager = None
+    order_manager = None
+    l2_processor = None
+    market_data_manager = None
+    trading_pipeline = None
+    error_recovery = None
+    arranque_rechazado = False
+    
+    try:
+        
+        # No ejecutar limpiezas destructivas al arrancar: los historiales y
+        # estados persistentes deben sobrevivir a reinicios normales.
+        logger.info("Se conserva el estado persistente; limpieza manual bajo demanda.")
+
+        logger.info("­ƒÜÇ Starting HRM system")
+
+        # ================================================================
+        # STEP 1.5: DETERMINE TRADING MODE (ONCE - BEFORE STEP 2)
+        # ================================================================
+        # FIX: Calculate mode ONCE here, before initializing any components
+        paper_mode_env = os.getenv('PAPER_MODE', 'true').lower()
+        if paper_mode_env == 'false':
+            mode = "live"
+            logger.info("­ƒö┤ MODO LIVE detectado (PAPER_MODE=false)")
+        else:
+            mode = "simulated"
+            logger.info("­ƒƒí MODO SIMULADO detectado (PAPER_MODE!=false)")
+        servicio_estado_vivo.registrar_modo(mode)
+        preparar_sesion(es_modo_live=(mode == "live"))
+
+        # ================================================================
+        # STEP 2: INITIALIZE STATE_COORDINATOR (SINGLETON) - CRITICAL FIX
+        # ================================================================
+        logger.info("­ƒöº Initializing StateCoordinator...")
+        state_coordinator = StateCoordinator(mode=mode)
+        
+        # Ô£à CRITICAL: Verify StateCoordinator is not None
+        if state_coordinator is None:
+            logger.critical("­ƒÜ¿ FATAL: StateCoordinator initialization returned None!")
+            raise RuntimeError("StateCoordinator initialization failed")
+        
+        # Ô£à INJECT IMMEDIATELY
+        from core.state_manager import inject_state_coordinator
+        inject_state_coordinator(state_coordinator)
+        servicio_estado_vivo.registrar_coordinador(state_coordinator)
+        logger.info("Ô£à StateCoordinator injected globally")
+
+        # Adquirir el runtime de forma at├│mica antes de inicializar componentes.
+        if not state_coordinator.iniciar_arranque(
+            motivo="Inicializaci├│n del runtime HRM",
+            componente="main",
+        ):
+            arranque_rechazado = True
+            logger.error("Ôøö Arranque rechazado: ya existe un runtime activo")
+            return
+
+        # ================================================================
+        # STEP 3: INITIALIZE SYSTEM BOOTSTRAP - WITH ERROR HANDLING
+        # ================================================================
+        logger.info("­ƒöº Running SystemBootstrap...")
+        components = {}
+        external_adapter = None
+        
+        try:
+            bootstrap = SystemBootstrap()
+            system_context = bootstrap.initialize_system()
+            
+            # Get components from bootstrap if available
+            if hasattr(system_context, 'components'):
+                components = system_context.components
+            
+            if hasattr(system_context, 'external_adapter'):
+                external_adapter = system_context.external_adapter
+            
+            logger.info("Ô£à SystemBootstrap completed - StateCoordinator sin cambios")
+            
+        except Exception as bootstrap_error:
+            logger.error(f"ÔØî SystemBootstrap failed: {bootstrap_error}")
+            logger.warning("ÔÜá´©Å Using manual fallback initialization")
+            
+            # Ô£à CRITICAL: Ensure state_coordinator is still valid even if bootstrap fails
+            if state_coordinator is None:
+                logger.info("­ƒöº Re-creating StateCoordinator after bootstrap failure")
+                state_coordinator = StateCoordinator()
+                inject_state_coordinator(state_coordinator)
+
+        # Ô£à FINAL VERIFICATION: StateCoordinator must exist
+        if state_coordinator is None:
+            logger.critical("­ƒÜ¿ FATAL: StateCoordinator is None after bootstrap!")
+            raise RuntimeError("StateCoordinator is None - cannot continue")
+
+        # ================================================================
+        # STEP 4: INITIALIZE MARKET DATA MANAGER FIRST (REORDERED)
+        # ================================================================
+        logger.info("­ƒöº Initializing MarketDataManager...")
+        try:
+            market_data_manager = MarketDataManager(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                fallback_enabled=True
+            )
+            logger.info("Ô£à MarketDataManager initialized successfully")
+        except Exception as mkt_error:
+            logger.error(f"ÔØî MarketDataManager initialization failed: {mkt_error}")
+            
+            # WAIT: Give system time to stabilize before retry
+            logger.info("ÔÅ│ Waiting 2 seconds for system to stabilize before retry...")
+            import time
+            time.sleep(2)
+            
+            # FALLBACK: Try simpler initialization with minimal parameters
+            try:
+                logger.info("­ƒöä Attempting fallback initialization with minimal parameters...")
+                market_data_manager = MarketDataManager(
+                    symbols=["BTCUSDT"],  # Solo un s├¡mbolo para simplificar
+                    fallback_enabled=False  # Deshabilitar fallback para evitar complejidad adicional
+                )
+                logger.warning("ÔÜá´©Å Using fallback MarketDataManager initialization (BTCUSDT only, no fallback)")
+            except Exception as fallback_error:
+                logger.critical(f"­ƒÜ¿ FATAL: MarketDataManager fallback initialization also failed: {fallback_error}")
+                raise RuntimeError(f"MarketDataManager cannot be initialized. Original error: {mkt_error}, Fallback error: {fallback_error}")
+    
+        # Ô£à CRITICAL: Verify MarketDataManager is not None
+        if market_data_manager is None:
+            logger.critical("­ƒÜ¿ FATAL: MarketDataManager is None after initialization!")
+            raise RuntimeError("MarketDataManager cannot be None - trading loop cannot start")
+
+        # ­ƒöº REGISTRAR MarketDataManager para shutdown global
+        register_component_for_shutdown('market_data_manager', market_data_manager)
+        servicio_mercado.registrar_gestor(market_data_manager)
+
+        # ================================================================
+        # STEP 4.5: INITIALIZE ORDER FLOW CAPTURE (L1 Perfecto)
+        # ================================================================
+        logger.info("­ƒîè Inicializando OrderFlowCapture (L1 Perfecto)...")
+        print("­ƒîè Inicializando OrderFlowCapture (L1 Perfecto)...", flush=True)
+        
+        order_flow_capture = None
+        try:
+            # CRITICAL FIX: Usar polling REST API en lugar de websockets para evitar streams muertos
+            # Los websockets pueden quedar colgados silenciosamente, el polling es m├ís fiable
+            order_flow_capture = await create_and_start_order_flow_capture(
+                symbols=["BTCUSDT", "ETHUSDT"],
+                data_dir="backtesting/data/orderflow",
+                use_polling=True  # FORZAR polling REST API - m├ís fiable que websockets
+            )
+            register_component_for_shutdown('order_flow_capture', order_flow_capture)
+            
+            print("Ô£à OrderFlowCapture iniciado en modo POLLING REST API", flush=True)
+            logger.info("Ô£à OrderFlowCapture iniciado y registrado para shutdown (modo POLLING)")
+            
+            # Verificar que el directorio de datos existe
+            orderflow_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtesting/data/orderflow")
+            os.makedirs(orderflow_dir, exist_ok=True)
+            print(f"­ƒôü Directorio OrderFlow verificado: {orderflow_dir}", flush=True)
+            
+            # Esperar un momento para que el polling capture datos iniciales
+            await asyncio.sleep(6)
+            
+            # Verificar features iniciales
+            for symbol in ["BTCUSDT", "ETHUSDT"]:
+                features = order_flow_capture.get_current_features(symbol)
+                if features:
+                    print(f"­ƒôè OrderFlow {symbol}: spread={features['spread_bps']:.2f}bps, "
+                          f"imbalance={features['bid_ask_imbalance']:.3f}", flush=True)
+                    logger.info(f"­ƒôè OrderFlow {symbol}: spread={features['spread_bps']:.2f}bps, "
+                               f"imbalance={features['bid_ask_imbalance']:.3f}")
+                else:
+                    print(f"ÔÜá´©Å OrderFlow {symbol}: No hay features disponibles a├║n", flush=True)
+                    
+        except Exception as of_error:
+            print(f"ÔØî OrderFlowCapture initialization failed: {of_error}", flush=True)
+            logger.error(f"ÔØî OrderFlowCapture initialization failed: {of_error}")
+            logger.warning("ÔÜá´©Å Continuando sin OrderFlowCapture - L1 no tendr├í datos de flujo de ├│rdenes")
+            order_flow_capture = None
+
+        # ================================================================
+        # STEP 4.6: INITIALIZE ORDER FLOW SIGNAL GENERATOR
+        # ================================================================
+        logger.info("­ƒîè Inicializando OrderFlowSignalGenerator...")
+        print("­ƒîè Inicializando OrderFlowSignalGenerator...", flush=True)
+        
+        order_flow_signal_generator = None
+        try:
+            if order_flow_capture is not None:
+                order_flow_signal_generator = create_order_flow_signal_generator(
+                    order_flow_capture=order_flow_capture
+                )
+                register_component_for_shutdown('order_flow_signal_generator', order_flow_signal_generator)
+                
+                print("Ô£à OrderFlowSignalGenerator inicializado", flush=True)
+                logger.info("Ô£à OrderFlowSignalGenerator inicializado y registrado para shutdown")
+            else:
+                logger.warning("ÔÜá´©Å OrderFlowSignalGenerator no inicializado - OrderFlowCapture no disponible")
+                
+        except Exception as sg_error:
+            print(f"ÔØî OrderFlowSignalGenerator initialization failed: {sg_error}", flush=True)
+            logger.error(f"ÔØî OrderFlowSignalGenerator initialization failed: {sg_error}")
+            logger.warning("ÔÜá´©Å Continuando sin OrderFlowSignalGenerator")
+            order_flow_signal_generator = None
+
+        # ================================================================
+        # STEP 5: ENSURE CRITICAL COMPONENTS EXIST (WITH MARKET DATA MANAGER INJECTED)
+        # ================================================================
+        logger.info("­ƒöº Verifying critical components...")
+        
+        # Portfolio Manager - FIX ASYNC ISSUE
+        if 'portfolio_manager' not in components or components.get('portfolio_manager') is None:
+            from core.portfolio_manager import PortfolioManager
+            from l1_operational.binance_client import BinanceClient
+            
+            # Ô£à CRITICAL FIX: Create BinanceClient for paper trading with testnet
+            binance_client = BinanceClient()
+            
+            # ­ƒöº REGISTRAR BinanceClient para shutdown global
+            register_component_for_shutdown('binance_client', binance_client)
+            
+            # Ô£à Create PortfolioManager with BinanceClient AND MarketDataManager using shared mode
+            portfolio_manager = PortfolioManager(
+                exchange_client=binance_client, 
+                market_data_manager=market_data_manager,
+                mode=mode
+            )
+            
+            # Ô£à If PortfolioManager has async initialization, call it
+            if hasattr(portfolio_manager, 'initialize_async'):
+                try:
+                    await portfolio_manager.initialize_async()
+                    logger.info("Ô£à PortfolioManager initialized asynchronously")
+                except Exception as async_init_error:
+                    logger.warning(f"ÔÜá´©Å Async initialization failed: {async_init_error}")
+            
+            components['portfolio_manager'] = portfolio_manager
+            logger.info("Ô£à PortfolioManager created with MarketDataManager injected")
+        else:
+            portfolio_manager = components['portfolio_manager']
+            # Inject MarketDataManager if not already injected
+            if not hasattr(portfolio_manager, 'market_data_manager') or portfolio_manager.market_data_manager is None:
+                portfolio_manager.market_data_manager = market_data_manager
+                logger.info("Ô£à MarketDataManager injected into existing PortfolioManager")
+            logger.info("Ô£à PortfolioManager from bootstrap")
+            
+        # Order Manager
+        simulated_client = None
+        if 'order_manager' not in components or components.get('order_manager') is None:
+            from l1_operational.order_manager import OrderManager
+            from system.bootstrap import bootstrap_simulated_exchange
+            
+            # Bootstrap simulated exchange client if in paper mode
+            simulated_client = bootstrap_simulated_exchange(config)
+            if (
+                simulated_client
+                and portfolio_manager
+                and getattr(portfolio_manager, "_estado_paper_restaurado", False)
+            ):
+                balances_restaurados = {
+                    "BTC": portfolio_manager.portfolio.get("BTCUSDT", {}).get("position", 0.0),
+                    "ETH": portfolio_manager.portfolio.get("ETHUSDT", {}).get("position", 0.0),
+                    "USDT": portfolio_manager.portfolio.get("USDT", {}).get("free", 0.0),
+                }
+                simulated_client.force_reset(balances_restaurados)
+                logger.info("Ô£à Exchange simulado restaurado desde el perfil PAPER: {}", balances_restaurados)
+            
+            order_manager = OrderManager(state_coordinator, portfolio_manager, mode=mode, simulated_client=simulated_client)
+            components['order_manager'] = order_manager
+            logger.info("Ô£à OrderManager created manually with simulated client")
+        else:
+            order_manager = components['order_manager']
+            simulated_client = getattr(order_manager, 'simulated_client', None)
+            logger.info("Ô£à OrderManager from bootstrap")
+        
+        # ­ƒöä CRITICAL FIX: Sincronizar PortfolioManager con SimulatedExchangeClient despu├®s del bootstrap
+        if simulated_client and portfolio_manager:
+            logger.info("­ƒöä Sincronizando PortfolioManager con SimulatedExchangeClient despu├®s del bootstrap...")
+            try:
+                sync_success = await portfolio_manager.sync_from_exchange_async(simulated_client)
+                if sync_success:
+                    # Obtener el balance sincronizado para loguear
+                    sim_balances = simulated_client.get_balances() if hasattr(simulated_client, 'get_balances') else {}
+                    usdt_balance = sim_balances.get('USDT', 0)
+                    logger.info(f"Ô£à PortfolioManager sincronizado con SimulatedExchangeClient: USDT=${usdt_balance:.2f}")
+                else:
+                    logger.warning("ÔÜá´©Å No se pudo sincronizar PortfolioManager con SimulatedExchangeClient")
+            except Exception as sync_error:
+                logger.error(f"ÔØî Error sincronizando PortfolioManager: {sync_error}")
+        
+        # ­ƒöº REGISTRAR componentes para shutdown global
+        register_component_for_shutdown('portfolio_manager', portfolio_manager)
+        register_component_for_shutdown('order_manager', order_manager)
+            
+        # L2 Processor
+        if 'l2_processor' not in components or components.get('l2_processor') is None:
+            from l2_tactic.tactical_signal_processor import L2TacticProcessor
+            l2_processor = L2TacticProcessor()
+            components['l2_processor'] = l2_processor
+            logger.info("Ô£à L2TacticProcessor created manually")
+        else:
+            l2_processor = components['l2_processor']
+            logger.info("Ô£à L2TacticProcessor from bootstrap")
+
+        # ================================================================
+        # STEP 5: CRITICAL INJECTIONS - PORTFOLIO_MANAGER INTO ORDER_MANAGER
+        # ================================================================
+        logger.info("­ƒöº Injecting dependencies...")
+        
+        # Try multiple injection methods for OrderManager
+        injection_success = False
+        
+        # Method 1: set_portfolio_manager method
+        if hasattr(order_manager, 'set_portfolio_manager'):
+            try:
+                order_manager.set_portfolio_manager(portfolio_manager)
+                logger.info("Ô£à Method 1: portfolio_manager injected via set_portfolio_manager()")
+                injection_success = True
+            except Exception as e:
+                logger.warning(f"ÔÜá´©Å Method 1 failed: {e}")
+        
+        # Method 2: Direct attribute assignment
+        if not injection_success:
+            try:
+                order_manager.portfolio_manager = portfolio_manager
+                logger.info("Ô£à Method 2: portfolio_manager injected as direct attribute")
+                injection_success = True
+            except Exception as e:
+                logger.warning(f"ÔÜá´©Å Method 2 failed: {e}")
+        
+        # Method 3: Check if OrderManager has a trading_cycle with position_manager
+        if not injection_success and hasattr(order_manager, 'trading_cycle'):
+            try:
+                if hasattr(order_manager.trading_cycle, 'position_manager'):
+                    order_manager.trading_cycle.position_manager.portfolio = portfolio_manager
+                    logger.info("Ô£à Method 3: portfolio_manager injected into trading_cycle.position_manager")
+                    injection_success = True
+            except Exception as e:
+                logger.warning(f"ÔÜá´©Å Method 3 failed: {e}")
+        
+        # Method 4: Inject into OrderManager's internal state
+        if not injection_success:
+            try:
+                if hasattr(order_manager, '_portfolio_manager'):
+                    order_manager._portfolio_manager = portfolio_manager
+                    logger.info("Ô£à Method 4: portfolio_manager injected as _portfolio_manager")
+                    injection_success = True
+            except Exception as e:
+                logger.warning(f"ÔÜá´©Å Method 4 failed: {e}")
+        
+        if not injection_success:
+            logger.error("ÔØî CRITICAL: Could not inject portfolio_manager into order_manager!")
+            logger.error("   OrderManager attributes: " + str(dir(order_manager)))
+        
+        # Additional injections
+        signal_verifier = get_signal_verifier()
+        trading_metrics = get_trading_metrics()
+        
+        # ================================================================
+        # STEP 6: GET INITIAL STATE - WITH NULL CHECK
+        # ================================================================
+        logger.info("­ƒöº Getting initial state...")
+        
+        # Ô£à CRITICAL: Verify state_coordinator before using it
+        if state_coordinator is None:
+            logger.critical("­ƒÜ¿ FATAL: state_coordinator is None before get_state!")
+            raise RuntimeError("state_coordinator is None")
+        
+        try:
+            state = state_coordinator.get_state("current")
+            logger.info("Ô£à Initial state obtained")
+        except Exception as state_error:
+            logger.error(f"ÔØî Failed to get state: {state_error}")
+            # Create minimal fallback state
+            state = {
+                "market_data": {},
+                "total_value": 0.0,
+                "l3_output": {
+                    'regime': 'error',
+                    'signal': 'hold',
+                    'confidence': 0.0,
+                    'strategy_type': 'fallback',
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            }
+            logger.warning("ÔÜá´©Å Using fallback state")
+        
+        # Initialize L3 components
+        if not APAGAR_L3:
+            sentiment_texts_cache = components.get('sentiment_texts', [])
+            if "l3_output" not in state:
+                state["l3_output"] = components.get('l3_output', {
+                    'regime': 'error',
+                    'signal': 'hold',
+                    'confidence': 0.0,
+                    'strategy_type': 'l3_error',
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+        else:
+            state["l3_output"] = {
+                'regime': 'disabled',
+                'signal': 'hold',
+                'confidence': 0.0,
+                'strategy_type': 'l3_disabled',
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            sentiment_texts_cache = []
+
+        # Ô£à CRITICAL: Ensure l3_output has proper structure
+        if "l3_output" not in state or not state["l3_output"]:
+            state["l3_output"] = {
+                'regime': 'neutral',
+                'signal': 'hold',
+                'confidence': 0.5,  # Default medium confidence
+                'strategy_type': 'initial',
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            logger.warning("­ƒöä Fixed empty l3_output in state")
+        logger.info("­ƒöº Initializing position management...")
+        from core.position_rotator import PositionRotator, AutoRebalancer
+        from core.config import is_paper_mode
+        
+        # Use the already determined mode (simulated/live/etc.)
+        # mode is already set earlier in main() - use it directly
+        position_rotator = PositionRotator(
+            portfolio_manager=portfolio_manager,
+            mode=mode
+        )
+        auto_rebalancer = AutoRebalancer(
+            portfolio_manager=portfolio_manager,
+            mode=mode
+        )
+        logger.info(f"Ô£à Position managers ready (mode: {mode}, paper_mode: {is_paper_mode(mode)})")
+
+        # ================================================================
+        # STEP 9: INITIALIZE TRADING PIPELINE MANAGER
+        # ================================================================
+        logger.info("­ƒöº Initializing TradingPipelineManager...")
+        # Use the already determined mode (no redefinition - fixes bug where mode was always reset to "simulated")
+        
+        trading_pipeline = TradingPipelineManager(
+            portfolio_manager=portfolio_manager,
+            order_manager=order_manager,
+            l2_processor=l2_processor,
+            position_rotator=position_rotator,
+            auto_rebalancer=auto_rebalancer,
+            signal_verifier=signal_verifier,
+            state_coordinator=state_coordinator,
+            mode=mode
+        )
+        logger.info(f"Ô£à TradingPipelineManager ready (mode: {mode})")
+
+        # ================================================================
+        # STEP 10: INITIALIZE ERROR RECOVERY
+        # ================================================================
+        logger.info("­ƒöº Initializing ErrorRecoveryManager...")
+        error_recovery = ErrorRecoveryManager()
+        logger.info("Ô£à ErrorRecoveryManager ready")
+
+        # ================================================================
+        # STEP 11: GET INITIAL MARKET DATA
+        # ================================================================
+        logger.info("­ƒöä Fetching initial market data...")
+        try:
+            market_data = await market_data_manager.get_data_with_fallback()
+        
+            if market_data and len(market_data) > 0:
+                state["market_data"] = market_data
+                logger.info(f"Ô£à Market data ready: {len(market_data)} symbols")
+            else:
+                logger.warning("ÔÜá´©Å No market data available, but continuing with empty data")
+                market_data = {}
+        except Exception as data_error:
+            logger.error(f"ÔØî Market data fetch failed: {data_error}")
+            market_data = {}
+
+        # ================================================================
+        # STEP 14: BOOTSTRAP DEPLOYMENT (INITIAL ENTRY)
+        # ================================================================
+        bootstrap_executed = False
+        if validate_market_data(market_data):
+            logger.info("­ƒÜÇ Calculating bootstrap deployment...")
+            try:
+            # First try bootstrap deployment (guaranteed initial entry)
+                # CRITICAL FIX: Usar await para m├®todos async
+                bootstrap_orders = await position_rotator.calculate_bootstrap_deployment(market_data)
+                
+                if bootstrap_orders:
+                    logger.info(f"­ƒöÑ Bootstrap deployment: {len(bootstrap_orders)} orders will be executed")
+                    processed_orders = await order_manager.execute_orders(bootstrap_orders)
+                    await portfolio_manager.update_from_orders_async(processed_orders)
+                    logger.info(f"Ô£à Bootstrap deployment completed: {len(processed_orders)} orders executed")
+                    bootstrap_executed = True
+                else:
+                    logger.info("ÔÅ©´©Å No bootstrap deployment needed - checking initial deployment")
+                    # Fallback to initial deployment if bootstrap failed or is disabled
+                    # CRITICAL FIX: Usar await para m├®todo async
+                    orders = await position_rotator.calculate_initial_deployment(market_data)
+                    if orders:
+                        processed_orders = await order_manager.execute_orders(orders)
+                        await portfolio_manager.update_from_orders_async(processed_orders)
+                        logger.info(f"Ô£à Initial deployment: {len(processed_orders)} orders")
+                        bootstrap_executed = True
+                    else:
+                        logger.info("ÔÜá´©Å No initial deployment needed")
+                        
+            except Exception as deploy_error:
+                logger.error(f"ÔØî Deployment failed: {deploy_error}")
+        else:
+            logger.warning("ÔÜá´©Å Skipping deployment - invalid market data")
+        
+        # ÔÅ│ Mark bootstrap as completed to start grace period (prevents immediate SELL signals)
+        if bootstrap_executed and trading_pipeline:
+            trading_pipeline.mark_bootstrap_completed(current_cycle=0)
+
+        # ================================================================
+        # STEP 15: INTEGRATE AUTO-LEARNING (FIXED)
+        # ================================================================
+        logger.info("­ƒñû Integrating Auto-Learning System...")
+        auto_learning_system = None
+        try:
+            from integration_auto_learning import AutoLearningIntegration
+            
+            # Ô£à FIX: Crear integraci├│n con argumentos requeridos
+            auto_learning_system = AutoLearningIntegration()
+            
+            # Ô£à FIX: Inicializar con todos los componentes necesarios
+            success = await auto_learning_system.initialize_integration(
+                state_manager=state_coordinator,
+                order_manager=order_manager,
+                portfolio_manager=portfolio_manager,
+                l2_processor=l2_processor,
+                trading_metrics=get_trading_metrics(),
+                config=config
+            )
+            
+            if success:
+                logger.info("Ô£à Auto-Learning System integrated successfully")
+                
+                # Ô£à FIX: Conectar AutoLearningBridge al Trading Pipeline
+                from system.auto_learning_bridge import AutoLearningBridge
+                bridge = AutoLearningBridge(auto_learning_system)
+                trading_pipeline.auto_learning_bridge = bridge
+                logger.info("Ô£à Auto-Learning Bridge conectado al Trading Pipeline")
+                
+                # Verificar protecci├│n anti-overfitting
+                status = await auto_learning_system.get_learning_status()
+                if status.get('learning_system', {}).get('anti_overfitting_active', False):
+                    logger.info("­ƒøí´©Å  Anti-overfitting protection: ACTIVE")
+                else:
+                    logger.warning("ÔÜá´©Å  Anti-overfitting protection not confirmed")
+            else:
+                logger.warning("ÔÜá´©Å  Auto-Learning System initialization returned False")
+                
+        except Exception as learning_error:
+            logger.error(f"ÔØî Auto-Learning integration failed: {learning_error}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+        # ================================================================
+        # STEP 16: APPLY FUNDAMENTAL RULE - CRITICAL FIX
+        # ================================================================
+        logger.info("­ƒøí´©Å Applying FUNDAMENTAL RULE for simulated mode...")
+        try:
+            from core.state_manager import enforce_fundamental_rule
+            enforce_fundamental_rule()
+            logger.info("Ô£à FUNDAMENTAL RULE applied successfully")
+        except Exception as rule_error:
+            logger.error(f"ÔØî FUNDAMENTAL RULE failed: {rule_error}")
+            # Continue anyway - this is not a critical failure
+        
+        # ================================================================
+        # ­ƒÆÑ PRIORIDAD 2: WARMUP ALL SYMBOLS - Ensure ALL market data is cached
+        # ================================================================
+        logger.info("­ƒöÑ PRIORIDAD 2: Ejecutando warmup_all_symbols()...")
+        warmup_success = await market_data_manager.warmup_all_symbols(
+            timeframe="1m",
+            limit=400
+        )
+        
+        if not warmup_success:
+            # Fallback: try individual symbols
+            logger.warning("ÔÜá´©Å warmup_all_symbols fall├│, intentando BTCUSDT...")
+            warmup_success = await market_data_manager.force_warmup(
+                symbol="BTCUSDT",
+                timeframe="1m",
+                limit=400
+            )
+            
+            if not warmup_success:
+                logger.warning("ÔÜá´©Å Warmup BTCUSDT fall├│, intentando ETHUSDT...")
+                warmup_success = await market_data_manager.force_warmup(
+                    symbol="ETHUSDT",
+                    timeframe="1m",
+                    limit=400
+                )
+        
+        # ================================================================
+        # ­ƒÆÑ PRIORIDAD 3: FAIL FAST - No market data = No trading loop
+        # ================================================================
+        # Verificar si tenemos datos de mercado despu├®s del bootstrap/warmup
+        market_data_after_warmup = await market_data_manager.get_data_with_fallback()
+        
+        if not market_data_after_warmup or len(market_data_after_warmup) == 0:
+            logger.critical("­ƒÜ¿ FAIL FAST: market_data est├í vac├¡o despu├®s de bootstrap/warmup")
+            logger.critical("   No hay datos de mercado - NO se entrar├í al trading loop")
+            logger.critical("   Intentando reintentar warmup...")
+            
+            # Retry warmup once
+            await asyncio.sleep(5)
+            retry_success = await market_data_manager.force_warmup(
+                symbol="BTCUSDT",
+                timeframe="1m",
+                limit=400
+            )
+            
+            if retry_success:
+                logger.info("Ô£à Retry warmup exitoso - continuando al trading loop")
+                market_data_after_warmup = await market_data_manager.get_data_with_fallback()
+            else:
+                logger.critical("ÔØî Retry warmup fall├│ - abortando")
+                logger.info("­ƒæï HRM System shutdown complete (fail fast)")
+                return  # Exit main() - no trading without market data
+        
+        # Update state con datos v├ílidos
+        state["market_data"] = market_data_after_warmup
+        await servicio_mercado.notificar_datos(market_data_after_warmup)
+        logger.info(f"Ô£à Market data verificado: {len(market_data_after_warmup)} s├¡mbolos")
+        
+        # ================================================================
+        # STEP 17: SERIALIZE INITIAL PORTFOLIO STATE (CRITICAL FIX)
+        # ================================================================
+        logger.info("­ƒÆ¥ Serializing initial portfolio state...")
+        initial_portfolio_snapshot = portfolio_manager.get_portfolio_state()
+        logger.info(f"­ƒô© Initial portfolio snapshot: {initial_portfolio_snapshot}")
+        
+        # Save initial state to persistent storage
+        portfolio_manager.save_to_json()
+        from storage.perfil_datos import obtener_ruta_cartera
+        logger.info("Ô£à Initial portfolio state saved to {}", obtener_ruta_cartera(modo=portfolio_manager.mode))
+        
+        # ================================================================
+        # STEP 18: MAIN TRADING LOOP
+        # ================================================================
+        logger.info("­ƒöä Starting main trading loop...")
+        logger.info("="*80)
+        
+        servicio_estado_vivo.registrar_cartera(portfolio_manager)
+        servicio_estado_vivo.registrar_inicio_bucle()
+
+        cycle_id = 0
+        total_signals_all_cycles = 0
+        total_orders_all_cycles = 0
+        total_rejected_all_cycles = 0
+        total_cooldown_blocked_all_cycles = 0
+        
+        last_cycle_time = pd.Timestamp.utcnow()
+
+        while not shutdown_event.is_set():
+            cycle_id += 1
+            start_time = pd.Timestamp.utcnow()
+            
+            # Enforce 3-second cycle timing
+            elapsed = (start_time - last_cycle_time).total_seconds()
+            if elapsed < 3.0:
+                wait_time = 3.0 - elapsed
+                logger.debug(f"ÔÅ▒´©Å Waiting {wait_time:.2f}s for 3-second cycle")
+                await asyncio.sleep(wait_time)
+            
+            last_cycle_time = pd.Timestamp.utcnow()
+
+            try:
+                # RUNNING solo se publica al comenzar trabajo real del ciclo.
+                servicio_estado_vivo.registrar_inicio_ciclo(cycle_id)
+
+                # ============================================================
+                # CYCLE STEP 0: CHECK FOR ZERO BALANCES (DETECCI├ôN TEMPRANA)
+                # ============================================================
+                logger.info(f"­ƒöì Cycle {cycle_id}: Checking SimulatedExchangeClient state")
+                
+                # Get real balances from SimulatedExchangeClient
+                if hasattr(portfolio_manager, 'client') and portfolio_manager.client:
+                    client = portfolio_manager.client
+                    is_paper_mode = False
+                    if hasattr(client, 'paper_mode'):
+                        is_paper_mode = client.paper_mode
+                    elif portfolio_manager.mode == "simulated":
+                        is_paper_mode = True
+                    
+                    if is_paper_mode:
+                        # Get balances from SimulatedExchangeClient
+                        if hasattr(client, 'get_account_balances'):
+                            import inspect
+                            if inspect.iscoroutinefunction(client.get_account_balances):
+                                balances = await client.get_account_balances()
+                            else:
+                                balances = client.get_account_balances()
+                        elif hasattr(client, 'get_balance'):
+                            if inspect.iscoroutinefunction(client.get_balance):
+                                current_btc = await client.get_balance("BTC")
+                                current_eth = await client.get_balance("ETH")
+                                current_usdt = await client.get_balance("USDT")
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                            else:
+                                current_btc = client.get_balance("BTC")
+                                current_eth = client.get_balance("ETH")
+                                current_usdt = client.get_balance("USDT")
+                                balances = {
+                                    "BTC": current_btc,
+                                    "ETH": current_eth,
+                                    "USDT": current_usdt
+                                }
+                        else:
+                            logger.warning("ÔÜá´©Å Client has no get_account_balances or get_balance method")
+                            continue
+                        
+                        # Log SIM_STATE_ID and SIM_BALANCES
+                        logger.info(f"   SIM_STATE_ID: {id(client)}")
+                        logger.info(f"   SIM_BALANCES: {balances}")
+                        
+                # Check if all balances are zero
+                        current_btc = balances.get("BTC", 0.0)
+                        current_eth = balances.get("ETH", 0.0)
+                        current_usdt = balances.get("USDT", 0.0)
+                        
+                        if current_btc == 0.0 and current_eth == 0.0 and current_usdt == 0.0:
+                            logger.critical("­ƒÜ¿ CRITICAL: All balances are zero - state loss detected!")
+                            
+                            # FIX: Attempt recovery from persistent_state first
+                            logger.info("­ƒöº Attempting to recover state from persistent storage...")
+                            recovery_success = False
+                            recovery_source = None
+                            
+                            # STEP 1: Try to load from the active PAPER profile
+                            try:
+                                if hasattr(portfolio_manager, 'load_from_json'):
+                                    loaded = portfolio_manager.load_from_json()
+                                    if loaded:
+                                        # Successfully loaded from persistent storage
+                                        from storage.perfil_datos import obtener_ruta_cartera
+                                        recovery_source = str(obtener_ruta_cartera(modo=portfolio_manager.mode))
+                                        recovery_success = True
+                                        logger.info(f"Ô£à State recovered from persistent storage: {recovery_source}")
+                                        logger.info(f"   BTC: {portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0):.6f}")
+                                        logger.info(f"   ETH: {portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0):.6f}")
+                                        logger.info(f"   USDT: {portfolio_manager.portfolio.get('USDT', {}).get('free', 0):.2f}")
+                                        
+                                        # Sync the recovered state to SimulatedExchangeClient
+                                        if hasattr(client, 'force_reset'):
+                                            recovered_balances = {
+                                                "BTC": portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0),
+                                                "ETH": portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0),
+                                                "USDT": portfolio_manager.portfolio.get('USDT', {}).get('free', 0)
+                                            }
+                                            client.force_reset(recovered_balances)
+                                            logger.info(f"Ô£à SimulatedExchangeClient synchronized with recovered state")
+                                    else:
+                                        logger.warning("ÔÜá´©Å Persistent state file exists but has zero balances or is invalid")
+                            except Exception as load_error:
+                                logger.warning(f"ÔÜá´©Å Failed to load from persistent storage: {load_error}")
+                            
+                            # STEP 2: If persistent state failed, try initial_portfolio_snapshot
+                            if not recovery_success:
+                                logger.info("­ƒöº Attempting recovery from initial_portfolio_snapshot...")
+                                try:
+                                    if 'initial_portfolio_snapshot' in locals() and initial_portfolio_snapshot:
+                                        btc_pos = initial_portfolio_snapshot.get('BTCUSDT', {}).get('position', 0)
+                                        eth_pos = initial_portfolio_snapshot.get('ETHUSDT', {}).get('position', 0)
+                                        usdt_free = initial_portfolio_snapshot.get('USDT', {}).get('free', 0)
+                                        
+                                        if btc_pos > 0 or eth_pos > 0 or usdt_free > 0:
+                                            recovery_source = "initial_portfolio_snapshot"
+                                            recovery_success = True
+                                            logger.info(f"Ô£à State recovered from initial_portfolio_snapshot")
+                                            logger.info(f"   BTC: {btc_pos:.6f}, ETH: {eth_pos:.6f}, USDT: {usdt_free:.2f}")
+                                            
+                                            # Restore to portfolio_manager
+                                            portfolio_manager.portfolio['BTCUSDT'] = {'position': btc_pos, 'free': btc_pos}
+                                            portfolio_manager.portfolio['ETHUSDT'] = {'position': eth_pos, 'free': eth_pos}
+                                            portfolio_manager.portfolio['USDT'] = {'free': usdt_free}
+                                            
+                                            # Sync to SimulatedExchangeClient
+                                            if hasattr(client, 'force_reset'):
+                                                client.force_reset({
+                                                    "BTC": btc_pos,
+                                                    "ETH": eth_pos,
+                                                    "USDT": usdt_free
+                                                })
+                                                logger.info(f"Ô£à SimulatedExchangeClient synchronized with initial snapshot")
+                                except Exception as snapshot_error:
+                                    logger.warning(f"ÔÜá´©Å Failed to recover from initial snapshot: {snapshot_error}")
+                            
+                            # STEP 3: If all else fails, use hardcoded fallback values
+                            if not recovery_success:
+                                logger.warning("ÔÜá´©Å All recovery methods failed - using hardcoded fallback values")
+                                recovery_source = "hardcoded_fallback"
+                                
+                                # Use hardcoded values as last resort
+                                fallback_balances = {"BTC": 0.01549, "ETH": 0.385, "USDT": 3000.0}
+                                logger.info(f"­ƒöº Applying hardcoded fallback: {fallback_balances}")
+                                
+                                try:
+                                    if hasattr(client, 'force_reset'):
+                                        client.force_reset(fallback_balances)
+                                        logger.info("Ô£à Hardcoded fallback balances applied")
+                                        
+                                        # Update portfolio_manager with fallback values
+                                        portfolio_manager.portfolio['BTCUSDT'] = {
+                                            'position': fallback_balances['BTC'], 
+                                            'free': fallback_balances['BTC']
+                                        }
+                                        portfolio_manager.portfolio['ETHUSDT'] = {
+                                            'position': fallback_balances['ETH'], 
+                                            'free': fallback_balances['ETH']
+                                        }
+                                        portfolio_manager.portfolio['USDT'] = {
+                                            'free': fallback_balances['USDT']
+                                        }
+                                        recovery_success = True
+                                    else:
+                                        logger.error("ÔØî force_reset not available - cannot recover")
+                                        raise RuntimeError("State loss - all balances zero and recovery failed")
+                                except Exception as fallback_error:
+                                    logger.error(f"ÔØî Failed to apply hardcoded fallback: {fallback_error}")
+                                    raise RuntimeError("State loss - all recovery methods failed")
+                            
+                            # Log the recovery result
+                            logger.info("=" * 70)
+                            logger.info(f"­ƒöä STATE RECOVERY COMPLETED")
+                            logger.info(f"   Source: {recovery_source}")
+                            logger.info(f"   BTC: {portfolio_manager.portfolio.get('BTCUSDT', {}).get('position', 0):.6f}")
+                            logger.info(f"   ETH: {portfolio_manager.portfolio.get('ETHUSDT', {}).get('position', 0):.6f}")
+                            logger.info(f"   USDT: {portfolio_manager.portfolio.get('USDT', {}).get('free', 0):.2f}")
+                            logger.info("=" * 70)
+                            
+                            # Save recovered state to persistent storage
+                            portfolio_manager.save_to_json()
+                            logger.info("­ƒÆ¥ Recovered state saved to persistent storage")
+                
+                # ============================================================
+                # CYCLE STEP 1: GET FRESH MARKET DATA
+                # ============================================================
+                try:
+                    market_data = await market_data_manager.get_data_with_fallback()
+                    
+                    if not market_data or len(market_data) == 0:
+                        logger.warning(f"ÔÜá´©Å Cycle {cycle_id}: No market data, skipping")
+                        await asyncio.sleep(3.0)
+                        continue
+                    
+                    # Update state with fresh data
+                    state["market_data"] = market_data
+                    await servicio_mercado.notificar_datos(market_data)
+                    
+                except Exception as data_error:
+                    logger.error(f"ÔØî Cycle {cycle_id}: Market data error: {data_error}")
+                    await asyncio.sleep(3.0)
+                    continue
+                
+                # ============================================================
+                # CYCLE STEP 1.5: ORDER FLOW SIGNAL GENERATION (ANTES DE L1 CL├üSICO)
+                # ============================================================
+                orderflow_signals = {}
+                orderflow_override = False
+                
+                if order_flow_signal_generator is not None:
+                    try:
+                        # Actualizar estado de posiciones antes de generar se├▒ales
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            # Verificar si hay posici├│n larga
+                            has_long = False
+                            if portfolio_manager:
+                                position = portfolio_manager.portfolio.get(symbol, {}).get('position', 0)
+                                has_long = position > 0
+                                order_flow_signal_generator.update_position_state(symbol, has_long)
+                        
+                        # Generar se├▒ales para cada s├¡mbolo
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            if symbol in market_data:
+                                signal_result = await order_flow_signal_generator.get_signal(symbol)
+                                orderflow_signals[symbol] = signal_result
+                                
+                                # Si la se├▒al tiene confianza > 0.50, activar override
+                                if signal_result.action in ['buy', 'sell'] and signal_result.confidence > 0.50:
+                                    orderflow_override = True
+                                    logger.info(f"­ƒîè ORDERFLOW OVERRIDE: {symbol} {signal_result.action.upper()} "
+                                               f"(conf={signal_result.confidence:.2f}) - Bypass L1 cl├ísico")
+                        
+                        # Log resumen de se├▒ales order flow cada 5 ciclos
+                        if cycle_id % 5 == 0 and orderflow_signals:
+                            logger.info("­ƒîè OrderFlow Signals Status:")
+                            for sym, sig in orderflow_signals.items():
+                                logger.info(f"   {sym}: {sig.action.upper()} (imb={sig.imbalance_current:.3f}, conf={sig.confidence:.2f})")
+                                    
+                    except Exception as of_sig_error:
+                        logger.warning(f"ÔÜá´©Å OrderFlow signal generation error: {of_sig_error}")
+                        orderflow_signals = {}
+                        orderflow_override = False
+                
+                # ============================================================
+                # CYCLE STEP 2: PROCESS TRADING CYCLE
+                # ============================================================
+                # Si hay override de order flow, pasar las se├▒ales al pipeline
+                if orderflow_override:
+                    state['orderflow_signals'] = {sym: sig.to_dict() for sym, sig in orderflow_signals.items()}
+                    state['orderflow_override'] = True
+                else:
+                    state['orderflow_override'] = False
+                    if 'orderflow_signals' in state:
+                        del state['orderflow_signals']
+                
+                cycle_result = await trading_pipeline.process_trading_cycle(
+                    state=state,
+                    market_data=market_data,  # Ô£à CRITICAL: Pass market_data explicitly
+                    cycle_id=cycle_id
+                )
+                
+                # Update state from cycle result
+                state["total_value"] = cycle_result.portfolio_value
+                
+                # Update cumulative counters
+                total_signals_all_cycles += cycle_result.signals_generated
+                total_orders_all_cycles += cycle_result.orders_executed
+                total_rejected_all_cycles += cycle_result.orders_rejected
+                total_cooldown_blocked_all_cycles += cycle_result.cooldown_blocked
+
+                # ============================================================
+                # CYCLE STEP 3: SYNC PORTFOLIO FROM EXCHANGE (CRITICAL FIX)
+                # ============================================================
+                # MUST sync after EVERY order execution to maintain state consistency
+                if cycle_result.orders_executed > 0:
+                    logger.info(f"­ƒöä Syncing portfolio after {cycle_result.orders_executed} executed orders...")
+                    
+                    # Get the simulated client for paper mode
+                    simulated_client = None
+                    if hasattr(order_manager, 'simulated_client'):
+                        simulated_client = order_manager.simulated_client
+                    elif hasattr(order_manager, 'client'):
+                        simulated_client = order_manager.client
+                    
+                    if simulated_client:
+                        # CRITICAL: Sync portfolio from exchange client
+                        sync_success = await portfolio_manager.sync_from_exchange_async(simulated_client)
+                        
+                        if sync_success:
+                            logger.info("Ô£à Portfolio synced successfully after order execution")
+                        else:
+                            logger.error("ÔØî Portfolio sync failed after order execution")
+                    
+                    # Update NAV with current market prices
+                    market_prices = {}
+                    if simulated_client and hasattr(simulated_client, 'get_market_price'):
+                        market_prices = {
+                            "BTCUSDT": simulated_client.get_market_price("BTCUSDT"),
+                            "ETHUSDT": simulated_client.get_market_price("ETHUSDT")
+                        }
+                    else:
+                        # Fallback to market_data
+                        for symbol in ["BTCUSDT", "ETHUSDT"]:
+                            if symbol in market_data:
+                                data = market_data[symbol]
+                                if isinstance(data, dict) and "close" in data:
+                                    market_prices[symbol] = data["close"]
+                                elif hasattr(data, 'iloc'):
+                                    market_prices[symbol] = data.iloc[-1]["close"]
+                    
+                    if market_prices:
+                        await portfolio_manager.update_nav_async(market_prices)
+                
+                # ============================================================
+                # CYCLE STEP 4: LOG SUMMARY (every 5 cycles)
+                # ============================================================
+                if cycle_id % 5 == 0:
+                    logger.info("="*80)
+                    logger.info(f"­ƒôè CYCLE {cycle_id} SUMMARY")
+                    logger.info(f"   Signals: {cycle_result.signals_generated}")
+                    logger.info(f"   Orders Executed: {cycle_result.orders_executed}")
+                    logger.info(f"   Orders Rejected: {cycle_result.orders_rejected}")
+                    logger.info(f"   Cooldown Blocked: {cycle_result.cooldown_blocked}")
+                    logger.info(f"   Portfolio Value: ${cycle_result.portfolio_value:.2f}")
+                    logger.info(f"   L3 Regime: {cycle_result.l3_regime}")
+                    logger.info("="*80)
+                    
+                    # Cumulative stats
+                    logger.info(f"­ƒôê CUMULATIVE (Cycles 1-{cycle_id})")
+                    logger.info(f"   Total Signals: {total_signals_all_cycles}")
+                    logger.info(f"   Total Orders: {total_orders_all_cycles}")
+                    logger.info(f"   Total Rejected: {total_rejected_all_cycles}")
+                    logger.info(f"   Avg Orders/Cycle: {total_orders_all_cycles/cycle_id:.2f}")
+                    logger.info("="*80)
+                
+                # ============================================================
+                # CYCLE STEP 4B: EXTRAER Y MOSTRAR PRECIOS ACTUALES
+                # ============================================================
+                # Mejorar la extracci├│n de precios en el ciclo
+                current_prices = {}
+                for symbol, df in market_data.items():
+                    if df is not None and not df.empty:
+                        current_prices[symbol] = float(df.iloc[-1]['close'])
+                        logger.info(f"­ƒôè {symbol}: ${current_prices[symbol]:.2f}")
+                
+                # ============================================================
+                # CYCLE STEP 5: PORTFOLIO COMPARISON LOG (every cycle)
+                # ============================================================
+                # CRITICAL FIX: Log portfolio comparison using cycle_context snapshot
+                # El cycle_context ahora se actualiza POST-EJECUCI├ôN en trading_pipeline_manager.py
+                # para reflejar los balances reales despu├®s de ejecutar ├│rdenes
+                cycle_context = trading_pipeline.get_cycle_context()
+                await log_portfolio_comparison(
+                    cycle_context=cycle_context,
+                    portfolio_manager=portfolio_manager,
+                    cycle_id=cycle_id,
+                    market_data=market_data
+                )
+                await servicio_estado_vivo.notificar_ciclo(cycle_id)
+
+            except Exception as cycle_error:
+                logger.error(f"ÔØî Cycle {cycle_id} error: {cycle_error}")
+                servicio_estado_vivo.registrar_error_ciclo(cycle_id, cycle_error)
+                
+                # Use ErrorRecoveryManager for intelligent recovery
+                try:
+                    if error_recovery is not None:
+                        recovery_action = await error_recovery.handle_cycle_error(
+                            error=cycle_error,
+                            state=state,
+                            cycle_id=cycle_id
+                        )
+                        
+                        if recovery_action.action == RecoveryActionType.SHUTDOWN:
+                            logger.critical("­ƒøæ Unrecoverable error - shutting down")
+                            break
+                        
+                        if recovery_action.action == RecoveryActionType.RESET_COMPONENT:
+                            logger.warning(f"­ƒöä Resetting component...")
+                            for step in recovery_action.recovery_steps_taken:
+                                logger.info(f"  Ô£ô {step}")
+                        
+                        await asyncio.sleep(recovery_action.wait_seconds)
+        
+                    else:
+                        logger.warning("ÔÜá´©Å ErrorRecovery not available, using default wait")
+                        await asyncio.sleep(10.0)
+                    
+                except Exception as recovery_error:
+                    logger.error(f"ÔØî Recovery failed: {recovery_error}")
+                    await asyncio.sleep(10.0)
+                
+                continue
+                
+    except KeyboardInterrupt:
+        logger.info("­ƒøæ Shutting down gracefully...")
+        try:
+            if portfolio_manager:
+                portfolio_manager.save_to_json()
+                logger.info("­ƒÆ¥ Portfolio state saved")
+        except Exception as save_error:
+            logger.error(f"ÔØî Error saving portfolio: {save_error}")
+            
+    except Exception as fatal_error:
+        logger.critical(f"­ƒÜ¿ FATAL ERROR: {fatal_error}")
+        if state_coordinator is not None:
+            servicio_estado_vivo.registrar_fallo(fatal_error)
+        import traceback
+        logger.critical(traceback.format_exc())
+            
+    finally:
+        # Un segundo arranque rechazado no debe apagar el runtime ya existente.
+        if arranque_rechazado:
+            logger.warning("Se omite el cleanup porque el runtime ya estaba activo")
+        else:
+            servicio_estado_vivo.registrar_parada()
+            # ­ƒöº SHUTDOWN LIMPIO GLOBAL desde bootstrap
+            logger.info("­ƒº╣ Ejecutando shutdown limpio global desde bootstrap...")
+            try:
+                await shutdown()
+                logger.info("Ô£à Shutdown global completado exitosamente")
+            except Exception as shutdown_error:
+                logger.error(f"ÔØî Error en shutdown global: {shutdown_error}")
+                if state_coordinator is not None:
+                    servicio_estado_vivo.registrar_fallo(shutdown_error)
+
+            # Cleanup adicional de verificaci├│n de se├▒ales
+            try:
+                await stop_signal_verification()
+                logger.info("Ô£ô Signal verification stopped")
+            except Exception as cleanup_error:
+                logger.warning(f"ÔÜá´©Å Cleanup error: {cleanup_error}")
+
+            # STOPPED se confirma despu├®s de terminar el cleanup.
+            if state_coordinator is not None:
+                servicio_estado_vivo.confirmar_parada()
+
+            logger.info("­ƒæï HRM System shutdown complete")
+
+
+
+from system.main_helpers import (
+    update_portfolio_nav_from_simulated_exchange,
+    shutdown_cleanup,
+    log_portfolio_comparison,
+)
+from api.app import app, run_fastapi
+from api.servicios.servicio_estado_vivo import servicio_estado_vivo
+from api.servicios.servicio_mercado import servicio_mercado
+from system.preparar_sesion import preparar_sesion
+
+# Punto de entrada principal del sistema
+if __name__ == "__main__":
+    """Ejecutar el trading bot con API FastAPI integrada."""
+    import asyncio
+    from core.logging import logger
+    
+    logger.info("­ƒÜÇ Iniciando HRM Trading System con API FastAPI integrada...")
+    logger.info("=" * 60)
+    
+    async def main_with_api() -> None:
+        """Ejecutar el trading loop y la API FastAPI concurrentemente."""
+        # Ejecutar API FastAPI en background y compartir su se├▒al de salida
+        # con el bucle de trading para que Ctrl+C detenga ambos servicios.
+        import uvicorn
+        shutdown_event = asyncio.Event()
+        config = uvicorn.Config(
+            app=app,
+            host=os.getenv("HRM_API_HOST", "127.0.0.1"),
+            port=8000,
+            log_level="info",
+        )
+
+        class ServidorUvicornHRM(uvicorn.Server):
+            """Propaga la se├▒al SIGINT/SIGTERM de Uvicorn al runtime HRM."""
+
+            def handle_exit(self, sig, frame):
+                super().handle_exit(sig, frame)
+                shutdown_event.set()
+
+        server = ServidorUvicornHRM(config)
+
+        # Ejecutar API FastAPI en una tarea separada.
+        api_task = asyncio.create_task(server.serve())
+
+        # Ejecutar el trading loop principal.
+        try:
+            await main(shutdown_event)
+        finally:
+            # Garantizar que ambos servicios reciben la orden de apagado.
+            shutdown_event.set()
+            server.should_exit = True
+            await api_task
+    
+    asyncio.run(main_with_api())

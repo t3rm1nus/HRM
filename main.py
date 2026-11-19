@@ -26,7 +26,7 @@ from system.market_data_manager import MarketDataManager
 from system.trading_pipeline_manager import TradingPipelineManager
 
 # Import funciones de shutdown global desde bootstrap
-from bootstrap import shutdown, register_component_for_shutdown
+from system.shutdown_manager import shutdown, register_component_for_shutdown
 
 # Import modularized components
 from core.state_manager import log_cycle_data
@@ -70,7 +70,7 @@ from comms.config import config, APAGAR_L3
 from l2_tactic.config import L2Config
 from comms.message_bus import MessageBus
 
-from fix_l3_dominance import (
+from l3_strategy.l3_dominance import (
     should_l3_block_l2_signals,
     should_trigger_rebalancing,
     calculate_allocation_deviation,
@@ -78,7 +78,7 @@ from fix_l3_dominance import (
 )
 
 # 🔄 AUTO-LEARNING SYSTEM INTEGRATION
-from integration_auto_learning import integrate_with_main_system
+from auto_learning.integration import integrate_with_main_system
 
 # 🧹 SYSTEM CLEANUP - USAR NUEVO MÓDULO
 # PRIORIDAD 4: memory_reset = False ANTES del try
@@ -659,7 +659,7 @@ async def main(shutdown_event: Optional[asyncio.Event] = None):
         logger.info("🤖 Integrating Auto-Learning System...")
         auto_learning_system = None
         try:
-            from integration_auto_learning import AutoLearningIntegration
+            from auto_learning.integration import AutoLearningIntegration
             
             # ✅ FIX: Crear integración con argumentos requeridos
             auto_learning_system = AutoLearningIntegration()

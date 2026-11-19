@@ -12,7 +12,7 @@ from datetime import datetime
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from auto_learning_system import (
+from auto_learning.auto_learning_system import (
     SelfImprovingTradingSystem,
     AntiOverfitValidator,
     AdaptiveRegularizer,

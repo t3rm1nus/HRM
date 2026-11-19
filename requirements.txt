@@ -1,0 +1,25 @@
+# Dependencias necesarias para ARRANCAR HRM (verificado: sin cualquiera de ellas
+# `import main` falla). Python objetivo: 3.12. Versiones exactas validadas en
+# requirements-lock.txt.
+ccxt>=4.4
+python-binance>=1.0.37
+loguru>=0.7
+pydantic>=2.7
+dataclasses-json>=0.6
+pandas>=2.2
+numpy>=1.26
+python-dotenv>=1.0
+colorama>=0.4
+aiohttp>=3.9
+requests>=2.31
+psutil>=5.9
+joblib>=1.3
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0
+
+# Se importan al cargar main.py (módulos de sentimiento y L2/L3).
+# torch: para GPU instalar la rueda CUDA correspondiente ANTES de este manifiesto.
+torch>=2.2
+transformers>=4.40
+asyncpraw>=7.7

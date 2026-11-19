@@ -23,7 +23,7 @@ except ImportError:
     MARKET_DATA_MANAGER_AVAILABLE = False
 
 try:
-    from auto_learning_system import SelfImprovingTradingSystem
+    from auto_learning.auto_learning_system import SelfImprovingTradingSystem
     SELF_IMPROVING_TRADING_SYSTEM_AVAILABLE = True
 except ImportError:
     SelfImprovingTradingSystem = None

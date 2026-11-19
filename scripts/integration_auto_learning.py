@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from datetime import datetime
 
 # Importar el sistema de auto-aprendizaje
-from auto_learning_system import SelfImprovingTradingSystem, TradeData
+from auto_learning.auto_learning_system import SelfImprovingTradingSystem, TradeData
 
 # Importar componentes del sistema HRM
 from core.state_manager import get_state_manager

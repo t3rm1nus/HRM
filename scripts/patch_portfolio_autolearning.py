@@ -184,7 +184,7 @@ class AutoLearningIntegrator:
         """
         Inicializar la integración del Auto-Learning con todos los componentes.
         """
-        from auto_learning_system import AutoLearningSystem
+        from auto_learning.auto_learning_system import AutoLearningSystem
         from system.state_coordinator import StateCoordinator
         from l2_tactic.tactical_signal_processor import L2TacticProcessor
         from core.trading_metrics import TradingMetrics

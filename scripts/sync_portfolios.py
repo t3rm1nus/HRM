@@ -19,7 +19,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.logging import logger
 from core.portfolio_manager import PortfolioManager
 from core.signal_hierarchy import should_execute_with_l3_dominance
-from fix_l3_dominance import should_trigger_rebalancing, calculate_allocation_deviation
+from l3_strategy.l3_dominance import should_trigger_rebalancing, calculate_allocation_deviation
 from l2_tactic.tactical_signal_processor import L2TacticProcessor
 from l1_operational.binance_client import BinanceClient
 from l1_operational.order_manager import OrderManager

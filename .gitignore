@@ -43,3 +43,5 @@ dist/
 coverage/
 .vite/
 *.tsbuildinfo
+.cache/
+temp/
