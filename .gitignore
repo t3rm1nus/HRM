@@ -8,6 +8,14 @@ logs/
 node_modules/
 results/
 
+# Runtime y archivos generados
+.hrm_runtime/
+.venv/
+.pytest_cache/
+paper_trades/
+persistent_state/
+
+
 # Python artifacts
 __pycache__/
 *.pyc
